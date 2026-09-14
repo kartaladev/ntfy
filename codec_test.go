@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"bytes"
@@ -17,9 +17,9 @@ import (
 // goldenSignals is what testdata/signals.v1.json encodes. The file is written by
 // hand, not generated from the code: it is the wire contract Redis and NATS
 // broadcasters share, and a change to the encoding must change it on purpose.
-var goldenSignals = []notify.Signal{
-	{Recipient: "alice", Change: notify.ChangeCreated, At: time.Date(2026, 9, 14, 8, 30, 0, 123456000, time.UTC)},
-	{Recipient: "bob", Change: notify.ChangeRead, At: time.Date(2026, 9, 14, 8, 30, 1, 0, time.UTC)},
+var goldenSignals = []ntfy.Signal{
+	{Recipient: "alice", Change: ntfy.ChangeCreated, At: time.Date(2026, 9, 14, 8, 30, 0, 123456000, time.UTC)},
+	{Recipient: "bob", Change: ntfy.ChangeRead, At: time.Date(2026, 9, 14, 8, 30, 1, 0, time.UTC)},
 }
 
 func TestSignalCodec(t *testing.T) {
@@ -39,16 +39,16 @@ func TestSignalCodec(t *testing.T) {
 		{
 			name: "signals encode to the version 1 wire format",
 			assert: func(t *testing.T) {
-				encoded, err := notify.EncodeSignals(goldenSignals)
+				encoded, err := ntfy.EncodeSignals(goldenSignals)
 				require.NoError(t, err)
 				assert.Equal(t, string(golden), string(encoded))
-				assert.Equal(t, 1, notify.SignalFormatVersion)
+				assert.Equal(t, 1, ntfy.SignalFormatVersion)
 			},
 		},
 		{
 			name: "the version 1 wire format decodes to the signals",
 			assert: func(t *testing.T) {
-				decoded, err := notify.DecodeSignals(golden)
+				decoded, err := ntfy.DecodeSignals(golden)
 				require.NoError(t, err)
 				assert.Equal(t, goldenSignals, decoded)
 			},
@@ -57,20 +57,20 @@ func TestSignalCodec(t *testing.T) {
 			name: "a round trip keeps the recipient and change, and the instant at microsecond precision in UTC",
 			assert: func(t *testing.T) {
 				zone := time.FixedZone("WIB", 7*60*60)
-				original := notify.Signal{
-					Recipient: "carol", Change: notify.ChangePruned,
+				original := ntfy.Signal{
+					Recipient: "carol", Change: ntfy.ChangePruned,
 					At: time.Date(2026, 9, 14, 15, 30, 0, 123456789, zone),
 				}
 
-				encoded, err := notify.EncodeSignals([]notify.Signal{original})
+				encoded, err := ntfy.EncodeSignals([]ntfy.Signal{original})
 				require.NoError(t, err)
 
-				decoded, err := notify.DecodeSignals(encoded)
+				decoded, err := ntfy.DecodeSignals(encoded)
 				require.NoError(t, err)
 				require.Len(t, decoded, 1)
 
 				assert.Equal(t, "carol", decoded[0].Recipient)
-				assert.Equal(t, notify.ChangePruned, decoded[0].Change)
+				assert.Equal(t, ntfy.ChangePruned, decoded[0].Change)
 				assert.Equal(t, time.UTC, decoded[0].At.Location())
 				assert.True(t, original.At.Truncate(time.Microsecond).Equal(decoded[0].At))
 				assert.Equal(t, 123456000, decoded[0].At.Nanosecond())
@@ -79,29 +79,29 @@ func TestSignalCodec(t *testing.T) {
 		{
 			name: "another format version is reported as unknown",
 			assert: func(t *testing.T) {
-				_, err := notify.DecodeSignals([]byte(`{"v":2,"signals":[]}`))
-				assert.ErrorIs(t, err, notify.ErrUnknownSignalFormat)
+				_, err := ntfy.DecodeSignals([]byte(`{"v":2,"signals":[]}`))
+				assert.ErrorIs(t, err, ntfy.ErrUnknownSignalFormat)
 			},
 		},
 		{
 			name: "a message with no version is reported as unknown",
 			assert: func(t *testing.T) {
-				_, err := notify.DecodeSignals([]byte(`{"signals":[]}`))
-				assert.ErrorIs(t, err, notify.ErrUnknownSignalFormat)
+				_, err := ntfy.DecodeSignals([]byte(`{"signals":[]}`))
+				assert.ErrorIs(t, err, ntfy.ErrUnknownSignalFormat)
 			},
 		},
 		{
 			name: "malformed JSON is an error, and not an unknown format",
 			assert: func(t *testing.T) {
-				_, err := notify.DecodeSignals([]byte(`{"v":1,"signals":[`))
+				_, err := ntfy.DecodeSignals([]byte(`{"v":1,"signals":[`))
 				require.Error(t, err)
-				assert.NotErrorIs(t, err, notify.ErrUnknownSignalFormat)
+				assert.NotErrorIs(t, err, ntfy.ErrUnknownSignalFormat)
 			},
 		},
 		{
 			name: "the encoding carries no notification content",
 			assert: func(t *testing.T) {
-				encoded, err := notify.EncodeSignals(goldenSignals)
+				encoded, err := ntfy.EncodeSignals(goldenSignals)
 				require.NoError(t, err)
 
 				var message map[string]json.RawMessage

@@ -12,9 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// NATSImage is the NATS server image the broadcaster is tested against. It is
-// the image delivery/nats pins, copied rather than imported: this module moves
-// to its own repository with notify and may import nothing that stays behind.
+// NATSImage is the NATS server image the broadcaster is tested against.
 //
 // It is pinned. A moving tag would let a remote image update change what these
 // tests mean overnight.
@@ -131,7 +129,7 @@ func RunTestNATS(t *testing.T, opts ...TestOption) *natsgo.Conn {
 		*cfg.url = uri
 	}
 
-	conn, err := natsgo.Connect(uri, append([]natsgo.Option{natsgo.Name("notify-test")}, cfg.connect...)...)
+	conn, err := natsgo.Connect(uri, append([]natsgo.Option{natsgo.Name("ntfy-test")}, cfg.connect...)...)
 	require.NoError(t, err, "connect to the NATS test container")
 
 	t.Cleanup(conn.Close)

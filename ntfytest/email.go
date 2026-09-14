@@ -1,4 +1,4 @@
-package notifytest
+package ntfytest
 
 import (
 	"fmt"
@@ -15,8 +15,8 @@ import (
 
 // EmailStore is a store that also records email deliveries.
 type EmailStore interface {
-	notify.Store
-	notify.EmailStore
+	ntfy.Store
+	ntfy.EmailStore
 }
 
 // EmailFactory returns a fresh, empty store that records email deliveries. It is
@@ -57,12 +57,12 @@ func newEmailEnv(t *testing.T, factory EmailFactory) *emailEnv {
 
 	store := factory(t)
 
-	return &emailEnv{env: &env{t: t, store: store, ids: notify.NewUUIDv7Generator()}, email: store}
+	return &emailEnv{env: &env{t: t, store: store, ids: ntfy.NewUUIDv7Generator()}, email: store}
 }
 
 // published inserts one ACTIVE notification for a recipient, created age before
 // emailNow, on a subject of its own.
-func (e *emailEnv) published(recipient string, age time.Duration) notify.Notification {
+func (e *emailEnv) published(recipient string, age time.Duration) ntfy.Notification {
 	e.t.Helper()
 
 	id, err := e.ids.NewID()
@@ -77,10 +77,10 @@ func (e *emailEnv) published(recipient string, age time.Duration) notify.Notific
 
 // claimAt claims for an owner at an instant, with the standard window measured
 // from that instant.
-func (e *emailEnv) claimAt(owner string, now time.Time, limit int) []notify.EmailCandidate {
+func (e *emailEnv) claimAt(owner string, now time.Time, limit int) []ntfy.EmailCandidate {
 	e.t.Helper()
 
-	candidates, err := e.email.ClaimEmails(e.t.Context(), notify.EmailClaim{
+	candidates, err := e.email.ClaimEmails(e.t.Context(), ntfy.EmailClaim{
 		Now: now, Owner: owner, Lease: emailLease,
 		CreatedUntil: now.Add(-minutes(5)), CreatedFrom: now.Add(-24 * time.Hour), Limit: limit,
 	})
@@ -90,14 +90,14 @@ func (e *emailEnv) claimAt(owner string, now time.Time, limit int) []notify.Emai
 }
 
 // claim claims for an owner at emailNow.
-func (e *emailEnv) claim(owner string) []notify.EmailCandidate {
+func (e *emailEnv) claim(owner string) []ntfy.EmailCandidate {
 	e.t.Helper()
 
 	return e.claimAt(owner, emailNow, 100)
 }
 
 // record writes an outcome and returns how many deliveries it changed.
-func (e *emailEnv) record(record notify.EmailRecord) int64 {
+func (e *emailEnv) record(record ntfy.EmailRecord) int64 {
 	e.t.Helper()
 
 	if record.At.IsZero() {
@@ -111,7 +111,7 @@ func (e *emailEnv) record(record notify.EmailRecord) int64 {
 }
 
 // candidateIDs lists candidates' notification identifiers.
-func candidateIDs(candidates []notify.EmailCandidate) []string {
+func candidateIDs(candidates []ntfy.EmailCandidate) []string {
 	out := make([]string, 0, len(candidates))
 	for _, c := range candidates {
 		out = append(out, c.Notification.ID)
@@ -131,9 +131,9 @@ func runEmailEligibility(t *testing.T, factory EmailFactory) {
 		got := claimed[0]
 		assert.Equal(t, n.ID, got.Notification.ID)
 		assert.Equal(t, "alice", got.Notification.Recipient)
-		assert.Equal(t, notify.StateActive, got.Notification.State)
+		assert.Equal(t, ntfy.StateActive, got.Notification.State)
 		assert.True(t, n.CreatedAt.Equal(got.Notification.CreatedAt))
-		assert.Equal(t, notify.EmailStatusClaimed, got.Status)
+		assert.Equal(t, ntfy.EmailStatusClaimed, got.Status)
 		assert.Empty(t, got.BatchID)
 		assert.Zero(t, got.Attempts)
 	})
@@ -163,7 +163,7 @@ func runEmailEligibility(t *testing.T, factory EmailFactory) {
 	parallel(t, "a closed notification is not claimed", func(t *testing.T) {
 		e := newEmailEnv(t, factory)
 		n := e.published("alice", minutes(10))
-		e.close(notify.CloseRequest{Subject: n.Subject, Version: 1, Reason: "taken"}, emailNow.Add(-minutes(2)))
+		e.close(ntfy.CloseRequest{Subject: n.Subject, Version: 1, Reason: "taken"}, emailNow.Add(-minutes(2)))
 
 		assert.Empty(t, e.claim("owner-a"))
 	})
@@ -198,13 +198,13 @@ func runEmailLeases(t *testing.T, factory EmailFactory) {
 		later := emailNow.Add(emailLease + time.Second)
 		taken := e.claimAt("owner-b", later, 100)
 		require.Len(t, taken, 1)
-		assert.Equal(t, notify.EmailStatusClaimed, taken[0].Status)
+		assert.Equal(t, ntfy.EmailStatusClaimed, taken[0].Status)
 
-		assert.Zero(t, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusSent, At: later,
+		assert.Zero(t, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusSent, At: later,
 		}), "a lost lease records nothing")
-		assert.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-b", IDs: []string{n.ID}, Status: notify.EmailStatusSent, At: later,
+		assert.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-b", IDs: []string{n.ID}, Status: ntfy.EmailStatusSent, At: later,
 		}))
 	})
 
@@ -213,8 +213,8 @@ func runEmailLeases(t *testing.T, factory EmailFactory) {
 		n := e.published("alice", minutes(10))
 
 		require.Len(t, e.claim("owner-a"), 1)
-		assert.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusClaimed,
+		assert.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusClaimed,
 		}))
 
 		taken := e.claimAt("owner-b", emailNow.Add(time.Second), 100)
@@ -226,8 +226,8 @@ func runEmailLeases(t *testing.T, factory EmailFactory) {
 		n := e.published("alice", minutes(10))
 
 		require.Len(t, e.claim("owner-a"), 1)
-		require.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusSending, BatchID: "batch-1", Attempt: true,
+		require.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusSending, BatchID: "batch-1", Attempt: true,
 		}))
 
 		assert.Empty(t, e.claimAt("owner-b", emailNow.Add(time.Minute), 100))
@@ -238,13 +238,13 @@ func runEmailLeases(t *testing.T, factory EmailFactory) {
 		n := e.published("alice", minutes(10))
 
 		require.Len(t, e.claim("owner-a"), 1)
-		require.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusSending, BatchID: "batch-1", Attempt: true,
+		require.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusSending, BatchID: "batch-1", Attempt: true,
 		}))
 
 		taken := e.claimAt("owner-b", emailNow.Add(emailLease+time.Second), 100)
 		require.Len(t, taken, 1)
-		assert.Equal(t, notify.EmailStatusSending, taken[0].Status)
+		assert.Equal(t, ntfy.EmailStatusSending, taken[0].Status)
 		assert.Equal(t, "batch-1", taken[0].BatchID)
 		assert.Equal(t, 1, taken[0].Attempts)
 	})
@@ -254,14 +254,14 @@ func runEmailLeases(t *testing.T, factory EmailFactory) {
 		n := e.published("alice", minutes(10))
 
 		require.Len(t, e.claim("owner-a"), 1)
-		require.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusSending, BatchID: "batch-1", Attempt: true,
+		require.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusSending, BatchID: "batch-1", Attempt: true,
 		}))
 		e.markRead("alice", emailNow.Add(time.Minute), n.ID)
 
 		taken := e.claimAt("owner-b", emailNow.Add(emailLease+time.Second), 100)
 		require.Len(t, taken, 1, "an in-doubt send is resolved whatever became of the notification")
-		assert.Equal(t, notify.StateRead, taken[0].Notification.State)
+		assert.Equal(t, ntfy.StateRead, taken[0].Notification.State)
 	})
 }
 
@@ -271,13 +271,13 @@ func runEmailOutcomes(t *testing.T, factory EmailFactory) {
 		n := e.published("alice", minutes(10))
 
 		require.Len(t, e.claim("owner-a"), 1)
-		require.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusSending, BatchID: "batch-1", Attempt: true,
+		require.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusSending, BatchID: "batch-1", Attempt: true,
 		}))
 
 		due := emailNow.Add(minutes(2))
-		require.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusRetry, Reason: "connection refused",
+		require.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusRetry, Reason: "connection refused",
 			NextAttemptAt: &due,
 		}))
 
@@ -285,7 +285,7 @@ func runEmailOutcomes(t *testing.T, factory EmailFactory) {
 
 		retried := e.claimAt("owner-b", due, 100)
 		require.Len(t, retried, 1)
-		assert.Equal(t, notify.EmailStatusClaimed, retried[0].Status)
+		assert.Equal(t, ntfy.EmailStatusClaimed, retried[0].Status)
 		assert.Equal(t, "batch-1", retried[0].BatchID)
 		assert.Equal(t, 1, retried[0].Attempts)
 	})
@@ -295,8 +295,8 @@ func runEmailOutcomes(t *testing.T, factory EmailFactory) {
 		n := e.published("alice", minutes(10))
 
 		require.Len(t, e.claim("owner-a"), 1)
-		require.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{n.ID}, Status: notify.EmailStatusRetry, Attempt: true,
+		require.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{n.ID}, Status: ntfy.EmailStatusRetry, Attempt: true,
 		}))
 
 		retried := e.claimAt("owner-b", emailNow.Add(time.Second), 100)
@@ -305,15 +305,15 @@ func runEmailOutcomes(t *testing.T, factory EmailFactory) {
 		assert.Equal(t, 1, retried[0].Attempts)
 	})
 
-	for _, status := range []notify.EmailStatus{
-		notify.EmailStatusSent, notify.EmailStatusSkipped, notify.EmailStatusFailed, notify.EmailStatusAbandoned,
+	for _, status := range []ntfy.EmailStatus{
+		ntfy.EmailStatusSent, ntfy.EmailStatusSkipped, ntfy.EmailStatusFailed, ntfy.EmailStatusAbandoned,
 	} {
 		parallel(t, "a "+string(status)+" delivery is never claimed again", func(t *testing.T) {
 			e := newEmailEnv(t, factory)
 			n := e.published("alice", minutes(10))
 
 			require.Len(t, e.claim("owner-a"), 1)
-			require.EqualValues(t, 1, e.record(notify.EmailRecord{
+			require.EqualValues(t, 1, e.record(ntfy.EmailRecord{
 				Owner: "owner-a", IDs: []string{n.ID}, Status: status, BatchID: "batch-1",
 			}))
 
@@ -328,8 +328,8 @@ func runEmailOutcomes(t *testing.T, factory EmailFactory) {
 
 		require.Len(t, e.claim("owner-a"), 1)
 
-		assert.Zero(t, e.record(notify.EmailRecord{
-			Owner: "owner-b", IDs: []string{n.ID}, Status: notify.EmailStatusSent,
+		assert.Zero(t, e.record(ntfy.EmailRecord{
+			Owner: "owner-b", IDs: []string{n.ID}, Status: ntfy.EmailStatusSent,
 		}))
 		assert.Empty(t, e.claim("owner-b"), "owner-a still holds it")
 	})
@@ -342,11 +342,11 @@ func runEmailOutcomes(t *testing.T, factory EmailFactory) {
 
 		require.Len(t, e.claim("owner-a"), 3)
 
-		assert.EqualValues(t, 2, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{one.ID, two.ID}, Status: notify.EmailStatusSent,
+		assert.EqualValues(t, 2, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{one.ID, two.ID}, Status: ntfy.EmailStatusSent,
 		}))
-		assert.EqualValues(t, 1, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{three.ID}, Status: notify.EmailStatusClaimed,
+		assert.EqualValues(t, 1, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{three.ID}, Status: ntfy.EmailStatusClaimed,
 		}))
 
 		assert.Equal(t, []string{three.ID}, candidateIDs(e.claimAt("owner-b", emailNow.Add(time.Second), 100)))
@@ -360,12 +360,12 @@ func runEmailPurge(t *testing.T, factory EmailFactory) {
 		deleted := e.published("bob", minutes(10))
 
 		require.Len(t, e.claim("owner-a"), 2)
-		require.EqualValues(t, 2, e.record(notify.EmailRecord{
-			Owner: "owner-a", IDs: []string{kept.ID, deleted.ID}, Status: notify.EmailStatusSent,
+		require.EqualValues(t, 2, e.record(ntfy.EmailRecord{
+			Owner: "owner-a", IDs: []string{kept.ID, deleted.ID}, Status: ntfy.EmailStatusSent,
 		}))
 
 		e.markRead("bob", emailNow, deleted.ID)
-		pruned := e.prune(notify.PruneRequest{Now: emailNow.Add(days(2)), MaxAge: days(1)})
+		pruned := e.prune(ntfy.PruneRequest{Now: emailNow.Add(days(2)), MaxAge: days(1)})
 		require.EqualValues(t, 1, pruned.DeletedForAge)
 
 		purged, err := e.email.PurgeEmailRecords(t.Context(), 100)
@@ -390,10 +390,10 @@ func runEmailPurge(t *testing.T, factory EmailFactory) {
 		}
 
 		require.Len(t, e.claim("owner-a"), 3)
-		require.EqualValues(t, 3, e.record(notify.EmailRecord{Owner: "owner-a", IDs: ids, Status: notify.EmailStatusSent}))
+		require.EqualValues(t, 3, e.record(ntfy.EmailRecord{Owner: "owner-a", IDs: ids, Status: ntfy.EmailStatusSent}))
 
 		e.markRead("alice", emailNow, ids...)
-		e.prune(notify.PruneRequest{Now: emailNow.Add(days(2)), MaxAge: days(1)})
+		e.prune(ntfy.PruneRequest{Now: emailNow.Add(days(2)), MaxAge: days(1)})
 
 		first, err := e.email.PurgeEmailRecords(t.Context(), 2)
 		require.NoError(t, err)
@@ -426,7 +426,7 @@ func runEmailConcurrency(t *testing.T, factory EmailFactory) {
 			)
 
 			claimAs := func(owner string, errp *error) {
-				candidates, err := e.email.ClaimEmails(t.Context(), notify.EmailClaim{
+				candidates, err := e.email.ClaimEmails(t.Context(), ntfy.EmailClaim{
 					Now: now, Owner: owner, Lease: emailLease,
 					CreatedUntil: now.Add(-minutes(5)), CreatedFrom: now.Add(-24 * time.Hour), Limit: 3,
 				})
@@ -458,7 +458,7 @@ func runEmailConcurrency(t *testing.T, factory EmailFactory) {
 
 			for _, owner := range []string{fmt.Sprintf("a-%d", i), fmt.Sprintf("b-%d", i)} {
 				if ids := claims[owner]; len(ids) > 0 {
-					e.record(notify.EmailRecord{Owner: owner, IDs: ids, Status: notify.EmailStatusSent, At: now})
+					e.record(ntfy.EmailRecord{Owner: owner, IDs: ids, Status: ntfy.EmailStatusSent, At: now})
 				}
 			}
 		}

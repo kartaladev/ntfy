@@ -15,14 +15,14 @@ import (
 
 // signalsFor builds n signals at distinct microsecond instants, as the codec
 // writes them, so that a decoded message compares equal to what was sent.
-func signalsFor(n int) []notify.Signal {
+func signalsFor(n int) []ntfy.Signal {
 	base := time.Date(2026, 9, 14, 8, 30, 0, 0, time.UTC)
-	signals := make([]notify.Signal, n)
+	signals := make([]ntfy.Signal, n)
 
 	for i := range signals {
-		signals[i] = notify.Signal{
+		signals[i] = ntfy.Signal{
 			Recipient: fmt.Sprintf("user-%04d", i),
-			Change:    notify.ChangeCreated,
+			Change:    ntfy.ChangeCreated,
 			At:        base.Add(time.Duration(i) * time.Microsecond),
 		}
 	}
@@ -48,29 +48,29 @@ func TestBroadcast(t *testing.T) {
 	type testCase struct {
 		name    string
 		conn    *natsgo.Conn
-		signals []notify.Signal
-		assert  func(t *testing.T, messages [][]notify.Signal, err error)
+		signals []ntfy.Signal
+		assert  func(t *testing.T, messages [][]ntfy.Signal, err error)
 	}
 
 	cases := []testCase{
 		{
-			name:    "one signal is one message in the notify format",
+			name:    "one signal is one message in the ntfy format",
 			conn:    publisher,
 			signals: signalsFor(1),
-			assert: func(t *testing.T, messages [][]notify.Signal, err error) {
+			assert: func(t *testing.T, messages [][]ntfy.Signal, err error) {
 				require.NoError(t, err)
-				assert.Equal(t, [][]notify.Signal{signalsFor(1)}, messages)
+				assert.Equal(t, [][]ntfy.Signal{signalsFor(1)}, messages)
 			},
 		},
 		{
 			name:    "a broadcast larger than one message is split at the maximum",
 			conn:    publisher,
 			signals: signalsFor(2*nats.MaxSignalsPerMessage + 1),
-			assert: func(t *testing.T, messages [][]notify.Signal, err error) {
+			assert: func(t *testing.T, messages [][]ntfy.Signal, err error) {
 				require.NoError(t, err)
 
 				all := signalsFor(2*nats.MaxSignalsPerMessage + 1)
-				assert.Equal(t, [][]notify.Signal{
+				assert.Equal(t, [][]ntfy.Signal{
 					all[:nats.MaxSignalsPerMessage],
 					all[nats.MaxSignalsPerMessage : 2*nats.MaxSignalsPerMessage],
 					all[2*nats.MaxSignalsPerMessage:],
@@ -81,7 +81,7 @@ func TestBroadcast(t *testing.T) {
 			name:    "no signals publish nothing",
 			conn:    publisher,
 			signals: nil,
-			assert: func(t *testing.T, messages [][]notify.Signal, err error) {
+			assert: func(t *testing.T, messages [][]ntfy.Signal, err error) {
 				require.NoError(t, err)
 				assert.Empty(t, messages)
 			},
@@ -90,7 +90,7 @@ func TestBroadcast(t *testing.T) {
 			name:    "a closed connection is a publish error",
 			conn:    closed,
 			signals: signalsFor(1),
-			assert: func(t *testing.T, _ [][]notify.Signal, err error) {
+			assert: func(t *testing.T, _ [][]ntfy.Signal, err error) {
 				require.ErrorIs(t, err, nats.ErrPublish)
 				require.ErrorIs(t, err, natsgo.ErrConnectionClosed)
 
@@ -123,7 +123,7 @@ func TestBroadcast(t *testing.T) {
 			require.NoError(t, publisher.Publish(subject, []byte("end")))
 			require.NoError(t, publisher.Flush())
 
-			var messages [][]notify.Signal
+			var messages [][]ntfy.Signal
 
 			for {
 				msg, nextErr := sub.NextMsg(5 * time.Second)
@@ -133,8 +133,8 @@ func TestBroadcast(t *testing.T) {
 					break
 				}
 
-				decoded, decodeErr := notify.DecodeSignals(msg.Data)
-				require.NoError(t, decodeErr, "every message is in the notify signal format")
+				decoded, decodeErr := ntfy.DecodeSignals(msg.Data)
+				require.NoError(t, decodeErr, "every message is in the ntfy signal format")
 
 				messages = append(messages, decoded)
 			}

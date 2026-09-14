@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"testing"
@@ -10,6 +10,6 @@ import (
 func TestMemoryStoreEmailConformance(t *testing.T) {
 	t.Parallel()
 
-	notifytest.RunEmail(t, func(*testing.T) notifytest.EmailStore { return notify.NewMemoryStore() })
-	notifytest.RunEmailDispatch(t, func(*testing.T) notifytest.EmailStore { return notify.NewMemoryStore() })
+	ntfytest.RunEmail(t, func(*testing.T) ntfytest.EmailStore { return ntfy.NewMemoryStore() })
+	ntfytest.RunEmailDispatch(t, func(*testing.T) ntfytest.EmailStore { return ntfy.NewMemoryStore() })
 }

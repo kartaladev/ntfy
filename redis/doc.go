@@ -5,7 +5,7 @@
 // Every instance that shares a channel receives every signal broadcast on it, so
 // a notification stored through one instance reaches a client connected to
 // another. A message carries only recipients, changes and their times, in the
-// notify signal format; never a notification's title, links, data, kind or
+// ntfy signal format; never a notification's title, links, data, kind or
 // subject.
 //
 // Listening reports ready only once the broker has confirmed the subscription,
@@ -17,7 +17,8 @@
 // instance is disconnected are not replayed to it, and the notification store
 // remains the source of truth.
 //
-// This is not the delivery/redis sink of the task engine. That sink appends
-// durable events to a stream; this broadcaster publishes ephemeral signals on a
-// pub/sub channel, and the two default names do not overlap.
+// Signals are ephemeral pub/sub messages, not durable events. A host that needs
+// events it can replay should publish them to a stream of its own; the
+// broadcaster's default channel is namespaced so that it does not collide with
+// one.
 package redis

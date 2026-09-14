@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"context"
@@ -21,22 +21,22 @@ func ExampleNewEmailDispatcher() {
 	start := time.Date(2026, 5, 4, 9, 0, 0, 0, time.UTC)
 	now := start
 
-	svc, _ := notify.New(notify.NewMemoryStore(), notify.WithClock(notify.ClockFunc(func() time.Time { return now })))
+	svc, _ := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithClock(ntfy.ClockFunc(func() time.Time { return now })))
 
-	addressBook := notify.AddressBookFunc(func(_ context.Context, recipient string) (string, bool, error) {
+	addressBook := ntfy.AddressBookFunc(func(_ context.Context, recipient string) (string, bool, error) {
 		return recipient + "@example.com", true, nil
 	})
-	template := notify.EmailTemplateFunc(func(_ context.Context, batch notify.EmailBatch) (notify.EmailContent, error) {
-		return notify.EmailContent{Subject: fmt.Sprintf("%d tasks need you", len(batch.Notifications))}, nil
+	template := ntfy.EmailTemplateFunc(func(_ context.Context, batch ntfy.EmailBatch) (ntfy.EmailContent, error) {
+		return ntfy.EmailContent{Subject: fmt.Sprintf("%d tasks need you", len(batch.Notifications))}, nil
 	})
-	mailer := notify.MailerFunc(func(_ context.Context, message notify.EmailMessage) error {
+	mailer := ntfy.MailerFunc(func(_ context.Context, message ntfy.EmailMessage) error {
 		fmt.Println(message.To, "-", message.Subject)
 
 		return nil
 	})
 
-	dispatcher, err := notify.NewEmailDispatcher(svc, mailer, addressBook, template,
-		notify.WithEmailKinds("offer", "assigned"))
+	dispatcher, err := ntfy.NewEmailDispatcher(svc, mailer, addressBook, template,
+		ntfy.WithEmailKinds("offer", "assigned"))
 	if err != nil {
 		fmt.Println(err)
 
@@ -46,12 +46,12 @@ func ExampleNewEmailDispatcher() {
 	ctx := context.Background()
 
 	_, _ = svc.Publish(ctx,
-		notify.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer"},
-		notify.Draft{Recipient: "alice", SourceID: "event-2", Subject: "task-2", Kind: "assigned"},
-		notify.Draft{Recipient: "alice", SourceID: "event-3", Subject: "task-3", Kind: "taken"},
+		ntfy.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer"},
+		ntfy.Draft{Recipient: "alice", SourceID: "event-2", Subject: "task-2", Kind: "assigned"},
+		ntfy.Draft{Recipient: "alice", SourceID: "event-3", Subject: "task-3", Kind: "taken"},
 	)
 
-	now = start.Add(notify.DefaultEmailGraceDelay + time.Minute)
+	now = start.Add(ntfy.DefaultEmailGraceDelay + time.Minute)
 
 	result, _ := dispatcher.Dispatch(ctx)
 	fmt.Println("sent", result.Sent, "skipped", result.SkippedFiltered)
@@ -84,7 +84,7 @@ func TestTheEmailDocumentMatchesTheImplementation(t *testing.T) {
 			name:    "wiring and ports",
 			section: "Wiring",
 			needles: []string{
-				funcName(notify.NewEmailDispatcher), "AddressBook", "EmailTemplate", "Mailer", "EmailFilter",
+				funcName(ntfy.NewEmailDispatcher), "AddressBook", "EmailTemplate", "Mailer", "EmailFilter",
 				"ErrMailRejected", "ErrMailInDoubt", "EmailSchema", "VerifyEmailSchema", "ddl/email",
 			},
 		},
@@ -92,13 +92,13 @@ func TestTheEmailDocumentMatchesTheImplementation(t *testing.T) {
 			name:    "defaults and options",
 			section: "Defaults and overrides",
 			needles: []string{
-				"5 minutes", "24 hours", strconv.Itoa(notify.DefaultEmailBatchLimit), strconv.Itoa(notify.DefaultEmailClaimLimit),
-				strconv.Itoa(notify.DefaultEmailMaxAttempts), "1 minute", "1 hour", "20%",
-				funcName(notify.WithEmailGraceDelay), funcName(notify.WithoutEmailGraceDelay), funcName(notify.WithEmailMaxLag),
-				funcName(notify.WithEmailBatchLimit), funcName(notify.WithEmailClaimLimit), funcName(notify.WithEmailLease),
-				funcName(notify.WithEmailMaxAttempts), funcName(notify.WithEmailBackoff), funcName(notify.WithEmailKinds),
-				funcName(notify.WithEmailFilter), funcName(notify.WithDeliveryGuarantee), funcName(notify.WithEmailOwner),
-				funcName(notify.WithEmailErrorHandler), "AtMostOnce",
+				"5 minutes", "24 hours", strconv.Itoa(ntfy.DefaultEmailBatchLimit), strconv.Itoa(ntfy.DefaultEmailClaimLimit),
+				strconv.Itoa(ntfy.DefaultEmailMaxAttempts), "1 minute", "1 hour", "20%",
+				funcName(ntfy.WithEmailGraceDelay), funcName(ntfy.WithoutEmailGraceDelay), funcName(ntfy.WithEmailMaxLag),
+				funcName(ntfy.WithEmailBatchLimit), funcName(ntfy.WithEmailClaimLimit), funcName(ntfy.WithEmailLease),
+				funcName(ntfy.WithEmailMaxAttempts), funcName(ntfy.WithEmailBackoff), funcName(ntfy.WithEmailKinds),
+				funcName(ntfy.WithEmailFilter), funcName(ntfy.WithDeliveryGuarantee), funcName(ntfy.WithEmailOwner),
+				funcName(ntfy.WithEmailErrorHandler), "AtMostOnce",
 			},
 		},
 		{
@@ -113,11 +113,11 @@ func TestTheEmailDocumentMatchesTheImplementation(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, 5*time.Minute, notify.DefaultEmailGraceDelay)
-	assert.Equal(t, 24*time.Hour, notify.DefaultEmailMaxLag)
-	assert.Equal(t, 5*time.Minute, notify.DefaultEmailLease)
-	assert.Equal(t, time.Minute, notify.DefaultEmailBackoff)
-	assert.Equal(t, time.Hour, notify.DefaultEmailBackoffCeiling)
+	assert.Equal(t, 5*time.Minute, ntfy.DefaultEmailGraceDelay)
+	assert.Equal(t, 24*time.Hour, ntfy.DefaultEmailMaxLag)
+	assert.Equal(t, 5*time.Minute, ntfy.DefaultEmailLease)
+	assert.Equal(t, time.Minute, ntfy.DefaultEmailBackoff)
+	assert.Equal(t, time.Hour, ntfy.DefaultEmailBackoffCeiling)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

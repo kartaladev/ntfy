@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"os"
@@ -69,8 +69,8 @@ func TestTheDocumentMatchesTheImplementation(t *testing.T) {
 			name:    "the service's defaults and options",
 			section: "Defaults and overrides",
 			needles: []string{
-				funcName(notify.New), funcName(notify.NewMemoryStore), funcName(notify.WithClock),
-				funcName(notify.WithIDGenerator), funcName(notify.WithBroadcaster), funcName(notify.WithSignalErrorHandler),
+				funcName(ntfy.New), funcName(ntfy.NewMemoryStore), funcName(ntfy.WithClock),
+				funcName(ntfy.WithIDGenerator), funcName(ntfy.WithBroadcaster), funcName(ntfy.WithSignalErrorHandler),
 				"InProcessBroadcaster", "UUIDv7",
 			},
 		},
@@ -83,22 +83,22 @@ func TestTheDocumentMatchesTheImplementation(t *testing.T) {
 			name:    "retention defaults, options and strategies",
 			section: "Retention",
 			needles: []string{
-				strconv.Itoa(notify.DefaultMaxPerRecipient), days(notify.DefaultMaxAge),
-				days(notify.DefaultWatermarkRetention), strconv.Itoa(notify.DefaultPruneBatch),
-				funcName(notify.NewPruner), funcName(notify.WithMaxPerRecipient), funcName(notify.WithoutMaxPerRecipient),
-				funcName(notify.WithMaxAge), funcName(notify.WithoutMaxAge), funcName(notify.WithRetentionStrategy),
-				funcName(notify.WithWatermarkRetention), funcName(notify.WithPruneBatch),
-				funcName(notify.WithPruneErrorHandler), "EvictOldestActive", "RetainActive", "approximate",
+				strconv.Itoa(ntfy.DefaultMaxPerRecipient), days(ntfy.DefaultMaxAge),
+				days(ntfy.DefaultWatermarkRetention), strconv.Itoa(ntfy.DefaultPruneBatch),
+				funcName(ntfy.NewPruner), funcName(ntfy.WithMaxPerRecipient), funcName(ntfy.WithoutMaxPerRecipient),
+				funcName(ntfy.WithMaxAge), funcName(ntfy.WithoutMaxAge), funcName(ntfy.WithRetentionStrategy),
+				funcName(ntfy.WithWatermarkRetention), funcName(ntfy.WithPruneBatch),
+				funcName(ntfy.WithPruneErrorHandler), "EvictOldestActive", "RetainActive", "approximate",
 			},
 		},
 		{
 			name:    "realtime defaults, policies and limits",
 			section: "Realtime",
 			needles: []string{
-				notify.DefaultHeartbeat.String(), notify.DefaultWriteTimeout.String(),
-				strconv.Itoa(notify.DefaultMaxStreamsPerRecipient),
-				funcName(notify.NewHub), funcName(notify.WithHeartbeat), funcName(notify.WithWriteTimeout),
-				funcName(notify.WithMaxStreamsPerRecipient), "SelfOnly", "AllowAll", "unread-changed",
+				ntfy.DefaultHeartbeat.String(), ntfy.DefaultWriteTimeout.String(),
+				strconv.Itoa(ntfy.DefaultMaxStreamsPerRecipient),
+				funcName(ntfy.NewHub), funcName(ntfy.WithHeartbeat), funcName(ntfy.WithWriteTimeout),
+				funcName(ntfy.WithMaxStreamsPerRecipient), "SelfOnly", "AllowAll", "unread-changed",
 				"single instance", "re-read",
 			},
 		},
@@ -106,9 +106,9 @@ func TestTheDocumentMatchesTheImplementation(t *testing.T) {
 			name:    "the HTTP contract and its mounting",
 			section: "HTTP and mounting",
 			needles: []string{
-				notify.DefaultBasePath, strconv.Itoa(notify.DefaultListLimit), strconv.Itoa(notify.MaxListLimit),
-				funcName(notify.NewHandler), funcName(notify.WithActor), funcName(notify.WithBasePath),
-				funcName(notify.WithSubscriptionAuthorizer), funcName(notify.WriteError),
+				ntfy.DefaultBasePath, strconv.Itoa(ntfy.DefaultListLimit), strconv.Itoa(ntfy.MaxListLimit),
+				funcName(ntfy.NewHandler), funcName(ntfy.WithActor), funcName(ntfy.WithBasePath),
+				funcName(ntfy.WithSubscriptionAuthorizer), funcName(ntfy.WriteError),
 				"gin.WrapH", "adaptor.HTTPHandler", "X-Accel-Buffering",
 			},
 		},

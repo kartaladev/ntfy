@@ -1,4 +1,4 @@
-package notifytest
+package ntfytest
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 //
 // The suite's cases run in parallel, so every call must return a pair that
 // shares nothing with another call's, such as a channel or subject of its own.
-type PairFactory func(t *testing.T) (publisher, listener notify.Broadcaster)
+type PairFactory func(t *testing.T) (publisher, listener ntfy.Broadcaster)
 
 // BroadcasterIterations is how many fresh Listen calls the readiness case makes.
 // A broadcaster that reports ready before its subscription is live loses the
@@ -33,9 +33,9 @@ const BroadcasterIterations = 50
 // answers far sooner; the bound only turns a hang into a failure.
 const broadcasterWait = 5 * time.Second
 
-// RunBroadcasterSuite checks a [notify.Broadcaster] against its contract:
+// RunBroadcasterSuite checks a [ntfy.Broadcaster] against its contract:
 //
-//   - a nil deliver or ready is an error matching [notify.ErrConfiguration], and
+//   - a nil deliver or ready is an error matching [ntfy.ErrConfiguration], and
 //     ready is not called. An adapter may return its own configuration error
 //     type, as long as it also matches that sentinel;
 //   - ready is called exactly once, before Listen returns;
@@ -48,7 +48,7 @@ func RunBroadcasterSuite(t *testing.T, newPair PairFactory) {
 
 	type testCase struct {
 		name   string
-		assert func(t *testing.T, publisher, listener notify.Broadcaster)
+		assert func(t *testing.T, publisher, listener ntfy.Broadcaster)
 	}
 
 	cases := []testCase{
@@ -80,14 +80,14 @@ type listening struct {
 	err    error
 
 	mu       sync.Mutex
-	received []notify.Signal
+	received []ntfy.Signal
 	arrived  chan struct{}
 }
 
 // startListening starts Listen with a counting ready and a recording deliver.
 // onReady, when not nil, runs inside the first ready call, before ready
 // returns.
-func startListening(t *testing.T, listener notify.Broadcaster, onReady func()) *listening {
+func startListening(t *testing.T, listener ntfy.Broadcaster, onReady func()) *listening {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -98,7 +98,7 @@ func startListening(t *testing.T, listener notify.Broadcaster, onReady func()) *
 		arrived: make(chan struct{}, 1),
 	}
 
-	deliver := func(signal notify.Signal) {
+	deliver := func(signal ntfy.Signal) {
 		select {
 		case <-l.exited:
 			l.late.Add(1)
@@ -204,7 +204,7 @@ func (l *listening) awaitRecipient(recipient string) bool {
 	return true
 }
 
-func assertRefusesMissingFunctions(t *testing.T, _, listener notify.Broadcaster) {
+func assertRefusesMissingFunctions(t *testing.T, _, listener ntfy.Broadcaster) {
 	t.Helper()
 
 	type testCase struct {
@@ -217,7 +217,7 @@ func assertRefusesMissingFunctions(t *testing.T, _, listener notify.Broadcaster)
 	refused := func(t *testing.T, err error, readyCalls int32) {
 		t.Helper()
 
-		require.ErrorIs(t, err, notify.ErrConfiguration)
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
 		assert.Zero(t, readyCalls, "ready is not called for a refused Listen")
 	}
 
@@ -232,7 +232,7 @@ func assertRefusesMissingFunctions(t *testing.T, _, listener notify.Broadcaster)
 
 			var calls atomic.Int32
 
-			deliver := func(notify.Signal) {}
+			deliver := func(ntfy.Signal) {}
 			ready := func() { calls.Add(1) }
 
 			if tc.nilDeliver {
@@ -252,7 +252,7 @@ func assertRefusesMissingFunctions(t *testing.T, _, listener notify.Broadcaster)
 	}
 }
 
-func assertReadyOnce(t *testing.T, _, listener notify.Broadcaster) {
+func assertReadyOnce(t *testing.T, _, listener ntfy.Broadcaster) {
 	t.Helper()
 
 	l := startListening(t, listener, nil)
@@ -262,14 +262,14 @@ func assertReadyOnce(t *testing.T, _, listener notify.Broadcaster) {
 	assert.Equal(t, int32(1), l.readies.Load())
 }
 
-func assertDeliveredAfterReady(t *testing.T, publisher, listener notify.Broadcaster) {
+func assertDeliveredAfterReady(t *testing.T, publisher, listener ntfy.Broadcaster) {
 	t.Helper()
 
 	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	for i := range BroadcasterIterations {
 		recipient := fmt.Sprintf("readiness-%d", i)
-		signal := notify.Signal{Recipient: recipient, Change: notify.ChangeCreated, At: at}
+		signal := ntfy.Signal{Recipient: recipient, Change: ntfy.ChangeCreated, At: at}
 
 		// The broadcast happens inside ready, before it returns: the earliest
 		// moment a host could act on readiness. A broadcaster that reports ready
@@ -277,7 +277,7 @@ func assertDeliveredAfterReady(t *testing.T, publisher, listener notify.Broadcas
 		var broadcastErr error
 
 		l := startListening(t, listener, func() {
-			broadcastErr = publisher.Broadcast(t.Context(), []notify.Signal{signal})
+			broadcastErr = publisher.Broadcast(t.Context(), []ntfy.Signal{signal})
 		})
 		l.awaitReady(t)
 		require.NoError(t, broadcastErr)
@@ -290,7 +290,7 @@ func assertDeliveredAfterReady(t *testing.T, publisher, listener notify.Broadcas
 	}
 }
 
-func assertCancelled(t *testing.T, publisher, listener notify.Broadcaster) {
+func assertCancelled(t *testing.T, publisher, listener ntfy.Broadcaster) {
 	t.Helper()
 
 	l := startListening(t, listener, nil)
@@ -299,8 +299,8 @@ func assertCancelled(t *testing.T, publisher, listener notify.Broadcaster) {
 	require.ErrorIs(t, l.stop(t), context.Canceled)
 
 	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
-	signal := notify.Signal{Recipient: "after-return", Change: notify.ChangeCreated, At: at}
-	require.NoError(t, publisher.Broadcast(t.Context(), []notify.Signal{signal}))
+	signal := ntfy.Signal{Recipient: "after-return", Change: ntfy.ChangeCreated, At: at}
+	require.NoError(t, publisher.Broadcast(t.Context(), []ntfy.Signal{signal}))
 
 	// A broadcaster that kept delivering would do so promptly; this is long
 	// enough to see it and short enough not to slow the suite.

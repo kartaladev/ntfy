@@ -22,7 +22,7 @@ import (
 func (s *server) publish(t *testing.T, recipient, source string) {
 	t.Helper()
 
-	_, err := s.svc.Publish(t.Context(), notify.Draft{
+	_, err := s.svc.Publish(t.Context(), ntfy.Draft{
 		Recipient: recipient,
 		SourceID:  source,
 		Subject:   "task-42",
@@ -79,7 +79,7 @@ func TestWriteLoop(t *testing.T) {
 				require.True(t, ok)
 
 				assert.Equal(t, "unread-changed", frame["type"])
-				assert.Equal(t, string(notify.ChangeCreated), frame["change"])
+				assert.Equal(t, string(ntfy.ChangeCreated), frame["change"])
 
 				at, ok := frame["at"].(string)
 				require.True(t, ok, "the frame says when the change happened")
@@ -107,7 +107,7 @@ func TestWriteLoop(t *testing.T) {
 		{
 			name: "a client that stops reading is closed without slowing publishers",
 			server: serverConfig{
-				hub: []notify.HubOption{notify.WithMaxStreamsPerRecipient(1)},
+				hub: []ntfy.HubOption{ntfy.WithMaxStreamsPerRecipient(1)},
 				ws: []websocket.Option{
 					websocket.WithPingInterval(50 * time.Millisecond),
 					websocket.WithWriteTimeout(200 * time.Millisecond),

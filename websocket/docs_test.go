@@ -12,7 +12,7 @@ import (
 	"github.com/kartaladev/ntfy/websocket"
 )
 
-// TestTheOperationsGuideMatchesTheHandler keeps notify/docs/realtime-operations.md
+// TestTheOperationsGuideMatchesTheHandler keeps docs/realtime-operations.md
 // from drifting away from the WebSocket handler's defaults.
 func TestTheOperationsGuideMatchesTheHandler(t *testing.T) {
 	t.Parallel()
@@ -26,9 +26,9 @@ func TestTheOperationsGuideMatchesTheHandler(t *testing.T) {
 		strconv.FormatInt(websocket.DefaultReadLimit, 10) + " bytes",
 		"`" + websocket.Subprotocol + "`",
 		"GET /v1/notifications/socket",
-		notify.DefaultHeartbeat.String(),
-		notify.DefaultWriteTimeout.String(),
-		strconv.Itoa(notify.DefaultMaxStreamsPerRecipient) + " connections per instance",
+		ntfy.DefaultHeartbeat.String(),
+		ntfy.DefaultWriteTimeout.String(),
+		strconv.Itoa(ntfy.DefaultMaxStreamsPerRecipient) + " connections per instance",
 		"not available on Fiber",
 		"status 1001",
 	} {

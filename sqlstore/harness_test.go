@@ -76,9 +76,9 @@ func TestStoreOnStdSQLPostgres(t *testing.T) {
 
 	executor := stdsqlExecutor(t, db, sqlkit.PostgreSQL)
 
-	notifytest.Run(t, harness.Factory(executor))
-	t.Run("email", func(t *testing.T) { notifytest.RunEmail(t, harness.EmailFactory(executor)) })
-	t.Run("email-dispatch", func(t *testing.T) { notifytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
+	ntfytest.Run(t, harness.Factory(executor))
+	t.Run("email", func(t *testing.T) { ntfytest.RunEmail(t, harness.EmailFactory(executor)) })
+	t.Run("email-dispatch", func(t *testing.T) { ntfytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
 }
 
 func TestStoreOnStdSQLMySQL(t *testing.T) {
@@ -88,9 +88,9 @@ func TestStoreOnStdSQLMySQL(t *testing.T) {
 
 	executor := stdsqlExecutor(t, db, sqlkit.MySQL)
 
-	notifytest.Run(t, harness.Factory(executor))
-	t.Run("email", func(t *testing.T) { notifytest.RunEmail(t, harness.EmailFactory(executor)) })
-	t.Run("email-dispatch", func(t *testing.T) { notifytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
+	ntfytest.Run(t, harness.Factory(executor))
+	t.Run("email", func(t *testing.T) { ntfytest.RunEmail(t, harness.EmailFactory(executor)) })
+	t.Run("email-dispatch", func(t *testing.T) { ntfytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
 }
 
 func TestStoreOnStdSQLSQLite(t *testing.T) {
@@ -100,9 +100,9 @@ func TestStoreOnStdSQLSQLite(t *testing.T) {
 
 	executor := stdsqlExecutor(t, db, sqlkit.SQLite)
 
-	notifytest.Run(t, harness.Factory(executor))
-	t.Run("email", func(t *testing.T) { notifytest.RunEmail(t, harness.EmailFactory(executor)) })
-	t.Run("email-dispatch", func(t *testing.T) { notifytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
+	ntfytest.Run(t, harness.Factory(executor))
+	t.Run("email", func(t *testing.T) { ntfytest.RunEmail(t, harness.EmailFactory(executor)) })
+	t.Run("email-dispatch", func(t *testing.T) { ntfytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
 }
 
 func TestStoreOnPgxPostgres(t *testing.T) {
@@ -113,7 +113,7 @@ func TestStoreOnPgxPostgres(t *testing.T) {
 	executor, err := pgxexec.New(pool)
 	require.NoError(t, err)
 
-	notifytest.Run(t, harness.Factory(executor))
-	t.Run("email", func(t *testing.T) { notifytest.RunEmail(t, harness.EmailFactory(executor)) })
-	t.Run("email-dispatch", func(t *testing.T) { notifytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
+	ntfytest.Run(t, harness.Factory(executor))
+	t.Run("email", func(t *testing.T) { ntfytest.RunEmail(t, harness.EmailFactory(executor)) })
+	t.Run("email-dispatch", func(t *testing.T) { ntfytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
 }

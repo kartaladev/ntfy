@@ -13,7 +13,7 @@ import (
 	"github.com/kartaladev/ntfy/redis"
 )
 
-// TestBroadcasterConformance holds the broadcaster to the notify.Broadcaster
+// TestBroadcasterConformance holds the broadcaster to the ntfy.Broadcaster
 // contract, readiness included: a publisher and a listener are two
 // broadcasters on one broker, each with its own client, as two instances are.
 func TestBroadcasterConformance(t *testing.T) {
@@ -23,7 +23,7 @@ func TestBroadcasterConformance(t *testing.T) {
 
 	var pairs atomic.Int64
 
-	notifytest.RunBroadcasterSuite(t, func(t *testing.T) (notify.Broadcaster, notify.Broadcaster) {
+	ntfytest.RunBroadcasterSuite(t, func(t *testing.T) (ntfy.Broadcaster, ntfy.Broadcaster) {
 		// A channel per pair, so that no case sees another's signals.
 		channel := fmt.Sprintf("test.conformance.%d", pairs.Add(1))
 

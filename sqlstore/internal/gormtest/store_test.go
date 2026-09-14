@@ -70,9 +70,9 @@ func run(t *testing.T, db *gorm.DB, dialect sqlkit.Dialect) {
 	executor, err := gormexec.New(db, dialect)
 	require.NoError(t, err)
 
-	notifytest.Run(t, harness.Factory(executor))
-	t.Run("email", func(t *testing.T) { notifytest.RunEmail(t, harness.EmailFactory(executor)) })
-	t.Run("email-dispatch", func(t *testing.T) { notifytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
+	ntfytest.Run(t, harness.Factory(executor))
+	t.Run("email", func(t *testing.T) { ntfytest.RunEmail(t, harness.EmailFactory(executor)) })
+	t.Run("email-dispatch", func(t *testing.T) { ntfytest.RunEmailDispatch(t, harness.EmailFactory(executor)) })
 }
 
 func TestStoreOnGormPostgres(t *testing.T) {

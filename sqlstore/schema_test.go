@@ -91,7 +91,7 @@ func TestSchema(t *testing.T) {
 			name:    "a dialect with no published schema is a configuration error",
 			dialect: unpublishedDialect{sqlkit.SQLite},
 			assert: func(t *testing.T, store *sqlstore.Store, err error) {
-				require.ErrorIs(t, err, notify.ErrConfiguration)
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
 				assert.Nil(t, store)
 			},
 		},

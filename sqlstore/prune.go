@@ -14,7 +14,7 @@ import (
 // always names one; this only guards a direct caller.
 const defaultPruneBatch = 1000
 
-// Prune implements [notify.Store].
+// Prune implements [ntfy.Store].
 //
 // Every step selects identifiers with an ordinary SELECT ... LIMIT and then
 // deletes by identifier. That is the one shape all three dialects share:
@@ -22,7 +22,7 @@ const defaultPruneBatch = 1000
 // and MySQL refuses a LIMIT subquery on the table it deletes from. Each delete
 // is its own statement, so a pass holds no long transaction, and passes on
 // several instances at once can only over-delete up to a bound, never below it.
-func (s *Store) Prune(ctx context.Context, req notify.PruneRequest) (notify.PruneResult, error) {
+func (s *Store) Prune(ctx context.Context, req ntfy.PruneRequest) (ntfy.PruneResult, error) {
 	ctx = s.own(ctx)
 
 	batch := req.Batch
@@ -30,7 +30,7 @@ func (s *Store) Prune(ctx context.Context, req notify.PruneRequest) (notify.Prun
 		batch = defaultPruneBatch
 	}
 
-	var result notify.PruneResult
+	var result ntfy.PruneResult
 
 	if req.MaxAge > 0 {
 		deleted, err := s.pruneAge(ctx, req.Now.Add(-req.MaxAge), batch)
@@ -69,7 +69,7 @@ func (s *Store) pruneAge(ctx context.Context, cutoff time.Time, batch int) (int6
 	for {
 		w := sqlkit.NewWriter(s.dialect)
 		w.Write("SELECT ", s.quote("id"), " FROM ", s.notificationsTable(),
-			" WHERE ", s.quote("state"), " <> ", w.Bind(string(notify.StateActive)),
+			" WHERE ", s.quote("state"), " <> ", w.Bind(string(ntfy.StateActive)),
 			" AND ", s.quote("inactive_at"), " < ", w.Bind(sqlkit.EncodeTime(s.dialect, &cutoff)),
 			" ORDER BY ", s.quote("inactive_at"), ", ", s.quote("id"),
 			" LIMIT ", strconv.Itoa(batch))
@@ -95,9 +95,9 @@ type overBound struct {
 }
 
 // pruneCount brings every recipient within the count bound: their oldest
-// inactive notifications first, and then, under [notify.EvictOldestActive]
+// inactive notifications first, and then, under [ntfy.EvictOldestActive]
 // only, their oldest ACTIVE ones.
-func (s *Store) pruneCount(ctx context.Context, req notify.PruneRequest, batch int, result *notify.PruneResult) error {
+func (s *Store) pruneCount(ctx context.Context, req ntfy.PruneRequest, batch int, result *ntfy.PruneResult) error {
 	bound := int64(req.MaxPerRecipient)
 	after := ""
 
@@ -118,7 +118,7 @@ func (s *Store) pruneCount(ctx context.Context, req notify.PruneRequest, batch i
 				return err
 			}
 
-			if excess <= 0 || req.Strategy != notify.EvictOldestActive {
+			if excess <= 0 || req.Strategy != ntfy.EvictOldestActive {
 				continue
 			}
 
@@ -196,7 +196,7 @@ func (s *Store) deleteOldest(ctx context.Context, recipient string, active bool,
 		w := sqlkit.NewWriter(s.dialect)
 		w.Write("SELECT ", s.quote("id"), " FROM ", s.notificationsTable(),
 			" WHERE ", s.quote("recipient"), " = ", w.Bind(recipient),
-			" AND ", s.quote("state"), comparison, w.Bind(string(notify.StateActive)),
+			" AND ", s.quote("state"), comparison, w.Bind(string(ntfy.StateActive)),
 			" ORDER BY ", s.quote("created_at"), ", ", s.quote("id"),
 			" LIMIT ", strconv.FormatInt(take, 10))
 
@@ -289,7 +289,7 @@ func (s *Store) deleteIDs(ctx context.Context, ids []string, active bool) (int64
 		w := sqlkit.NewWriter(s.dialect)
 		w.Write("DELETE FROM ", s.notificationsTable(),
 			" WHERE ", s.quote("id"), " IN (", w.BindAll(anys(chunk)...), ")",
-			" AND ", s.quote("state"), comparison, w.Bind(string(notify.StateActive)))
+			" AND ", s.quote("state"), comparison, w.Bind(string(ntfy.StateActive)))
 
 		removed, err := s.executor.Exec(ctx, w.Done())
 		deleted += removed

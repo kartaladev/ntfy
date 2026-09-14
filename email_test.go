@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"context"
@@ -26,26 +26,26 @@ func TestMailSentinels(t *testing.T) {
 	cases := []testCase{
 		{
 			name: "a wrapped rejection matches ErrMailRejected and not ErrMailInDoubt",
-			err:  fmt.Errorf("provider said 550: %w", notify.ErrMailRejected),
+			err:  fmt.Errorf("provider said 550: %w", ntfy.ErrMailRejected),
 			assert: func(t *testing.T, err error) {
-				require.ErrorIs(t, err, notify.ErrMailRejected)
-				assert.NotErrorIs(t, err, notify.ErrMailInDoubt)
+				require.ErrorIs(t, err, ntfy.ErrMailRejected)
+				assert.NotErrorIs(t, err, ntfy.ErrMailInDoubt)
 			},
 		},
 		{
 			name: "a wrapped doubt matches ErrMailInDoubt and not ErrMailRejected",
-			err:  fmt.Errorf("timed out after accept: %w", notify.ErrMailInDoubt),
+			err:  fmt.Errorf("timed out after accept: %w", ntfy.ErrMailInDoubt),
 			assert: func(t *testing.T, err error) {
-				require.ErrorIs(t, err, notify.ErrMailInDoubt)
-				assert.NotErrorIs(t, err, notify.ErrMailRejected)
+				require.ErrorIs(t, err, ntfy.ErrMailInDoubt)
+				assert.NotErrorIs(t, err, ntfy.ErrMailRejected)
 			},
 		},
 		{
 			name: "any other error matches neither",
 			err:  errors.New("connection refused"),
 			assert: func(t *testing.T, err error) {
-				assert.NotErrorIs(t, err, notify.ErrMailRejected)
-				assert.NotErrorIs(t, err, notify.ErrMailInDoubt)
+				assert.NotErrorIs(t, err, ntfy.ErrMailRejected)
+				assert.NotErrorIs(t, err, ntfy.ErrMailInDoubt)
 			},
 		},
 	}
@@ -64,29 +64,29 @@ func TestEmailStatusAndSkipReasons(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		status notify.EmailStatus
-		assert func(t *testing.T, status notify.EmailStatus)
+		status ntfy.EmailStatus
+		assert func(t *testing.T, status ntfy.EmailStatus)
 	}
 
-	valid := func(wire string) func(t *testing.T, status notify.EmailStatus) {
-		return func(t *testing.T, status notify.EmailStatus) {
+	valid := func(wire string) func(t *testing.T, status ntfy.EmailStatus) {
+		return func(t *testing.T, status ntfy.EmailStatus) {
 			assert.True(t, status.Valid())
 			assert.Equal(t, wire, string(status))
 		}
 	}
 
 	cases := []testCase{
-		{name: "claimed", status: notify.EmailStatusClaimed, assert: valid("CLAIMED")},
-		{name: "sending", status: notify.EmailStatusSending, assert: valid("SENDING")},
-		{name: "sent", status: notify.EmailStatusSent, assert: valid("SENT")},
-		{name: "retry", status: notify.EmailStatusRetry, assert: valid("RETRY")},
-		{name: "skipped", status: notify.EmailStatusSkipped, assert: valid("SKIPPED")},
-		{name: "failed", status: notify.EmailStatusFailed, assert: valid("FAILED")},
-		{name: "abandoned", status: notify.EmailStatusAbandoned, assert: valid("ABANDONED")},
+		{name: "claimed", status: ntfy.EmailStatusClaimed, assert: valid("CLAIMED")},
+		{name: "sending", status: ntfy.EmailStatusSending, assert: valid("SENDING")},
+		{name: "sent", status: ntfy.EmailStatusSent, assert: valid("SENT")},
+		{name: "retry", status: ntfy.EmailStatusRetry, assert: valid("RETRY")},
+		{name: "skipped", status: ntfy.EmailStatusSkipped, assert: valid("SKIPPED")},
+		{name: "failed", status: ntfy.EmailStatusFailed, assert: valid("FAILED")},
+		{name: "abandoned", status: ntfy.EmailStatusAbandoned, assert: valid("ABANDONED")},
 		{
 			name:   "an unknown status is not valid",
 			status: "PENDING",
-			assert: func(t *testing.T, status notify.EmailStatus) { assert.False(t, status.Valid()) },
+			assert: func(t *testing.T, status ntfy.EmailStatus) { assert.False(t, status.Valid()) },
 		},
 	}
 
@@ -100,7 +100,7 @@ func TestEmailStatusAndSkipReasons(t *testing.T) {
 
 	assert.Equal(t,
 		[]string{"no_address", "filtered", "inactive", "deleted"},
-		[]string{notify.EmailSkipNoAddress, notify.EmailSkipFiltered, notify.EmailSkipInactive, notify.EmailSkipDeleted},
+		[]string{ntfy.EmailSkipNoAddress, ntfy.EmailSkipFiltered, ntfy.EmailSkipInactive, ntfy.EmailSkipDeleted},
 	)
 }
 
@@ -109,7 +109,7 @@ func TestEmailKinds(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		filter notify.EmailFilter
+		filter ntfy.EmailFilter
 		kind   string
 		assert func(t *testing.T, ok bool, err error)
 	}
@@ -117,7 +117,7 @@ func TestEmailKinds(t *testing.T) {
 	cases := []testCase{
 		{
 			name:   "a listed kind is emailed",
-			filter: notify.EmailKinds("offer", "assigned"),
+			filter: ntfy.EmailKinds("offer", "assigned"),
 			kind:   "assigned",
 			assert: func(t *testing.T, ok bool, err error) {
 				require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestEmailKinds(t *testing.T) {
 		},
 		{
 			name:   "another kind is not",
-			filter: notify.EmailKinds("offer", "assigned"),
+			filter: ntfy.EmailKinds("offer", "assigned"),
 			kind:   "taken",
 			assert: func(t *testing.T, ok bool, err error) {
 				require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestEmailKinds(t *testing.T) {
 		},
 		{
 			name:   "no kinds emails nothing",
-			filter: notify.EmailKinds(),
+			filter: ntfy.EmailKinds(),
 			kind:   "offer",
 			assert: func(t *testing.T, ok bool, err error) {
 				require.NoError(t, err)
@@ -148,21 +148,21 @@ func TestEmailKinds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			ok, err := tc.filter.ShouldEmail(t.Context(), notify.Notification{Kind: tc.kind})
+			ok, err := tc.filter.ShouldEmail(t.Context(), ntfy.Notification{Kind: tc.kind})
 			tc.assert(t, ok, err)
 		})
 	}
 }
 
 // storeWithoutEmail is a store that records no email deliveries.
-type storeWithoutEmail struct{ notify.Store }
+type storeWithoutEmail struct{ ntfy.Store }
 
 // noopPorts are host ports that do nothing.
 var (
-	noopMailer   = notify.MailerFunc(func(context.Context, notify.EmailMessage) error { return nil })
-	noopBook     = notify.AddressBookFunc(func(context.Context, string) (string, bool, error) { return "", false, nil })
-	noopTemplate = notify.EmailTemplateFunc(func(context.Context, notify.EmailBatch) (notify.EmailContent, error) {
-		return notify.EmailContent{}, nil
+	noopMailer   = ntfy.MailerFunc(func(context.Context, ntfy.EmailMessage) error { return nil })
+	noopBook     = ntfy.AddressBookFunc(func(context.Context, string) (string, bool, error) { return "", false, nil })
+	noopTemplate = ntfy.EmailTemplateFunc(func(context.Context, ntfy.EmailBatch) (ntfy.EmailContent, error) {
+		return ntfy.EmailContent{}, nil
 	})
 )
 
@@ -171,26 +171,26 @@ func TestNewEmailDispatcher(t *testing.T) {
 
 	type testCase struct {
 		name        string
-		store       notify.Store
+		store       ntfy.Store
 		nilSvc      bool
 		nilMailer   bool
 		nilBook     bool
 		nilTemplate bool
-		opts        []notify.EmailOption
-		assert      func(t *testing.T, d *notify.EmailDispatcher, err error)
+		opts        []ntfy.EmailOption
+		assert      func(t *testing.T, d *ntfy.EmailDispatcher, err error)
 	}
 
-	refused := func(t *testing.T, d *notify.EmailDispatcher, err error) {
+	refused := func(t *testing.T, d *ntfy.EmailDispatcher, err error) {
 		t.Helper()
 
-		require.ErrorIs(t, err, notify.ErrConfiguration)
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
 		assert.Nil(t, d)
 	}
 
 	cases := []testCase{
 		{
 			name: "with no options it builds, with a generated owner",
-			assert: func(t *testing.T, d *notify.EmailDispatcher, err error) {
+			assert: func(t *testing.T, d *ntfy.EmailDispatcher, err error) {
 				require.NoError(t, err)
 				require.NotNil(t, d)
 				assert.True(t, strings.HasPrefix(d.Owner(), "email-"), "owner %q", d.Owner())
@@ -198,23 +198,23 @@ func TestNewEmailDispatcher(t *testing.T) {
 		},
 		{
 			name: "every option is accepted together",
-			opts: []notify.EmailOption{
-				notify.WithEmailGraceDelay(time.Minute), notify.WithEmailMaxLag(time.Hour),
-				notify.WithEmailBatchLimit(5), notify.WithEmailClaimLimit(50), notify.WithEmailLease(time.Minute),
-				notify.WithEmailMaxAttempts(3), notify.WithEmailBackoff(time.Second, time.Minute),
-				notify.WithEmailKinds("offer"), notify.WithDeliveryGuarantee(notify.AtLeastOnce),
-				notify.WithEmailOwner("dispatcher-1"),
-				notify.WithEmailErrorHandler(func(context.Context, error) {}),
+			opts: []ntfy.EmailOption{
+				ntfy.WithEmailGraceDelay(time.Minute), ntfy.WithEmailMaxLag(time.Hour),
+				ntfy.WithEmailBatchLimit(5), ntfy.WithEmailClaimLimit(50), ntfy.WithEmailLease(time.Minute),
+				ntfy.WithEmailMaxAttempts(3), ntfy.WithEmailBackoff(time.Second, time.Minute),
+				ntfy.WithEmailKinds("offer"), ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce),
+				ntfy.WithEmailOwner("dispatcher-1"),
+				ntfy.WithEmailErrorHandler(func(context.Context, error) {}),
 			},
-			assert: func(t *testing.T, d *notify.EmailDispatcher, err error) {
+			assert: func(t *testing.T, d *ntfy.EmailDispatcher, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, "dispatcher-1", d.Owner())
 			},
 		},
 		{
 			name: "no grace delay and a lag is accepted",
-			opts: []notify.EmailOption{notify.WithoutEmailGraceDelay(), notify.WithEmailMaxLag(time.Second)},
-			assert: func(t *testing.T, d *notify.EmailDispatcher, err error) {
+			opts: []ntfy.EmailOption{ntfy.WithoutEmailGraceDelay(), ntfy.WithEmailMaxLag(time.Second)},
+			assert: func(t *testing.T, d *ntfy.EmailDispatcher, err error) {
 				require.NoError(t, err)
 				assert.NotNil(t, d)
 			},
@@ -223,40 +223,40 @@ func TestNewEmailDispatcher(t *testing.T) {
 		{name: "a nil mailer", nilMailer: true, assert: refused},
 		{name: "a nil address book", nilBook: true, assert: refused},
 		{name: "a nil template", nilTemplate: true, assert: refused},
-		{name: "a store that records no email deliveries", store: storeWithoutEmail{notify.NewMemoryStore()}, assert: refused},
-		{name: "a zero grace delay", opts: []notify.EmailOption{notify.WithEmailGraceDelay(0)}, assert: refused},
-		{name: "a negative grace delay", opts: []notify.EmailOption{notify.WithEmailGraceDelay(-time.Minute)}, assert: refused},
+		{name: "a store that records no email deliveries", store: storeWithoutEmail{ntfy.NewMemoryStore()}, assert: refused},
+		{name: "a zero grace delay", opts: []ntfy.EmailOption{ntfy.WithEmailGraceDelay(0)}, assert: refused},
+		{name: "a negative grace delay", opts: []ntfy.EmailOption{ntfy.WithEmailGraceDelay(-time.Minute)}, assert: refused},
 		{
 			name:   "a grace delay both set and removed",
-			opts:   []notify.EmailOption{notify.WithEmailGraceDelay(time.Minute), notify.WithoutEmailGraceDelay()},
+			opts:   []ntfy.EmailOption{ntfy.WithEmailGraceDelay(time.Minute), ntfy.WithoutEmailGraceDelay()},
 			assert: refused,
 		},
-		{name: "a zero max lag", opts: []notify.EmailOption{notify.WithEmailMaxLag(0)}, assert: refused},
+		{name: "a zero max lag", opts: []ntfy.EmailOption{ntfy.WithEmailMaxLag(0)}, assert: refused},
 		{
 			name:   "a max lag no longer than the grace delay",
-			opts:   []notify.EmailOption{notify.WithEmailGraceDelay(time.Hour), notify.WithEmailMaxLag(time.Hour)},
+			opts:   []ntfy.EmailOption{ntfy.WithEmailGraceDelay(time.Hour), ntfy.WithEmailMaxLag(time.Hour)},
 			assert: refused,
 		},
-		{name: "a zero batch limit", opts: []notify.EmailOption{notify.WithEmailBatchLimit(0)}, assert: refused},
-		{name: "a negative claim limit", opts: []notify.EmailOption{notify.WithEmailClaimLimit(-1)}, assert: refused},
-		{name: "a zero lease", opts: []notify.EmailOption{notify.WithEmailLease(0)}, assert: refused},
-		{name: "zero attempts", opts: []notify.EmailOption{notify.WithEmailMaxAttempts(0)}, assert: refused},
-		{name: "a zero backoff base", opts: []notify.EmailOption{notify.WithEmailBackoff(0, time.Minute)}, assert: refused},
+		{name: "a zero batch limit", opts: []ntfy.EmailOption{ntfy.WithEmailBatchLimit(0)}, assert: refused},
+		{name: "a negative claim limit", opts: []ntfy.EmailOption{ntfy.WithEmailClaimLimit(-1)}, assert: refused},
+		{name: "a zero lease", opts: []ntfy.EmailOption{ntfy.WithEmailLease(0)}, assert: refused},
+		{name: "zero attempts", opts: []ntfy.EmailOption{ntfy.WithEmailMaxAttempts(0)}, assert: refused},
+		{name: "a zero backoff base", opts: []ntfy.EmailOption{ntfy.WithEmailBackoff(0, time.Minute)}, assert: refused},
 		{
 			name:   "a backoff ceiling below its base",
-			opts:   []notify.EmailOption{notify.WithEmailBackoff(time.Minute, time.Second)},
+			opts:   []ntfy.EmailOption{ntfy.WithEmailBackoff(time.Minute, time.Second)},
 			assert: refused,
 		},
-		{name: "a nil filter", opts: []notify.EmailOption{notify.WithEmailFilter(nil)}, assert: refused},
-		{name: "no kinds", opts: []notify.EmailOption{notify.WithEmailKinds()}, assert: refused},
+		{name: "a nil filter", opts: []ntfy.EmailOption{ntfy.WithEmailFilter(nil)}, assert: refused},
+		{name: "no kinds", opts: []ntfy.EmailOption{ntfy.WithEmailKinds()}, assert: refused},
 		{
 			name:   "a filter and kinds together",
-			opts:   []notify.EmailOption{notify.WithEmailFilter(notify.EmailKinds("offer")), notify.WithEmailKinds("offer")},
+			opts:   []ntfy.EmailOption{ntfy.WithEmailFilter(ntfy.EmailKinds("offer")), ntfy.WithEmailKinds("offer")},
 			assert: refused,
 		},
-		{name: "an unknown guarantee", opts: []notify.EmailOption{notify.WithDeliveryGuarantee("EXACTLY_ONCE")}, assert: refused},
-		{name: "an empty owner", opts: []notify.EmailOption{notify.WithEmailOwner("")}, assert: refused},
-		{name: "a nil error handler", opts: []notify.EmailOption{notify.WithEmailErrorHandler(nil)}, assert: refused},
+		{name: "an unknown guarantee", opts: []ntfy.EmailOption{ntfy.WithDeliveryGuarantee("EXACTLY_ONCE")}, assert: refused},
+		{name: "an empty owner", opts: []ntfy.EmailOption{ntfy.WithEmailOwner("")}, assert: refused},
+		{name: "a nil error handler", opts: []ntfy.EmailOption{ntfy.WithEmailErrorHandler(nil)}, assert: refused},
 	}
 
 	for _, tc := range cases {
@@ -265,19 +265,19 @@ func TestNewEmailDispatcher(t *testing.T) {
 
 			store := tc.store
 			if store == nil {
-				store = notify.NewMemoryStore()
+				store = ntfy.NewMemoryStore()
 			}
 
-			var svc *notify.Service
+			var svc *ntfy.Service
 
 			if !tc.nilSvc {
 				var err error
 
-				svc, err = notify.New(store)
+				svc, err = ntfy.New(store)
 				require.NoError(t, err)
 			}
 
-			mailer, book, template := notify.Mailer(noopMailer), notify.AddressBook(noopBook), notify.EmailTemplate(noopTemplate)
+			mailer, book, template := ntfy.Mailer(noopMailer), ntfy.AddressBook(noopBook), ntfy.EmailTemplate(noopTemplate)
 
 			if tc.nilMailer {
 				mailer = nil
@@ -291,7 +291,7 @@ func TestNewEmailDispatcher(t *testing.T) {
 				template = nil
 			}
 
-			d, err := notify.NewEmailDispatcher(svc, mailer, book, template, tc.opts...)
+			d, err := ntfy.NewEmailDispatcher(svc, mailer, book, template, tc.opts...)
 			tc.assert(t, d, err)
 		})
 	}

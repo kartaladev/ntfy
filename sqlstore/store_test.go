@@ -59,7 +59,7 @@ func TestNew(t *testing.T) {
 			name:     "a nil executor is a configuration error",
 			executor: nil,
 			assert: func(t *testing.T, store *sqlstore.Store, err error) {
-				require.ErrorIs(t, err, notify.ErrConfiguration)
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
 				assert.Nil(t, store)
 			},
 		},
@@ -67,7 +67,7 @@ func TestNew(t *testing.T) {
 			name:     "an executor that cannot run schema statements is a configuration error",
 			executor: executorOnly{executor},
 			assert: func(t *testing.T, store *sqlstore.Store, err error) {
-				require.ErrorIs(t, err, notify.ErrConfiguration)
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
 				assert.Nil(t, store)
 			},
 		},
@@ -76,7 +76,7 @@ func TestNew(t *testing.T) {
 			executor: executor,
 			opts:     []sqlstore.Option{sqlstore.WithTablePrefix(`app"; DROP`)},
 			assert: func(t *testing.T, store *sqlstore.Store, err error) {
-				require.ErrorIs(t, err, notify.ErrConfiguration)
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
 				assert.Nil(t, store)
 			},
 		},

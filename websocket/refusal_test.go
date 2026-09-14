@@ -21,15 +21,15 @@ const (
 )
 
 // supervisorPolicy lets "sup" follow anyone and everyone else only themselves.
-var supervisorPolicy = notify.SubscriptionAuthorizerFunc(func(ctx context.Context, actor, recipient string) error {
+var supervisorPolicy = ntfy.SubscriptionAuthorizerFunc(func(ctx context.Context, actor, recipient string) error {
 	if actor == "sup" {
 		return nil
 	}
 
-	return notify.SelfOnly.AuthorizeSubscription(ctx, actor, recipient)
+	return ntfy.SelfOnly.AuthorizeSubscription(ctx, actor, recipient)
 })
 
-// refused asserts a handshake answered as an HTTP status with the notify error
+// refused asserts a handshake answered as an HTTP status with the ntfy error
 // body, and not upgraded.
 func refused(status int, code string) func(t *testing.T, d dialed, err error) {
 	return func(t *testing.T, d dialed, err error) {
@@ -45,7 +45,7 @@ func refused(status int, code string) func(t *testing.T, d dialed, err error) {
 			} `json:"error"`
 		}
 
-		require.NoError(t, json.Unmarshal(d.body, &envelope), "the refusal body is the notify error body: %s", d.body)
+		require.NoError(t, json.Unmarshal(d.body, &envelope), "the refusal body is the ntfy error body: %s", d.body)
 		assert.Equal(t, code, envelope.Error.Code)
 	}
 }

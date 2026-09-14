@@ -9,17 +9,17 @@ import (
 	"github.com/kartaladev/sqlkit"
 )
 
-// Close implements [notify.Store].
+// Close implements [ntfy.Store].
 //
 // In one transaction, after locking the subject's '*' watermark row: raise the
 // watermark for each kind closed, select the recipients the close will close,
 // close them, and publish the successor to those recipients through the same
 // insert path a publish takes, so that a successor below a newer watermark is
 // suppressed like any late publish.
-func (s *Store) Close(ctx context.Context, req notify.CloseRequest, at time.Time, ids notify.IDGenerator) (notify.CloseResult, error) {
+func (s *Store) Close(ctx context.Context, req ntfy.CloseRequest, at time.Time, ids ntfy.IDGenerator) (ntfy.CloseResult, error) {
 	at = sqlkit.NormalizeTime(at)
 
-	var result notify.CloseResult
+	var result ntfy.CloseResult
 
 	err := s.do(ctx, func(ctx context.Context) error {
 		if err := s.ensureWatermark(ctx, req.Subject, allKinds, at); err != nil {
@@ -40,7 +40,7 @@ func (s *Store) Close(ctx context.Context, req notify.CloseRequest, at time.Time
 			return err
 		}
 
-		result = notify.CloseResult{Closed: closed, Recipients: recipients}
+		result = ntfy.CloseResult{Closed: closed, Recipients: recipients}
 
 		successors, err := req.SuccessorInsertions(recipients, at, ids)
 		if err != nil || len(successors) == 0 {
@@ -58,7 +58,7 @@ func (s *Store) Close(ctx context.Context, req notify.CloseRequest, at time.Time
 		return nil
 	})
 	if err != nil {
-		return notify.CloseResult{}, err
+		return ntfy.CloseResult{}, err
 	}
 
 	return result, nil
@@ -66,7 +66,7 @@ func (s *Store) Close(ctx context.Context, req notify.CloseRequest, at time.Time
 
 // raiseWatermarks raises the close record of each kind closed, or of every kind,
 // to the close's version, never lowering it.
-func (s *Store) raiseWatermarks(ctx context.Context, req notify.CloseRequest, at time.Time) error {
+func (s *Store) raiseWatermarks(ctx context.Context, req ntfy.CloseRequest, at time.Time) error {
 	kinds := []string{allKinds}
 	if len(req.Kinds) > 0 {
 		kinds = slices.Compact(slices.Sorted(slices.Values(req.Kinds)))
@@ -99,9 +99,9 @@ func (s *Store) raiseWatermarks(ctx context.Context, req notify.CloseRequest, at
 
 // closingCondition writes the WHERE clause selecting the notifications a close
 // closes.
-func (s *Store) closingCondition(w *sqlkit.Writer, req notify.CloseRequest) {
+func (s *Store) closingCondition(w *sqlkit.Writer, req ntfy.CloseRequest) {
 	w.Write(" WHERE ", s.quote("subject"), " = ", w.Bind(req.Subject),
-		" AND ", s.quote("state"), " <> ", w.Bind(string(notify.StateClosed)),
+		" AND ", s.quote("state"), " <> ", w.Bind(string(ntfy.StateClosed)),
 		" AND ", s.quote("subject_version"), " <= ", w.Bind(req.Version))
 
 	if len(req.Kinds) > 0 {
@@ -114,7 +114,7 @@ func (s *Store) closingCondition(w *sqlkit.Writer, req notify.CloseRequest) {
 }
 
 // closingRecipients reads, sorted, the recipients a close will close.
-func (s *Store) closingRecipients(ctx context.Context, req notify.CloseRequest) ([]string, error) {
+func (s *Store) closingRecipients(ctx context.Context, req ntfy.CloseRequest) ([]string, error) {
 	w := sqlkit.NewWriter(s.dialect)
 	w.Write("SELECT DISTINCT ", s.quote("recipient"), " FROM ", s.notificationsTable())
 	s.closingCondition(w, req)
@@ -130,13 +130,13 @@ func (s *Store) closingRecipients(ctx context.Context, req notify.CloseRequest) 
 }
 
 // closeNotifications closes a close's notifications and counts them.
-func (s *Store) closeNotifications(ctx context.Context, req notify.CloseRequest, at time.Time) (int64, error) {
+func (s *Store) closeNotifications(ctx context.Context, req ntfy.CloseRequest, at time.Time) (int64, error) {
 	instant := sqlkit.EncodeTime(s.dialect, &at)
 	inactive := s.quote("inactive_at")
 
 	w := sqlkit.NewWriter(s.dialect)
 	w.Write("UPDATE ", s.notificationsTable(), " SET ",
-		s.quote("state"), " = ", w.Bind(string(notify.StateClosed)), ", ",
+		s.quote("state"), " = ", w.Bind(string(ntfy.StateClosed)), ", ",
 		s.quote("closed_reason"), " = ", w.Bind(nullable(req.Reason)), ", ",
 		s.quote("closed_at"), " = ", w.Bind(instant), ", ",
 		inactive, " = COALESCE(", inactive, ", ", w.Bind(instant), ")")

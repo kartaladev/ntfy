@@ -28,16 +28,16 @@ func headerActor(r *http.Request) (string, error) { return r.Header.Get(actorHea
 // and both realtime transports mounted on one listener.
 type server struct {
 	url string
-	svc *notify.Service
-	hub *notify.Hub
+	svc *ntfy.Service
+	hub *ntfy.Hub
 }
 
 // serverConfig is what a test varies about a server.
 type serverConfig struct {
 	stopped bool
-	hub     []notify.HubOption
+	hub     []ntfy.HubOption
 	ws      []websocket.Option
-	service []notify.Option
+	service []ntfy.Option
 }
 
 // startServer starts an instance whose hub is running, unless the config says
@@ -45,10 +45,10 @@ type serverConfig struct {
 func startServer(t *testing.T, cfg serverConfig) *server {
 	t.Helper()
 
-	svc, err := notify.New(notify.NewMemoryStore(), cfg.service...)
+	svc, err := ntfy.New(ntfy.NewMemoryStore(), cfg.service...)
 	require.NoError(t, err)
 
-	hub, err := notify.NewHub(svc.Broadcaster(), cfg.hub...)
+	hub, err := ntfy.NewHub(svc.Broadcaster(), cfg.hub...)
 	require.NoError(t, err)
 
 	if !cfg.stopped {
@@ -58,7 +58,7 @@ func startServer(t *testing.T, cfg serverConfig) *server {
 	wsHandler, err := websocket.NewHandler(svc, hub, append([]websocket.Option{websocket.WithActor(headerActor)}, cfg.ws...)...)
 	require.NoError(t, err)
 
-	sseHandler, err := notify.NewHandler(svc, hub, notify.WithActor(headerActor))
+	sseHandler, err := ntfy.NewHandler(svc, hub, ntfy.WithActor(headerActor))
 	require.NoError(t, err)
 
 	mux := http.NewServeMux()
@@ -73,7 +73,7 @@ func startServer(t *testing.T, cfg serverConfig) *server {
 
 // runHub runs a hub until the test ends, waits until it is ready, and waits for
 // it to stop at cleanup.
-func runHub(t *testing.T, hub *notify.Hub) {
+func runHub(t *testing.T, hub *ntfy.Hub) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())

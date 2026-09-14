@@ -24,7 +24,7 @@ func TestListenRefusesMissingFunctionsWithTheAdapterError(t *testing.T) {
 
 	type testCase struct {
 		name    string
-		deliver func(notify.Signal)
+		deliver func(ntfy.Signal)
 		ready   func()
 		assert  func(t *testing.T, err error)
 	}
@@ -35,12 +35,12 @@ func TestListenRefusesMissingFunctionsWithTheAdapterError(t *testing.T) {
 		var configuration *redis.ConfigurationError
 		require.ErrorAs(t, err, &configuration, "the adapter's own type, as NewBroadcaster returns")
 		assert.ErrorIs(t, err, redis.ErrConfiguration)
-		assert.ErrorIs(t, err, notify.ErrConfiguration)
+		assert.ErrorIs(t, err, ntfy.ErrConfiguration)
 	}
 
 	cases := []testCase{
 		{name: "nil deliver", ready: func() {}, assert: matchesBoth},
-		{name: "nil ready", deliver: func(notify.Signal) {}, assert: matchesBoth},
+		{name: "nil ready", deliver: func(ntfy.Signal) {}, assert: matchesBoth},
 	}
 
 	for _, tc := range cases {

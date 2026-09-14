@@ -26,7 +26,7 @@ const (
 // delivered and reported collected on channels.
 type listening struct {
 	broadcaster *nats.Broadcaster
-	signals     chan notify.Signal
+	signals     chan ntfy.Signal
 	decodeErrs  chan error
 	done        chan error
 	cancel      context.CancelFunc
@@ -39,7 +39,7 @@ func listen(t *testing.T, conn *natsgo.Conn, subject string) *listening {
 	t.Helper()
 
 	l := &listening{
-		signals:    make(chan notify.Signal, 64),
+		signals:    make(chan ntfy.Signal, 64),
 		decodeErrs: make(chan error, 64),
 		done:       make(chan error, 1),
 	}
@@ -58,7 +58,7 @@ func listen(t *testing.T, conn *natsgo.Conn, subject string) *listening {
 	ready := make(chan struct{})
 
 	go func() {
-		l.done <- b.Listen(ctx, func(s notify.Signal) { l.signals <- s }, func() { close(ready) })
+		l.done <- b.Listen(ctx, func(s ntfy.Signal) { l.signals <- s }, func() { close(ready) })
 	}()
 
 	t.Cleanup(cancel)
@@ -98,7 +98,7 @@ func TestListen(t *testing.T) {
 			assert: func(t *testing.T, l *listening, err error) {
 				require.NoError(t, err)
 
-				var got []notify.Signal
+				var got []ntfy.Signal
 				for range 3 {
 					got = append(got, receive(t, l.signals))
 				}
@@ -117,7 +117,7 @@ func TestListen(t *testing.T) {
 			assert: func(t *testing.T, l *listening, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, signalsFor(1)[0], receive(t, l.signals), "the valid message after it is delivered")
-				require.ErrorIs(t, receive(t, l.decodeErrs), notify.ErrUnknownSignalFormat)
+				require.ErrorIs(t, receive(t, l.decodeErrs), ntfy.ErrUnknownSignalFormat)
 				assertNothing(t, l.signals, "no signal is delivered for the unknown message")
 			},
 		},
@@ -129,7 +129,7 @@ func TestListen(t *testing.T) {
 				return receive(t, l.done)
 			},
 			assert: func(t *testing.T, l *listening, err error) {
-				require.ErrorIs(t, err, context.Canceled, "Listen returns its context's error, as the notify contract says")
+				require.ErrorIs(t, err, context.Canceled, "Listen returns its context's error, as the ntfy contract says")
 				require.NoError(t, l.broadcaster.Broadcast(t.Context(), signalsFor(1)))
 				assertNothing(t, l.signals, "nothing is delivered after Listen returns")
 			},

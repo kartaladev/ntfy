@@ -29,8 +29,8 @@ const DefaultSubscribeTimeout = 5 * time.Second
 const MaxSignalsPerMessage = 500
 
 // Broadcaster carries notification change signals between instances over a
-// NATS core subject. It is a [notify.Broadcaster]: pass it to
-// [notify.WithBroadcaster] on every instance that shares a subject.
+// NATS core subject. It is a [ntfy.Broadcaster]: pass it to
+// [ntfy.WithBroadcaster] on every instance that shares a subject.
 //
 // A Broadcaster is safe for concurrent use.
 type Broadcaster struct {
@@ -40,7 +40,7 @@ type Broadcaster struct {
 	onError          func(ctx context.Context, err error)
 }
 
-var _ notify.Broadcaster = (*Broadcaster)(nil)
+var _ ntfy.Broadcaster = (*Broadcaster)(nil)
 
 // Option configures a [Broadcaster].
 type Option func(*config)
@@ -71,7 +71,7 @@ func WithSubscribeTimeout(timeout time.Duration) Option {
 
 // WithDecodeErrorHandler receives messages on the subject that could not be
 // read, such as one in a signal format version this library does not know
-// (matching [notify.ErrUnknownSignalFormat]). No signal is delivered for such a
+// (matching [ntfy.ErrUnknownSignalFormat]). No signal is delivered for such a
 // message, and receiving continues. The default handler does nothing, which is
 // safe but silent; a host should supply one that logs. A nil handler keeps the
 // default.
@@ -135,17 +135,17 @@ func (b *Broadcaster) Subject() string { return b.subject }
 // subscription.
 func (b *Broadcaster) SubscribeTimeout() time.Duration { return b.subscribeTimeout }
 
-// Broadcast implements [notify.Broadcaster]. It publishes the signals in the
-// notify signal format, one message per [MaxSignalsPerMessage] signals.
+// Broadcast implements [ntfy.Broadcaster]. It publishes the signals in the
+// ntfy signal format, one message per [MaxSignalsPerMessage] signals.
 //
 // It does not flush: while the server is away the connection buffers messages
 // up to its reconnect buffer, and a flush per broadcast would buy a round trip
 // without a guarantee. A message the connection does not take, because it is
 // closed or its buffer is full, is a [*PublishError] matching [ErrPublish]; the
 // messages before it were published.
-func (b *Broadcaster) Broadcast(_ context.Context, signals []notify.Signal) error {
+func (b *Broadcaster) Broadcast(_ context.Context, signals []ntfy.Signal) error {
 	for chunk := range slices.Chunk(signals, MaxSignalsPerMessage) {
-		payload, err := notify.EncodeSignals(chunk)
+		payload, err := ntfy.EncodeSignals(chunk)
 		if err != nil {
 			return err
 		}
@@ -164,7 +164,7 @@ func (b *Broadcaster) Broadcast(_ context.Context, signals []notify.Signal) erro
 // it drains quickly.
 const listenBuffer = 1000
 
-// Listen implements [notify.Broadcaster]. It subscribes to the subject, with no
+// Listen implements [ntfy.Broadcaster]. It subscribes to the subject, with no
 // queue group so that every instance receives every signal, waits for the
 // server to confirm the subscription, calls ready, and then calls deliver with
 // every signal of every message until ctx is done, when it unsubscribes and
@@ -185,7 +185,7 @@ const listenBuffer = 1000
 // reconnect the connection resubscribes on its own, and signals published while
 // it was away are not replayed. A nil deliver or ready is a
 // [ConfigurationError].
-func (b *Broadcaster) Listen(ctx context.Context, deliver func(notify.Signal), ready func()) error {
+func (b *Broadcaster) Listen(ctx context.Context, deliver func(ntfy.Signal), ready func()) error {
 	switch {
 	case deliver == nil:
 		return &ConfigurationError{Detail: "Listen needs a deliver function"}
@@ -212,7 +212,7 @@ func (b *Broadcaster) Listen(ctx context.Context, deliver func(notify.Signal), r
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-messages:
-			signals, err := notify.DecodeSignals(msg.Data)
+			signals, err := ntfy.DecodeSignals(msg.Data)
 			if err != nil {
 				b.onError(ctx, fmt.Errorf("nats: a message on subject %q: %w", b.subject, err))
 

@@ -32,10 +32,10 @@ const Subprotocol = "notify.v1"
 // behind its own middleware. It authenticates nobody: the acting user comes from
 // the function given to [WithActor].
 type Handler struct {
-	svc          *notify.Service
-	hub          *notify.Hub
+	svc          *ntfy.Service
+	hub          *ntfy.Hub
 	actor        func(*http.Request) (string, error)
-	authorizer   notify.SubscriptionAuthorizer
+	authorizer   ntfy.SubscriptionAuthorizer
 	origins      []string
 	anyOrigin    bool
 	readLimit    int64
@@ -53,7 +53,7 @@ type Option func(*config)
 type config struct {
 	actor         func(*http.Request) (string, error)
 	basePath      string
-	authorizer    notify.SubscriptionAuthorizer
+	authorizer    ntfy.SubscriptionAuthorizer
 	authorizerSet bool
 	origins       []string
 	anyOrigin     bool
@@ -65,13 +65,13 @@ type config struct {
 // WithActor supplies how the acting user is established from a request, such as
 // reading what the host's authentication middleware put on its context. It is
 // required. An empty actor is refused as forbidden; an error is answered through
-// [notify.WriteError].
+// [ntfy.WriteError].
 func WithActor(actor func(*http.Request) (string, error)) Option {
 	return func(c *config) { c.actor = actor }
 }
 
 // WithBasePath serves the route somewhere other than
-// [notify.DefaultBasePath]. A trailing slash is ignored, and an empty path keeps
+// [ntfy.DefaultBasePath]. A trailing slash is ignored, and an empty path keeps
 // the default.
 func WithBasePath(basePath string) Option {
 	return func(c *config) {
@@ -82,10 +82,10 @@ func WithBasePath(basePath string) Option {
 }
 
 // WithSubscriptionAuthorizer replaces the default subscription policy,
-// [notify.SelfOnly], with the host's own. A nil policy is a
-// [notify.ConfigurationError]; pass [notify.AllowAll] to permit every
+// [ntfy.SelfOnly], with the host's own. A nil policy is a
+// [ntfy.ConfigurationError]; pass [ntfy.AllowAll] to permit every
 // subscription.
-func WithSubscriptionAuthorizer(authorizer notify.SubscriptionAuthorizer) Option {
+func WithSubscriptionAuthorizer(authorizer ntfy.SubscriptionAuthorizer) Option {
 	return func(c *config) {
 		c.authorizer = authorizer
 		c.authorizerSet = true
@@ -112,13 +112,13 @@ func WithReadLimit(bytes int64) Option {
 	return func(c *config) { c.readLimit = &bytes }
 }
 
-// WithPingInterval replaces the hub's heartbeat, [notify.Hub.Heartbeat], as how
+// WithPingInterval replaces the hub's heartbeat, [ntfy.Hub.Heartbeat], as how
 // often an idle connection is pinged. It must be positive.
 func WithPingInterval(interval time.Duration) Option {
 	return func(c *config) { c.pingInterval = &interval }
 }
 
-// WithWriteTimeout replaces the hub's write timeout, [notify.Hub.WriteTimeout],
+// WithWriteTimeout replaces the hub's write timeout, [ntfy.Hub.WriteTimeout],
 // as how long a write or a ping may wait on the client before the connection is
 // closed. It must be positive.
 func WithWriteTimeout(timeout time.Duration) Option {
@@ -129,14 +129,14 @@ func WithWriteTimeout(timeout time.Duration) Option {
 // connections subscribe through.
 //
 // With no options beyond the required [WithActor], it serves
-// GET /v1/notifications/socket, authorizes connections with [notify.SelfOnly],
+// GET /v1/notifications/socket, authorizes connections with [ntfy.SelfOnly],
 // accepts only same-host browser origins, reads messages of at most
 // [DefaultReadLimit] bytes, and pings and times out writes at the hub's
 // heartbeat and write timeout. A nil service or hub, a missing actor, a nil
 // subscription policy, or a read limit, ping interval or write timeout that is
-// not positive is a [notify.ConfigurationError].
-func NewHandler(svc *notify.Service, hub *notify.Hub, opts ...Option) (*Handler, error) {
-	cfg := config{basePath: notify.DefaultBasePath, authorizer: notify.SelfOnly}
+// not positive is a [ntfy.ConfigurationError].
+func NewHandler(svc *ntfy.Service, hub *ntfy.Hub, opts ...Option) (*Handler, error) {
+	cfg := config{basePath: ntfy.DefaultBasePath, authorizer: ntfy.SelfOnly}
 
 	for _, opt := range opts {
 		if opt != nil {
@@ -146,21 +146,21 @@ func NewHandler(svc *notify.Service, hub *notify.Hub, opts ...Option) (*Handler,
 
 	switch {
 	case svc == nil:
-		return nil, &notify.ConfigurationError{Detail: "a WebSocket handler needs a service"}
+		return nil, &ntfy.ConfigurationError{Detail: "a WebSocket handler needs a service"}
 	case hub == nil:
-		return nil, &notify.ConfigurationError{Detail: "a WebSocket handler needs a hub"}
+		return nil, &ntfy.ConfigurationError{Detail: "a WebSocket handler needs a hub"}
 	case cfg.actor == nil:
-		return nil, &notify.ConfigurationError{Detail: "WithActor is required: the WebSocket handler authenticates nobody"}
+		return nil, &ntfy.ConfigurationError{Detail: "WithActor is required: the WebSocket handler authenticates nobody"}
 	case cfg.authorizerSet && cfg.authorizer == nil:
-		return nil, &notify.ConfigurationError{
-			Detail: "WithSubscriptionAuthorizer was given no policy; pass notify.AllowAll to permit every subscription",
+		return nil, &ntfy.ConfigurationError{
+			Detail: "WithSubscriptionAuthorizer was given no policy; pass ntfy.AllowAll to permit every subscription",
 		}
 	case cfg.readLimit != nil && *cfg.readLimit <= 0:
-		return nil, &notify.ConfigurationError{Detail: "a WebSocket read limit must be positive"}
+		return nil, &ntfy.ConfigurationError{Detail: "a WebSocket read limit must be positive"}
 	case cfg.pingInterval != nil && *cfg.pingInterval <= 0:
-		return nil, &notify.ConfigurationError{Detail: "a WebSocket ping interval must be positive"}
+		return nil, &ntfy.ConfigurationError{Detail: "a WebSocket ping interval must be positive"}
 	case cfg.writeTimeout != nil && *cfg.writeTimeout <= 0:
-		return nil, &notify.ConfigurationError{Detail: "a WebSocket write timeout must be positive"}
+		return nil, &ntfy.ConfigurationError{Detail: "a WebSocket write timeout must be positive"}
 	}
 
 	h := &Handler{
@@ -199,7 +199,7 @@ func (h *Handler) Pattern() string { return h.pattern }
 
 // ServeHTTP implements [http.Handler].
 //
-// Every refusal is answered through [notify.WriteError] before the connection
+// Every refusal is answered through [ntfy.WriteError] before the connection
 // is upgraded, in this order: no acting user or a foreign browser origin is
 // forbidden, a refused subscription is forbidden, a hub that is not receiving
 // signals is unavailable, and a recipient over the hub's cap is too many
@@ -207,19 +207,19 @@ func (h *Handler) Pattern() string { return h.pattern }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	actor, err := h.actor(r)
 	if err != nil {
-		notify.WriteError(w, err)
+		ntfy.WriteError(w, err)
 
 		return
 	}
 
 	if actor == "" {
-		notify.WriteError(w, fmt.Errorf("%w: no acting user is established", notify.ErrUnauthorized))
+		ntfy.WriteError(w, fmt.Errorf("%w: no acting user is established", ntfy.ErrUnauthorized))
 
 		return
 	}
 
 	if err := h.checkOrigin(r); err != nil {
-		notify.WriteError(w, err)
+		ntfy.WriteError(w, err)
 
 		return
 	}
@@ -230,14 +230,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.authorizer.AuthorizeSubscription(r.Context(), actor, recipient); err != nil {
-		notify.WriteError(w, &subscriptionRefusedError{cause: err})
+		ntfy.WriteError(w, &subscriptionRefusedError{cause: err})
 
 		return
 	}
 
 	subscription, err := h.hub.Subscribe(recipient)
 	if err != nil {
-		notify.WriteError(w, err)
+		ntfy.WriteError(w, err)
 
 		return
 	}
@@ -245,7 +245,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := cws.Accept(w, r, &cws.AcceptOptions{
 		Subprotocols: []string{Subprotocol},
-		// The origin was checked above, so that a refusal carries the notify
+		// The origin was checked above, so that a refusal carries the ntfy
 		// error body rather than the library's plain text.
 		InsecureSkipVerify: true,
 	})
@@ -267,9 +267,9 @@ const replyBuffer = 16
 // signalFrame is the unread-changed message: the change and when it happened,
 // and nothing else.
 type signalFrame struct {
-	Type   string        `json:"type"`
-	Change notify.Change `json:"change"`
-	At     time.Time     `json:"at"`
+	Type   string      `json:"type"`
+	Change ntfy.Change `json:"change"`
+	At     time.Time   `json:"at"`
 }
 
 // serve runs one upgraded connection until the client goes, a write or ping
@@ -283,7 +283,7 @@ type signalFrame struct {
 // down, the write loop still has to send the going-away close frame, and a read
 // on a cancelled context would close the connection first with a status of its
 // own.
-func (h *Handler) serve(requestCtx context.Context, conn *cws.Conn, subscription *notify.Subscription, recipient string) {
+func (h *Handler) serve(requestCtx context.Context, conn *cws.Conn, subscription *ntfy.Subscription, recipient string) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 
 	replies := make(chan any, replyBuffer)
@@ -406,13 +406,13 @@ type errorFrame struct {
 func (h *Handler) answer(ctx context.Context, recipient string, data []byte) any {
 	var req request
 	if err := json.Unmarshal(data, &req); err != nil {
-		return errorReply("", &notify.ValidationError{Subject: "message", Issues: []notify.ValidationIssue{
+		return errorReply("", &ntfy.ValidationError{Subject: "message", Issues: []ntfy.ValidationIssue{
 			{Detail: "must be a JSON object with a type of mark-read or mark-all-read"},
 		}})
 	}
 
 	var (
-		result notify.MarkResult
+		result ntfy.MarkResult
 		err    error
 	)
 
@@ -422,7 +422,7 @@ func (h *Handler) answer(ctx context.Context, recipient string, data []byte) any
 	case "mark-all-read":
 		result, err = h.svc.MarkAllRead(ctx, recipient, req.Through)
 	default:
-		err = &notify.ValidationError{Subject: "message", Issues: []notify.ValidationIssue{
+		err = &ntfy.ValidationError{Subject: "message", Issues: []ntfy.ValidationIssue{
 			{Pointer: "/type", Detail: "must be mark-read or mark-all-read"},
 		}}
 	}
@@ -441,10 +441,10 @@ func errorReply(ref string, err error) errorFrame {
 	frame := errorFrame{Type: "error", Ref: ref, Code: "internal", Message: "the request could not be completed"}
 
 	switch {
-	case errors.Is(err, notify.ErrValidation):
+	case errors.Is(err, ntfy.ErrValidation):
 		frame.Code, frame.Message = "validation_failed", err.Error()
-	case errors.Is(err, notify.ErrNotFound):
-		frame.Code, frame.Message = "not_found", notify.ErrNotFound.Error()
+	case errors.Is(err, ntfy.ErrNotFound):
+		frame.Code, frame.Message = "not_found", ntfy.ErrNotFound.Error()
 	}
 
 	return frame
@@ -461,7 +461,7 @@ func (h *Handler) checkOrigin(r *http.Request) error {
 
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("%w: the request's origin %q is not a valid origin", notify.ErrUnauthorized, origin)
+		return fmt.Errorf("%w: the request's origin %q is not a valid origin", ntfy.ErrUnauthorized, origin)
 	}
 
 	if strings.EqualFold(u.Host, r.Host) {
@@ -474,7 +474,7 @@ func (h *Handler) checkOrigin(r *http.Request) error {
 		}
 	}
 
-	return fmt.Errorf("%w: the origin %q is not permitted", notify.ErrUnauthorized, origin)
+	return fmt.Errorf("%w: the origin %q is not permitted", ntfy.ErrUnauthorized, origin)
 }
 
 // subscriptionRefusedError carries a subscription policy's refusal to the error
@@ -485,5 +485,5 @@ type subscriptionRefusedError struct{ cause error }
 // Error implements the error interface.
 func (e *subscriptionRefusedError) Error() string { return e.cause.Error() }
 
-// Unwrap makes the error match [notify.ErrUnauthorized].
-func (e *subscriptionRefusedError) Unwrap() error { return notify.ErrUnauthorized }
+// Unwrap makes the error match [ntfy.ErrUnauthorized].
+func (e *subscriptionRefusedError) Unwrap() error { return ntfy.ErrUnauthorized }

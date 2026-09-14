@@ -41,7 +41,7 @@ func readRaw(t *testing.T, conn *cws.Conn) []byte {
 func (s *server) idOf(t *testing.T, recipient string) string {
 	t.Helper()
 
-	page, err := s.svc.List(t.Context(), notify.ListQuery{Recipient: recipient})
+	page, err := s.svc.List(t.Context(), ntfy.ListQuery{Recipient: recipient})
 	require.NoError(t, err)
 	require.Len(t, page.Notifications, 1)
 
@@ -87,7 +87,7 @@ func TestReadLoop(t *testing.T) {
 
 				frames := framesByType(t, conn, 2)
 				assert.Equal(t, map[string]any{"type": "marked", "ref": "r1", "marked": float64(1)}, frames["marked"])
-				assert.Equal(t, string(notify.ChangeRead), frames["unread-changed"]["change"])
+				assert.Equal(t, string(ntfy.ChangeRead), frames["unread-changed"]["change"])
 
 				count, err := s.svc.CountActive(t.Context(), "alice")
 				require.NoError(t, err)

@@ -12,9 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// RedisImage is the Redis image the broadcaster is tested against. It is the
-// image delivery/redis pins, copied rather than imported: this module moves to
-// its own repository with notify and may import nothing that stays behind.
+// RedisImage is the Redis image the broadcaster is tested against.
 //
 // It is pinned. A moving tag would let a remote image update change what these
 // tests mean overnight.

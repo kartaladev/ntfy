@@ -27,8 +27,8 @@ const DefaultPublishTimeout = 5 * time.Second
 const MaxSignalsPerMessage = 500
 
 // Broadcaster carries notification change signals between instances over Redis
-// publish/subscribe. It is a [notify.Broadcaster]: pass it to
-// [notify.WithBroadcaster] on every instance that shares a channel.
+// publish/subscribe. It is a [ntfy.Broadcaster]: pass it to
+// [ntfy.WithBroadcaster] on every instance that shares a channel.
 //
 // A Broadcaster is safe for concurrent use.
 type Broadcaster struct {
@@ -38,7 +38,7 @@ type Broadcaster struct {
 	onError func(ctx context.Context, err error)
 }
 
-var _ notify.Broadcaster = (*Broadcaster)(nil)
+var _ ntfy.Broadcaster = (*Broadcaster)(nil)
 
 // Option configures a [Broadcaster].
 type Option func(*config)
@@ -64,7 +64,7 @@ func WithPublishTimeout(timeout time.Duration) Option {
 
 // WithDecodeErrorHandler receives messages on the channel that could not be
 // read, such as one in a signal format version this library does not know
-// (matching [notify.ErrUnknownSignalFormat]). No signal is delivered for such a
+// (matching [ntfy.ErrUnknownSignalFormat]). No signal is delivered for such a
 // message, and receiving continues. The default handler does nothing, which is
 // safe but silent; a host should supply one that logs. A nil handler keeps the
 // default.
@@ -124,13 +124,13 @@ func (b *Broadcaster) Channel() string { return b.channel }
 // PublishTimeout is how long one publish may take.
 func (b *Broadcaster) PublishTimeout() time.Duration { return b.timeout }
 
-// Broadcast implements [notify.Broadcaster]. It publishes the signals in the
-// notify signal format, one message per [MaxSignalsPerMessage] signals, each
+// Broadcast implements [ntfy.Broadcaster]. It publishes the signals in the
+// ntfy signal format, one message per [MaxSignalsPerMessage] signals, each
 // within the publish timeout. A message the broker does not take is a
 // [*PublishError] matching [ErrPublish]; the messages before it were published.
-func (b *Broadcaster) Broadcast(ctx context.Context, signals []notify.Signal) error {
+func (b *Broadcaster) Broadcast(ctx context.Context, signals []ntfy.Signal) error {
 	for chunk := range slices.Chunk(signals, MaxSignalsPerMessage) {
-		payload, err := notify.EncodeSignals(chunk)
+		payload, err := ntfy.EncodeSignals(chunk)
 		if err != nil {
 			return err
 		}
@@ -155,7 +155,7 @@ func (b *Broadcaster) publish(ctx context.Context, payload []byte) error {
 // waits. deliver is the hub's non-blocking send, so it drains quickly.
 const listenBuffer = 1000
 
-// Listen implements [notify.Broadcaster]. It subscribes to the channel, waits
+// Listen implements [ntfy.Broadcaster]. It subscribes to the channel, waits
 // for the broker to confirm the subscription, calls ready once, and then calls
 // deliver with every signal of every message, until ctx is done, when it
 // unsubscribes and returns ctx's error.
@@ -163,7 +163,7 @@ const listenBuffer = 1000
 // ready is called only after the broker has confirmed the subscription, so a
 // signal broadcast from then on, by this instance or another, is delivered. A
 // nil deliver or ready is a [ConfigurationError], returned before
-// subscribing: it breaks the notify contract rather than this broadcaster's
+// subscribing: it breaks the ntfy contract rather than this broadcaster's
 // configuration.
 //
 // A message that cannot be read is reported to the decode error handler and
@@ -172,7 +172,7 @@ const listenBuffer = 1000
 // replayed; ready is not called again. A subscription the client could not make,
 // or one that ends while ctx is still live, is returned as an error, and ready is
 // not called for a subscription that was never confirmed.
-func (b *Broadcaster) Listen(ctx context.Context, deliver func(notify.Signal), ready func()) error {
+func (b *Broadcaster) Listen(ctx context.Context, deliver func(ntfy.Signal), ready func()) error {
 	switch {
 	case deliver == nil:
 		return &ConfigurationError{Detail: "Listen needs a deliver function"}
@@ -210,7 +210,7 @@ func (b *Broadcaster) Listen(ctx context.Context, deliver func(notify.Signal), r
 				return fmt.Errorf("redis: the subscription to channel %q ended", b.channel)
 			}
 
-			signals, err := notify.DecodeSignals([]byte(msg.Payload))
+			signals, err := ntfy.DecodeSignals([]byte(msg.Payload))
 			if err != nil {
 				b.onError(ctx, fmt.Errorf("redis: a message on channel %q: %w", b.channel, err))
 

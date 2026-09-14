@@ -5,7 +5,7 @@
 // Every instance subscribed to the subject receives every signal published on
 // it: the subscription deliberately uses no queue group, which would hand each
 // signal to only one instance. A message carries only recipients, changes and
-// their times, in the notify signal format; never a notification's title,
+// their times, in the ntfy signal format; never a notification's title,
 // links, data, kind or subject.
 //
 // Listening reports ready only once the server has confirmed the subscription,
@@ -16,7 +16,8 @@
 // instance is disconnected are not replayed to it, and the notification store
 // remains the source of truth.
 //
-// This is not the delivery/nats sink of the task engine. That sink publishes
-// durable events under hmntsk.events; this broadcaster publishes ephemeral
-// signals on a subject of its own.
+// Signals are ephemeral core-NATS messages, not durable events. A host that
+// needs events it can replay should publish them through JetStream on subjects
+// of its own; the broadcaster's default subject is namespaced so that it does
+// not collide with them.
 package nats

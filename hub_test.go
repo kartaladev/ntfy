@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"context"
@@ -31,7 +31,7 @@ type startedRun struct {
 }
 
 // startRun runs a hub on its own goroutine and stops it at cleanup.
-func startRun(t *testing.T, hub *notify.Hub) *startedRun {
+func startRun(t *testing.T, hub *ntfy.Hub) *startedRun {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -65,7 +65,7 @@ func (r *startedRun) stop(t *testing.T) error {
 }
 
 // runHub runs a hub until the test ends, and waits until the hub is ready.
-func runHub(t *testing.T, hub *notify.Hub) (stop func() error) {
+func runHub(t *testing.T, hub *ntfy.Hub) (stop func() error) {
 	t.Helper()
 
 	run := startRun(t, hub)
@@ -82,17 +82,17 @@ func runHub(t *testing.T, hub *notify.Hub) (stop func() error) {
 }
 
 // ready reports whether a subscription has a pending signal, without waiting.
-func ready(subscription *notify.Subscription) bool {
+func ready(subscription *ntfy.Subscription) bool {
 	return closed(subscription.Ready())
 }
 
 // awaitSubscribed broadcasts a probe to a recipient, waits for the subscription
 // to see it, and drains it. The hub is ready, so the first broadcast arrives.
-func awaitSubscribed(t *testing.T, broadcaster notify.Broadcaster, subscription *notify.Subscription, recipient string) {
+func awaitSubscribed(t *testing.T, broadcaster ntfy.Broadcaster, subscription *ntfy.Subscription, recipient string) {
 	t.Helper()
 
-	probe := notify.Signal{Recipient: recipient, Change: notify.ChangeCreated, At: serviceAt}
-	require.NoError(t, broadcaster.Broadcast(t.Context(), []notify.Signal{probe}))
+	probe := ntfy.Signal{Recipient: recipient, Change: ntfy.ChangeCreated, At: serviceAt}
+	require.NoError(t, broadcaster.Broadcast(t.Context(), []ntfy.Signal{probe}))
 
 	select {
 	case <-subscription.Ready():
@@ -108,15 +108,15 @@ func TestNewHub(t *testing.T) {
 
 	type testCase struct {
 		name        string
-		broadcaster notify.Broadcaster
-		opts        []notify.HubOption
-		assert      func(t *testing.T, hub *notify.Hub, err error)
+		broadcaster ntfy.Broadcaster
+		opts        []ntfy.HubOption
+		assert      func(t *testing.T, hub *ntfy.Hub, err error)
 	}
 
-	refused := func(t *testing.T, hub *notify.Hub, err error) {
+	refused := func(t *testing.T, hub *ntfy.Hub, err error) {
 		t.Helper()
 
-		require.ErrorIs(t, err, notify.ErrConfiguration)
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
 		assert.Nil(t, hub)
 	}
 
@@ -124,33 +124,33 @@ func TestNewHub(t *testing.T) {
 		{name: "a nil broadcaster is a configuration error", assert: refused},
 		{
 			name:        "with no options it heartbeats every 25s, times writes out after 10s and caps 8 streams",
-			broadcaster: notify.NewInProcessBroadcaster(),
-			assert: func(t *testing.T, hub *notify.Hub, err error) {
+			broadcaster: ntfy.NewInProcessBroadcaster(),
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, 25*time.Second, hub.Heartbeat())
 				assert.Equal(t, 10*time.Second, hub.WriteTimeout())
-				assert.Equal(t, 25*time.Second, notify.DefaultHeartbeat)
-				assert.Equal(t, 10*time.Second, notify.DefaultWriteTimeout)
+				assert.Equal(t, 25*time.Second, ntfy.DefaultHeartbeat)
+				assert.Equal(t, 10*time.Second, ntfy.DefaultWriteTimeout)
 
 				runHub(t, hub)
 
-				for range notify.DefaultMaxStreamsPerRecipient {
+				for range ntfy.DefaultMaxStreamsPerRecipient {
 					_, err := hub.Subscribe("alice")
 					require.NoError(t, err)
 				}
 
 				_, err = hub.Subscribe("alice")
-				assert.ErrorIs(t, err, notify.ErrTooManyStreams)
-				assert.Equal(t, 8, notify.DefaultMaxStreamsPerRecipient)
+				assert.ErrorIs(t, err, ntfy.ErrTooManyStreams)
+				assert.Equal(t, 8, ntfy.DefaultMaxStreamsPerRecipient)
 			},
 		},
 		{
 			name:        "options replace the defaults",
-			broadcaster: notify.NewInProcessBroadcaster(),
-			opts: []notify.HubOption{
-				notify.WithHeartbeat(time.Second), notify.WithWriteTimeout(2 * time.Second), notify.WithMaxStreamsPerRecipient(1),
+			broadcaster: ntfy.NewInProcessBroadcaster(),
+			opts: []ntfy.HubOption{
+				ntfy.WithHeartbeat(time.Second), ntfy.WithWriteTimeout(2 * time.Second), ntfy.WithMaxStreamsPerRecipient(1),
 			},
-			assert: func(t *testing.T, hub *notify.Hub, err error) {
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, time.Second, hub.Heartbeat())
 				assert.Equal(t, 2*time.Second, hub.WriteTimeout())
@@ -161,20 +161,20 @@ func TestNewHub(t *testing.T) {
 				require.NoError(t, err)
 
 				_, err = hub.Subscribe("alice")
-				assert.ErrorIs(t, err, notify.ErrTooManyStreams)
+				assert.ErrorIs(t, err, ntfy.ErrTooManyStreams)
 			},
 		},
 		{
-			name: "a non-positive heartbeat is a configuration error", broadcaster: notify.NewInProcessBroadcaster(),
-			opts: []notify.HubOption{notify.WithHeartbeat(0)}, assert: refused,
+			name: "a non-positive heartbeat is a configuration error", broadcaster: ntfy.NewInProcessBroadcaster(),
+			opts: []ntfy.HubOption{ntfy.WithHeartbeat(0)}, assert: refused,
 		},
 		{
-			name: "a non-positive write timeout is a configuration error", broadcaster: notify.NewInProcessBroadcaster(),
-			opts: []notify.HubOption{notify.WithWriteTimeout(-time.Second)}, assert: refused,
+			name: "a non-positive write timeout is a configuration error", broadcaster: ntfy.NewInProcessBroadcaster(),
+			opts: []ntfy.HubOption{ntfy.WithWriteTimeout(-time.Second)}, assert: refused,
 		},
 		{
-			name: "a stream cap below one is a configuration error", broadcaster: notify.NewInProcessBroadcaster(),
-			opts: []notify.HubOption{notify.WithMaxStreamsPerRecipient(0)}, assert: refused,
+			name: "a stream cap below one is a configuration error", broadcaster: ntfy.NewInProcessBroadcaster(),
+			opts: []ntfy.HubOption{ntfy.WithMaxStreamsPerRecipient(0)}, assert: refused,
 		},
 	}
 
@@ -182,7 +182,7 @@ func TestNewHub(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			hub, err := notify.NewHub(tc.broadcaster, tc.opts...)
+			hub, err := ntfy.NewHub(tc.broadcaster, tc.opts...)
 			tc.assert(t, hub, err)
 		})
 	}
@@ -193,21 +193,21 @@ func TestHubSubscribe(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		assert func(t *testing.T, hub *notify.Hub)
+		assert func(t *testing.T, hub *ntfy.Hub)
 	}
 
 	cases := []testCase{
 		{
 			name: "a hub that is not running refuses a subscription as unavailable",
-			assert: func(t *testing.T, hub *notify.Hub) {
+			assert: func(t *testing.T, hub *ntfy.Hub) {
 				subscription, err := hub.Subscribe("alice")
-				require.ErrorIs(t, err, notify.ErrUnavailable)
+				require.ErrorIs(t, err, ntfy.ErrUnavailable)
 				assert.Nil(t, subscription)
 			},
 		},
 		{
 			name: "a subscription over the cap is refused, and another recipient is unaffected",
-			assert: func(t *testing.T, hub *notify.Hub) {
+			assert: func(t *testing.T, hub *ntfy.Hub) {
 				runHub(t, hub)
 
 				for range 2 {
@@ -216,7 +216,7 @@ func TestHubSubscribe(t *testing.T) {
 				}
 
 				_, err := hub.Subscribe("alice")
-				require.ErrorIs(t, err, notify.ErrTooManyStreams)
+				require.ErrorIs(t, err, ntfy.ErrTooManyStreams)
 
 				_, err = hub.Subscribe("bob")
 				assert.NoError(t, err)
@@ -224,7 +224,7 @@ func TestHubSubscribe(t *testing.T) {
 		},
 		{
 			name: "closing a subscription releases its slot once, however often it is closed",
-			assert: func(t *testing.T, hub *notify.Hub) {
+			assert: func(t *testing.T, hub *ntfy.Hub) {
 				runHub(t, hub)
 
 				first, err := hub.Subscribe("alice")
@@ -240,19 +240,19 @@ func TestHubSubscribe(t *testing.T) {
 				require.NoError(t, err, "the closed slot is free again")
 
 				_, err = hub.Subscribe("alice")
-				assert.ErrorIs(t, err, notify.ErrTooManyStreams, "closing twice freed only one slot")
+				assert.ErrorIs(t, err, ntfy.ErrTooManyStreams, "closing twice freed only one slot")
 			},
 		},
 		{
 			name: "a hub that has stopped refuses a subscription as unavailable",
-			assert: func(t *testing.T, hub *notify.Hub) {
+			assert: func(t *testing.T, hub *ntfy.Hub) {
 				stop := runHub(t, hub)
 
 				assert.ErrorIs(t, stop(), context.Canceled)
 				assert.False(t, hub.Running())
 
 				_, err := hub.Subscribe("alice")
-				assert.ErrorIs(t, err, notify.ErrUnavailable)
+				assert.ErrorIs(t, err, ntfy.ErrUnavailable)
 			},
 		},
 	}
@@ -261,7 +261,7 @@ func TestHubSubscribe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			hub, err := notify.NewHub(notify.NewInProcessBroadcaster(), notify.WithMaxStreamsPerRecipient(2))
+			hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), ntfy.WithMaxStreamsPerRecipient(2))
 			require.NoError(t, err)
 
 			tc.assert(t, hub)
@@ -274,13 +274,13 @@ func TestHubDelivery(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		assert func(t *testing.T, broadcaster *notify.InProcessBroadcaster, hub *notify.Hub)
+		assert func(t *testing.T, broadcaster *ntfy.InProcessBroadcaster, hub *ntfy.Hub)
 	}
 
 	cases := []testCase{
 		{
 			name: "a signal reaches every subscription of its recipient and no one else's",
-			assert: func(t *testing.T, broadcaster *notify.InProcessBroadcaster, hub *notify.Hub) {
+			assert: func(t *testing.T, broadcaster *ntfy.InProcessBroadcaster, hub *ntfy.Hub) {
 				one, err := hub.Subscribe("alice")
 				require.NoError(t, err)
 
@@ -293,10 +293,10 @@ func TestHubDelivery(t *testing.T) {
 				awaitSubscribed(t, broadcaster, one, "alice")
 				_, _ = two.Take()
 
-				signal := notify.Signal{Recipient: "alice", Change: notify.ChangeRead, At: serviceAt.Add(time.Minute)}
-				require.NoError(t, broadcaster.Broadcast(t.Context(), []notify.Signal{signal}))
+				signal := ntfy.Signal{Recipient: "alice", Change: ntfy.ChangeRead, At: serviceAt.Add(time.Minute)}
+				require.NoError(t, broadcaster.Broadcast(t.Context(), []ntfy.Signal{signal}))
 
-				for _, subscription := range []*notify.Subscription{one, two} {
+				for _, subscription := range []*ntfy.Subscription{one, two} {
 					select {
 					case <-subscription.Ready():
 						got, ok := subscription.Take()
@@ -312,13 +312,13 @@ func TestHubDelivery(t *testing.T) {
 		},
 		{
 			name: "a thousand signals to a subscription nobody reads never block and leave the latest pending",
-			assert: func(t *testing.T, broadcaster *notify.InProcessBroadcaster, hub *notify.Hub) {
+			assert: func(t *testing.T, broadcaster *ntfy.InProcessBroadcaster, hub *ntfy.Hub) {
 				subscription, err := hub.Subscribe("alice")
 				require.NoError(t, err)
 
 				awaitSubscribed(t, broadcaster, subscription, "alice")
 
-				var last notify.Signal
+				var last ntfy.Signal
 
 				published := make(chan struct{})
 
@@ -326,8 +326,8 @@ func TestHubDelivery(t *testing.T) {
 					defer close(published)
 
 					for i := range 1000 {
-						last = notify.Signal{Recipient: "alice", Change: notify.ChangeCreated, At: serviceAt.Add(time.Duration(i) * time.Millisecond)}
-						_ = broadcaster.Broadcast(context.Background(), []notify.Signal{last})
+						last = ntfy.Signal{Recipient: "alice", Change: ntfy.ChangeCreated, At: serviceAt.Add(time.Duration(i) * time.Millisecond)}
+						_ = broadcaster.Broadcast(context.Background(), []ntfy.Signal{last})
 					}
 				}()
 
@@ -350,7 +350,7 @@ func TestHubDelivery(t *testing.T) {
 		},
 		{
 			name: "taking with nothing pending reports false",
-			assert: func(t *testing.T, _ *notify.InProcessBroadcaster, hub *notify.Hub) {
+			assert: func(t *testing.T, _ *ntfy.InProcessBroadcaster, hub *ntfy.Hub) {
 				subscription, err := hub.Subscribe("alice")
 				require.NoError(t, err)
 
@@ -360,7 +360,7 @@ func TestHubDelivery(t *testing.T) {
 		},
 		{
 			name: "a closed subscription receives nothing more",
-			assert: func(t *testing.T, broadcaster *notify.InProcessBroadcaster, hub *notify.Hub) {
+			assert: func(t *testing.T, broadcaster *ntfy.InProcessBroadcaster, hub *ntfy.Hub) {
 				closed, err := hub.Subscribe("alice")
 				require.NoError(t, err)
 
@@ -383,9 +383,9 @@ func TestHubDelivery(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			broadcaster := notify.NewInProcessBroadcaster()
+			broadcaster := ntfy.NewInProcessBroadcaster()
 
-			hub, err := notify.NewHub(broadcaster)
+			hub, err := ntfy.NewHub(broadcaster)
 			require.NoError(t, err)
 
 			runHub(t, hub)
@@ -397,7 +397,7 @@ func TestHubDelivery(t *testing.T) {
 
 // startGated starts Run over a gated broadcaster, whose Listen hands the test
 // its ready function instead of calling it, and waits for that hand-over.
-func startGated(t *testing.T, hub *notify.Hub, readies <-chan func()) *startedRun {
+func startGated(t *testing.T, hub *ntfy.Hub, readies <-chan func()) *startedRun {
 	t.Helper()
 
 	run := startRun(t, hub)
@@ -442,25 +442,25 @@ func TestHubReadiness(t *testing.T) {
 		name string
 		// listenErr, when set, is what the first Listen returns at once.
 		listenErr error
-		assert    func(t *testing.T, hub *notify.Hub, readies <-chan func())
+		assert    func(t *testing.T, hub *ntfy.Hub, readies <-chan func())
 	}
 
 	cases := []testCase{
 		{
 			name: "before ready the hub is not running, refuses streams and is not ready",
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				readyCh := hub.Ready()
 				startGated(t, hub, readies)
 
 				assert.False(t, hub.Running())
 				_, err := hub.Subscribe("alice")
-				require.ErrorIs(t, err, notify.ErrUnavailable)
+				require.ErrorIs(t, err, ntfy.ErrUnavailable)
 				assert.False(t, closed(readyCh))
 			},
 		},
 		{
 			name: "after ready the hub is running, accepts streams and Ready taken before Run is closed",
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				readyCh := hub.Ready()
 				run := startGated(t, hub, readies)
 
@@ -475,7 +475,7 @@ func TestHubReadiness(t *testing.T) {
 		},
 		{
 			name: "after Listen returns the hub stops running and Ready waits for the next run",
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				first := startGated(t, hub, readies)
 				first.ready()
 				require.ErrorIs(t, first.stop(t), context.Canceled)
@@ -496,7 +496,7 @@ func TestHubReadiness(t *testing.T) {
 		{
 			name:      "a Listen that fails before ready returns its error and never closes Ready",
 			listenErr: errListen,
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				readyCh := hub.Ready()
 
 				require.ErrorIs(t, hub.Run(t.Context()), errListen)
@@ -507,7 +507,7 @@ func TestHubReadiness(t *testing.T) {
 		},
 		{
 			name: "ready called twice keeps one run receiving",
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				run := startGated(t, hub, readies)
 
 				run.ready()
@@ -518,7 +518,7 @@ func TestHubReadiness(t *testing.T) {
 		},
 		{
 			name: "a late ready after its run ended does not mark the hub running",
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				readyCh := hub.Ready()
 				first := startGated(t, hub, readies)
 				require.ErrorIs(t, first.stop(t), context.Canceled)
@@ -531,7 +531,7 @@ func TestHubReadiness(t *testing.T) {
 		},
 		{
 			name: "a late ready from an earlier run does not mark the next run ready",
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				first := startGated(t, hub, readies)
 				require.ErrorIs(t, first.stop(t), context.Canceled)
 
@@ -546,10 +546,10 @@ func TestHubReadiness(t *testing.T) {
 		},
 		{
 			name: "a second Run while the first is starting is refused",
-			assert: func(t *testing.T, hub *notify.Hub, readies <-chan func()) {
+			assert: func(t *testing.T, hub *ntfy.Hub, readies <-chan func()) {
 				startGated(t, hub, readies)
 
-				assert.ErrorIs(t, hub.Run(t.Context()), notify.ErrConfiguration)
+				assert.ErrorIs(t, hub.Run(t.Context()), ntfy.ErrConfiguration)
 				assert.False(t, hub.Running(), "the first Run is still starting")
 			},
 		},
@@ -560,14 +560,14 @@ func TestHubReadiness(t *testing.T) {
 			t.Parallel()
 
 			ctrl := gomock.NewController(t)
-			broadcaster := notify.NewMockBroadcaster(ctrl)
+			broadcaster := ntfy.NewMockBroadcaster(ctrl)
 			readies := make(chan func(), 1)
 
 			if tc.listenErr != nil {
 				broadcaster.EXPECT().Listen(gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.listenErr)
 			} else {
 				broadcaster.EXPECT().Listen(gomock.Any(), gomock.Any(), gomock.Any()).
-					DoAndReturn(func(ctx context.Context, _ func(notify.Signal), ready func()) error {
+					DoAndReturn(func(ctx context.Context, _ func(ntfy.Signal), ready func()) error {
 						readies <- ready
 						<-ctx.Done()
 
@@ -575,7 +575,7 @@ func TestHubReadiness(t *testing.T) {
 					}).AnyTimes()
 			}
 
-			hub, err := notify.NewHub(broadcaster)
+			hub, err := ntfy.NewHub(broadcaster)
 			require.NoError(t, err)
 
 			tc.assert(t, hub, readies)
@@ -588,13 +588,13 @@ func TestHubRun(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		assert func(t *testing.T, hub *notify.Hub)
+		assert func(t *testing.T, hub *ntfy.Hub)
 	}
 
 	cases := []testCase{
 		{
 			name: "Run returns the context's error when cancelled and the hub stops running",
-			assert: func(t *testing.T, hub *notify.Hub) {
+			assert: func(t *testing.T, hub *ntfy.Hub) {
 				stop := runHub(t, hub)
 				require.True(t, hub.Running())
 
@@ -604,10 +604,10 @@ func TestHubRun(t *testing.T) {
 		},
 		{
 			name: "a second Run while the first is running is refused",
-			assert: func(t *testing.T, hub *notify.Hub) {
+			assert: func(t *testing.T, hub *ntfy.Hub) {
 				runHub(t, hub)
 
-				assert.ErrorIs(t, hub.Run(t.Context()), notify.ErrConfiguration)
+				assert.ErrorIs(t, hub.Run(t.Context()), ntfy.ErrConfiguration)
 				assert.True(t, hub.Running(), "the first Run is unaffected")
 			},
 		},
@@ -617,7 +617,7 @@ func TestHubRun(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			hub, err := notify.NewHub(notify.NewInProcessBroadcaster())
+			hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster())
 			require.NoError(t, err)
 
 			tc.assert(t, hub)

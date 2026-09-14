@@ -12,7 +12,7 @@ import (
 )
 
 // TestTheOperationsGuideMatchesTheBroadcaster keeps
-// notify/docs/realtime-operations.md from drifting away from the NATS
+// docs/realtime-operations.md from drifting away from the NATS
 // broadcaster's defaults.
 func TestTheOperationsGuideMatchesTheBroadcaster(t *testing.T) {
 	t.Parallel()

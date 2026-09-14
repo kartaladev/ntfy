@@ -24,7 +24,7 @@ import (
 // instance is one application instance: its own connection, store, service and
 // hub, sharing a server with the others, serving WebSocket connections.
 type instance struct {
-	svc          *notify.Service
+	svc          *ntfy.Service
 	url          string
 	signalErrors chan error
 	published    atomic.Int64
@@ -39,13 +39,13 @@ func startInstance(t *testing.T, serverURL, subject string, connect ...natsgo.Op
 
 	var err error
 
-	in.svc, err = notify.New(notify.NewMemoryStore(),
-		notify.WithBroadcaster(broadcasterOn(t, serverURL, subject, connect...)),
-		notify.WithSignalErrorHandler(func(_ context.Context, err error) { in.signalErrors <- err }),
+	in.svc, err = ntfy.New(ntfy.NewMemoryStore(),
+		ntfy.WithBroadcaster(broadcasterOn(t, serverURL, subject, connect...)),
+		ntfy.WithSignalErrorHandler(func(_ context.Context, err error) { in.signalErrors <- err }),
 	)
 	require.NoError(t, err)
 
-	hub, err := notify.NewHub(in.svc.Broadcaster())
+	hub, err := ntfy.NewHub(in.svc.Broadcaster())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,7 +91,7 @@ func startInstance(t *testing.T, serverURL, subject string, connect ...natsgo.Op
 func (in *instance) publish(t *testing.T, recipient string) error {
 	t.Helper()
 
-	_, err := in.svc.Publish(t.Context(), notify.Draft{
+	_, err := in.svc.Publish(t.Context(), ntfy.Draft{
 		Recipient: recipient,
 		SourceID:  fmt.Sprintf("event-%d", in.published.Add(1)),
 		Subject:   "task-42",

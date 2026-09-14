@@ -15,7 +15,7 @@ var (
 	// before a single signal is published.
 	ErrConfiguration = errors.New("nats: invalid configuration")
 
-	// ErrPublish reports that the connection did not take a message. The notify
+	// ErrPublish reports that the connection did not take a message. The ntfy
 	// service hands it to its signal error handler; it never fails the
 	// notification write that produced the signal.
 	ErrPublish = errors.New("nats: publish failed")
@@ -33,10 +33,10 @@ func (e *ConfigurationError) Error() string {
 }
 
 // Unwrap makes the error match both [ErrConfiguration] and
-// [notify.ErrConfiguration]: the broadcaster is a [notify.Broadcaster], and a
-// mistake wiring it is a notify wiring mistake too.
+// [ntfy.ErrConfiguration]: the broadcaster is a [ntfy.Broadcaster], and a
+// mistake wiring it is a ntfy wiring mistake too.
 func (e *ConfigurationError) Unwrap() []error {
-	return []error{ErrConfiguration, notify.ErrConfiguration}
+	return []error{ErrConfiguration, ntfy.ErrConfiguration}
 }
 
 // PublishError reports a message the connection did not take: a closed

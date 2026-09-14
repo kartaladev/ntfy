@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"bufio"
@@ -30,20 +30,20 @@ func headerActor(r *http.Request) (string, error) { return r.Header.Get(actorHea
 // httpEnv is a service on the memory store, a running hub on its broadcaster,
 // and a handler over both.
 type httpEnv struct {
-	svc     *notify.Service
-	hub     *notify.Hub
-	handler *notify.Handler
+	svc     *ntfy.Service
+	hub     *ntfy.Hub
+	handler *ntfy.Handler
 }
 
 // newHTTPEnv builds an environment. hubOpts configure the hub; handlerOpts are
 // added after WithActor.
-func newHTTPEnv(t *testing.T, run bool, hubOpts []notify.HubOption, handlerOpts ...notify.HandlerOption) *httpEnv {
+func newHTTPEnv(t *testing.T, run bool, hubOpts []ntfy.HubOption, handlerOpts ...ntfy.HandlerOption) *httpEnv {
 	t.Helper()
 
-	svc, err := notify.New(notify.NewMemoryStore())
+	svc, err := ntfy.New(ntfy.NewMemoryStore())
 	require.NoError(t, err)
 
-	hub, err := notify.NewHub(svc.Broadcaster(), hubOpts...)
+	hub, err := ntfy.NewHub(svc.Broadcaster(), hubOpts...)
 	require.NoError(t, err)
 
 	if run {
@@ -56,14 +56,14 @@ func newHTTPEnv(t *testing.T, run bool, hubOpts []notify.HubOption, handlerOpts 
 		probe.Close()
 	}
 
-	handler, err := notify.NewHandler(svc, hub, append([]notify.HandlerOption{notify.WithActor(headerActor)}, handlerOpts...)...)
+	handler, err := ntfy.NewHandler(svc, hub, append([]ntfy.HandlerOption{ntfy.WithActor(headerActor)}, handlerOpts...)...)
 	require.NoError(t, err)
 
 	return &httpEnv{svc: svc, hub: hub, handler: handler}
 }
 
 // publish publishes drafts and fails the test on an error.
-func (e *httpEnv) publish(t *testing.T, drafts ...notify.Draft) []notify.Notification {
+func (e *httpEnv) publish(t *testing.T, drafts ...ntfy.Draft) []ntfy.Notification {
 	t.Helper()
 
 	result, err := e.svc.Publish(t.Context(), drafts...)
@@ -90,9 +90,9 @@ func (e *httpEnv) do(t *testing.T, method, target, actor string, body io.Reader)
 // errorBody is the error response shape.
 type errorBody struct {
 	Error struct {
-		Code    string                   `json:"code"`
-		Message string                   `json:"message"`
-		Issues  []notify.ValidationIssue `json:"issues"`
+		Code    string                 `json:"code"`
+		Message string                 `json:"message"`
+		Issues  []ntfy.ValidationIssue `json:"issues"`
 	} `json:"error"`
 }
 
@@ -107,35 +107,35 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
 }
 
 // offer is a draft for a recipient on its own subject.
-func offer(recipient, source string) notify.Draft {
-	return notify.Draft{Recipient: recipient, SourceID: source, Subject: "task-" + source, Kind: "offer", SubjectVersion: 1}
+func offer(recipient, source string) ntfy.Draft {
+	return ntfy.Draft{Recipient: recipient, SourceID: source, Subject: "task-" + source, Kind: "offer", SubjectVersion: 1}
 }
 
 func TestNewHandler(t *testing.T) {
 	t.Parallel()
 
-	svc, err := notify.New(notify.NewMemoryStore())
+	svc, err := ntfy.New(ntfy.NewMemoryStore())
 	require.NoError(t, err)
 
-	hub, err := notify.NewHub(svc.Broadcaster())
+	hub, err := ntfy.NewHub(svc.Broadcaster())
 	require.NoError(t, err)
 
 	type testCase struct {
 		name   string
-		svc    *notify.Service
-		hub    *notify.Hub
-		opts   []notify.HandlerOption
-		assert func(t *testing.T, handler *notify.Handler, err error)
+		svc    *ntfy.Service
+		hub    *ntfy.Hub
+		opts   []ntfy.HandlerOption
+		assert func(t *testing.T, handler *ntfy.Handler, err error)
 	}
 
-	refused := func(t *testing.T, handler *notify.Handler, err error) {
+	refused := func(t *testing.T, handler *ntfy.Handler, err error) {
 		t.Helper()
 
-		require.ErrorIs(t, err, notify.ErrConfiguration)
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
 		assert.Nil(t, handler)
 	}
 
-	patterns := func(handler *notify.Handler) []string {
+	patterns := func(handler *ntfy.Handler) []string {
 		var out []string
 		for _, route := range handler.Routes() {
 			out = append(out, route.Method+" "+route.Pattern)
@@ -148,17 +148,17 @@ func TestNewHandler(t *testing.T) {
 		{name: "a handler without a way to establish the acting user is refused", svc: svc, hub: hub, assert: refused},
 		{
 			name: "a nil subscription policy is refused", svc: svc, hub: hub,
-			opts:   []notify.HandlerOption{notify.WithActor(headerActor), notify.WithSubscriptionAuthorizer(nil)},
+			opts:   []ntfy.HandlerOption{ntfy.WithActor(headerActor), ntfy.WithSubscriptionAuthorizer(nil)},
 			assert: refused,
 		},
-		{name: "a nil service is refused", hub: hub, opts: []notify.HandlerOption{notify.WithActor(headerActor)}, assert: refused},
-		{name: "a nil hub is refused", svc: svc, opts: []notify.HandlerOption{notify.WithActor(headerActor)}, assert: refused},
+		{name: "a nil service is refused", hub: hub, opts: []ntfy.HandlerOption{ntfy.WithActor(headerActor)}, assert: refused},
+		{name: "a nil hub is refused", svc: svc, opts: []ntfy.HandlerOption{ntfy.WithActor(headerActor)}, assert: refused},
 		{
 			name: "by default the contract is served under /v1, in a stable order", svc: svc, hub: hub,
-			opts: []notify.HandlerOption{notify.WithActor(headerActor)},
-			assert: func(t *testing.T, handler *notify.Handler, err error) {
+			opts: []ntfy.HandlerOption{ntfy.WithActor(headerActor)},
+			assert: func(t *testing.T, handler *ntfy.Handler, err error) {
 				require.NoError(t, err)
-				assert.Equal(t, "/v1", notify.DefaultBasePath)
+				assert.Equal(t, "/v1", ntfy.DefaultBasePath)
 				assert.Equal(t, []string{
 					"GET /v1/notifications",
 					"GET /v1/notifications/count",
@@ -174,8 +174,8 @@ func TestNewHandler(t *testing.T) {
 		},
 		{
 			name: "a base path replaces the default, without a trailing slash", svc: svc, hub: hub,
-			opts: []notify.HandlerOption{notify.WithActor(headerActor), notify.WithBasePath("/api/")},
-			assert: func(t *testing.T, handler *notify.Handler, err error) {
+			opts: []ntfy.HandlerOption{ntfy.WithActor(headerActor), ntfy.WithBasePath("/api/")},
+			assert: func(t *testing.T, handler *ntfy.Handler, err error) {
 				require.NoError(t, err)
 				require.NotEmpty(t, handler.Routes())
 				assert.Equal(t, "GET /api/notifications", patterns(handler)[0])
@@ -187,7 +187,7 @@ func TestNewHandler(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler, err := notify.NewHandler(tc.svc, tc.hub, tc.opts...)
+			handler, err := ntfy.NewHandler(tc.svc, tc.hub, tc.opts...)
 			tc.assert(t, handler, err)
 		})
 	}
@@ -197,8 +197,8 @@ func TestHandlerListAndCount(t *testing.T) {
 	t.Parallel()
 
 	type listBody struct {
-		Notifications []notify.Notification `json:"notifications"`
-		NextCursor    string                `json:"nextCursor"`
+		Notifications []ntfy.Notification `json:"notifications"`
+		NextCursor    string              `json:"nextCursor"`
 	}
 
 	type testCase struct {
@@ -254,7 +254,7 @@ func TestHandlerListAndCount(t *testing.T) {
 		{
 			name: "filters by state, kind and subject apply",
 			assert: func(t *testing.T, env *httpEnv) {
-				created := env.publish(t, offer("alice", "a1"), notify.Draft{
+				created := env.publish(t, offer("alice", "a1"), ntfy.Draft{
 					Recipient: "alice", SourceID: "a2", Subject: "task-9", Kind: "taken",
 				})
 
@@ -368,10 +368,10 @@ func TestHandlerMarkRead(t *testing.T) {
 				rec := env.do(t, http.MethodPost, "/v1/notifications/"+created[0].ID+"/read", "alice", nil)
 				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
-				var body notify.Notification
+				var body ntfy.Notification
 				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 				assert.Equal(t, created[0].ID, body.ID)
-				assert.Equal(t, notify.StateRead, body.State)
+				assert.Equal(t, ntfy.StateRead, body.State)
 				assert.NotNil(t, body.ReadAt)
 			},
 		},
@@ -390,7 +390,7 @@ func TestHandlerMarkRead(t *testing.T) {
 
 				n, err := env.svc.Get(t.Context(), "alice", created[0].ID)
 				require.NoError(t, err)
-				assert.Equal(t, notify.StateActive, n.State, "alice's notification is unchanged")
+				assert.Equal(t, ntfy.StateActive, n.State, "alice's notification is unchanged")
 			},
 		},
 		{
@@ -410,7 +410,7 @@ func TestHandlerMarkRead(t *testing.T) {
 
 				n, err := env.svc.Get(t.Context(), "alice", later[0].ID)
 				require.NoError(t, err)
-				assert.Equal(t, notify.StateActive, n.State)
+				assert.Equal(t, ntfy.StateActive, n.State)
 			},
 		},
 		{
@@ -584,8 +584,8 @@ func TestHandlerStream(t *testing.T) {
 	type testCase struct {
 		name        string
 		run         bool
-		hubOpts     []notify.HubOption
-		handlerOpts []notify.HandlerOption
+		hubOpts     []ntfy.HubOption
+		handlerOpts []ntfy.HandlerOption
 		assert      func(t *testing.T, env *httpEnv, server *httptest.Server)
 	}
 
@@ -602,7 +602,7 @@ func TestHandlerStream(t *testing.T) {
 
 				s.expect(t, "the connected comment", equals(": connected"))
 
-				env.publish(t, notify.Draft{
+				env.publish(t, ntfy.Draft{
 					Recipient: "alice", SourceID: "a1", Subject: "task-1", Kind: "offer",
 					Title: "secret title", Data: json.RawMessage(`{"secret":true}`),
 				})
@@ -620,7 +620,7 @@ func TestHandlerStream(t *testing.T) {
 		{
 			name:    "an idle stream receives heartbeats",
 			run:     true,
-			hubOpts: []notify.HubOption{notify.WithHeartbeat(20 * time.Millisecond)},
+			hubOpts: []ntfy.HubOption{ntfy.WithHeartbeat(20 * time.Millisecond)},
 			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
 				s := openStream(t, server, "alice", "")
 				s.expect(t, "the connected comment", equals(": connected"))
@@ -639,7 +639,7 @@ func TestHandlerStream(t *testing.T) {
 		{
 			name:    "a stream over the recipient's cap is too many requests",
 			run:     true,
-			hubOpts: []notify.HubOption{notify.WithMaxStreamsPerRecipient(1)},
+			hubOpts: []ntfy.HubOption{ntfy.WithMaxStreamsPerRecipient(1)},
 			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
 				first := openStream(t, server, "alice", "")
 				first.expect(t, "the connected comment", equals(": connected"))
@@ -667,13 +667,13 @@ func TestHandlerStream(t *testing.T) {
 		{
 			name: "a host policy lets a supervisor follow a report",
 			run:  true,
-			handlerOpts: []notify.HandlerOption{notify.WithSubscriptionAuthorizer(notify.SubscriptionAuthorizerFunc(
+			handlerOpts: []ntfy.HandlerOption{ntfy.WithSubscriptionAuthorizer(ntfy.SubscriptionAuthorizerFunc(
 				func(ctx context.Context, actor, recipient string) error {
 					if actor == "alice" && recipient == "bob" {
 						return nil
 					}
 
-					return notify.SelfOnly.AuthorizeSubscription(ctx, actor, recipient)
+					return ntfy.SelfOnly.AuthorizeSubscription(ctx, actor, recipient)
 				}))},
 			assert: func(t *testing.T, env *httpEnv, server *httptest.Server) {
 				s := openStream(t, server, "alice", "?recipient=bob")
@@ -704,8 +704,8 @@ func TestHandlerStream(t *testing.T) {
 func TestHandlerStreamClosesAStalledClient(t *testing.T) {
 	t.Parallel()
 
-	env := newHTTPEnv(t, true, []notify.HubOption{
-		notify.WithHeartbeat(10 * time.Millisecond), notify.WithWriteTimeout(20 * time.Millisecond),
+	env := newHTTPEnv(t, true, []ntfy.HubOption{
+		ntfy.WithHeartbeat(10 * time.Millisecond), ntfy.WithWriteTimeout(20 * time.Millisecond),
 	})
 
 	writer := &stalledWriter{header: make(http.Header)}
@@ -753,16 +753,16 @@ func TestWriteError(t *testing.T) {
 	cases := []testCase{
 		{
 			name: "a validation error is a bad request carrying its issues",
-			err:  &notify.ValidationError{Subject: "request", Issues: []notify.ValidationIssue{{Pointer: "/limit", Detail: "too large"}}},
+			err:  &ntfy.ValidationError{Subject: "request", Issues: []ntfy.ValidationIssue{{Pointer: "/limit", Detail: "too large"}}},
 			assert: func(t *testing.T, rec *httptest.ResponseRecorder) {
 				status(http.StatusBadRequest, "validation_failed")(t, rec)
-				assert.Equal(t, []notify.ValidationIssue{{Pointer: "/limit", Detail: "too large"}}, decodeError(t, rec).Error.Issues)
+				assert.Equal(t, []ntfy.ValidationIssue{{Pointer: "/limit", Detail: "too large"}}, decodeError(t, rec).Error.Issues)
 			},
 		},
-		{name: "unauthorized is forbidden", err: fmt.Errorf("%w: no acting user", notify.ErrUnauthorized), assert: status(http.StatusForbidden, "forbidden")},
-		{name: "not found is not found", err: notify.ErrNotFound, assert: status(http.StatusNotFound, "not_found")},
-		{name: "too many streams is too many requests", err: fmt.Errorf("%w: cap", notify.ErrTooManyStreams), assert: status(http.StatusTooManyRequests, "too_many_streams")},
-		{name: "unavailable is service unavailable", err: fmt.Errorf("%w: hub stopped", notify.ErrUnavailable), assert: status(http.StatusServiceUnavailable, "unavailable")},
+		{name: "unauthorized is forbidden", err: fmt.Errorf("%w: no acting user", ntfy.ErrUnauthorized), assert: status(http.StatusForbidden, "forbidden")},
+		{name: "not found is not found", err: ntfy.ErrNotFound, assert: status(http.StatusNotFound, "not_found")},
+		{name: "too many streams is too many requests", err: fmt.Errorf("%w: cap", ntfy.ErrTooManyStreams), assert: status(http.StatusTooManyRequests, "too_many_streams")},
+		{name: "unavailable is service unavailable", err: fmt.Errorf("%w: hub stopped", ntfy.ErrUnavailable), assert: status(http.StatusServiceUnavailable, "unavailable")},
 		{
 			name: "anything unanticipated is an internal error without its detail",
 			err:  errors.New("pq: connection refused to 10.0.0.5:5432"),
@@ -779,7 +779,7 @@ func TestWriteError(t *testing.T) {
 			t.Parallel()
 
 			rec := httptest.NewRecorder()
-			notify.WriteError(rec, tc.err)
+			ntfy.WriteError(rec, tc.err)
 			tc.assert(t, rec)
 		})
 	}

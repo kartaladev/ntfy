@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"testing"
@@ -10,5 +10,5 @@ import (
 func TestMemoryStoreConformance(t *testing.T) {
 	t.Parallel()
 
-	notifytest.Run(t, func(*testing.T) notify.Store { return notify.NewMemoryStore() })
+	ntfytest.Run(t, func(*testing.T) ntfy.Store { return ntfy.NewMemoryStore() })
 }

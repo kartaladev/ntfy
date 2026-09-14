@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"context"
@@ -18,60 +18,60 @@ func TestServiceClose(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		req    notify.CloseRequest
-		expect func(t *testing.T, store *notify.MockStore, broadcaster *notify.MockBroadcaster)
-		assert func(t *testing.T, result notify.CloseResult, err error)
+		req    ntfy.CloseRequest
+		expect func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster)
+		assert func(t *testing.T, result ntfy.CloseResult, err error)
 	}
 
 	cases := []testCase{
 		{
 			name:   "an invalid request closes nothing",
-			req:    notify.CloseRequest{Version: -1},
-			expect: func(*testing.T, *notify.MockStore, *notify.MockBroadcaster) {},
-			assert: func(t *testing.T, _ notify.CloseResult, err error) {
-				assert.ErrorIs(t, err, notify.ErrValidation)
+			req:    ntfy.CloseRequest{Version: -1},
+			expect: func(*testing.T, *ntfy.MockStore, *ntfy.MockBroadcaster) {},
+			assert: func(t *testing.T, _ ntfy.CloseResult, err error) {
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 			},
 		},
 		{
 			name:   "an invalid successor closes nothing",
-			req:    notify.CloseRequest{Subject: "task-1", Version: 1, Successor: &notify.Successor{Kind: "taken"}},
-			expect: func(*testing.T, *notify.MockStore, *notify.MockBroadcaster) {},
-			assert: func(t *testing.T, _ notify.CloseResult, err error) {
-				assert.ErrorIs(t, err, notify.ErrValidation)
+			req:    ntfy.CloseRequest{Subject: "task-1", Version: 1, Successor: &ntfy.Successor{Kind: "taken"}},
+			expect: func(*testing.T, *ntfy.MockStore, *ntfy.MockBroadcaster) {},
+			assert: func(t *testing.T, _ ntfy.CloseResult, err error) {
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 			},
 		},
 		{
 			name: "a close runs at the clock's instant with the service's identifiers, and signals closes and successors",
-			req: notify.CloseRequest{
+			req: ntfy.CloseRequest{
 				Subject: "task-1", Kinds: []string{"offer"}, Version: 5, Reason: "taken",
-				Successor: &notify.Successor{SourceID: "event-5", Kind: "taken", SubjectVersion: 5},
+				Successor: &ntfy.Successor{SourceID: "event-5", Kind: "taken", SubjectVersion: 5},
 			},
-			expect: func(t *testing.T, store *notify.MockStore, broadcaster *notify.MockBroadcaster) {
+			expect: func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster) {
 				gomock.InOrder(
 					store.EXPECT().Close(gomock.Any(), gomock.Any(), serviceAt, gomock.Any()).DoAndReturn(
-						func(_ context.Context, req notify.CloseRequest, _ time.Time, ids notify.IDGenerator) (notify.CloseResult, error) {
+						func(_ context.Context, req ntfy.CloseRequest, _ time.Time, ids ntfy.IDGenerator) (ntfy.CloseResult, error) {
 							assert.Equal(t, "task-1", req.Subject)
 
 							id, err := ids.NewID()
 							require.NoError(t, err)
 							assert.Equal(t, "id-1", id, "the store stamps successors with the service's generator")
 
-							return notify.CloseResult{
+							return ntfy.CloseResult{
 								Closed: 3, Recipients: []string{"alice", "bob", "carol"},
-								Successors: []notify.Notification{{Recipient: "alice"}, {Recipient: "bob"}},
+								Successors: []ntfy.Notification{{Recipient: "alice"}, {Recipient: "bob"}},
 							}, nil
 						},
 					),
-					broadcaster.EXPECT().Broadcast(gomock.Any(), []notify.Signal{
-						{Recipient: "alice", Change: notify.ChangeClosed, At: serviceAt},
-						{Recipient: "bob", Change: notify.ChangeClosed, At: serviceAt},
-						{Recipient: "carol", Change: notify.ChangeClosed, At: serviceAt},
-						{Recipient: "alice", Change: notify.ChangeCreated, At: serviceAt},
-						{Recipient: "bob", Change: notify.ChangeCreated, At: serviceAt},
+					broadcaster.EXPECT().Broadcast(gomock.Any(), []ntfy.Signal{
+						{Recipient: "alice", Change: ntfy.ChangeClosed, At: serviceAt},
+						{Recipient: "bob", Change: ntfy.ChangeClosed, At: serviceAt},
+						{Recipient: "carol", Change: ntfy.ChangeClosed, At: serviceAt},
+						{Recipient: "alice", Change: ntfy.ChangeCreated, At: serviceAt},
+						{Recipient: "bob", Change: ntfy.ChangeCreated, At: serviceAt},
 					}).Return(nil),
 				)
 			},
-			assert: func(t *testing.T, result notify.CloseResult, err error) {
+			assert: func(t *testing.T, result ntfy.CloseResult, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, int64(3), result.Closed)
 				assert.Len(t, result.Successors, 2)
@@ -79,11 +79,11 @@ func TestServiceClose(t *testing.T) {
 		},
 		{
 			name: "a close that closed nothing signals nobody",
-			req:  notify.CloseRequest{Subject: "task-1", Version: 5},
-			expect: func(t *testing.T, store *notify.MockStore, _ *notify.MockBroadcaster) {
-				store.EXPECT().Close(gomock.Any(), gomock.Any(), serviceAt, gomock.Any()).Return(notify.CloseResult{}, nil)
+			req:  ntfy.CloseRequest{Subject: "task-1", Version: 5},
+			expect: func(t *testing.T, store *ntfy.MockStore, _ *ntfy.MockBroadcaster) {
+				store.EXPECT().Close(gomock.Any(), gomock.Any(), serviceAt, gomock.Any()).Return(ntfy.CloseResult{}, nil)
 			},
-			assert: func(t *testing.T, _ notify.CloseResult, err error) {
+			assert: func(t *testing.T, _ ntfy.CloseResult, err error) {
 				assert.NoError(t, err)
 			},
 		},
@@ -109,41 +109,41 @@ func TestServiceMarkRead(t *testing.T) {
 		name      string
 		recipient string
 		ids       []string
-		expect    func(t *testing.T, store *notify.MockStore, broadcaster *notify.MockBroadcaster)
-		assert    func(t *testing.T, result notify.MarkResult, err error)
+		expect    func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster)
+		assert    func(t *testing.T, result ntfy.MarkResult, err error)
 	}
 
 	cases := []testCase{
 		{
 			name:   "a recipient is required",
 			ids:    []string{"n-1"},
-			expect: func(*testing.T, *notify.MockStore, *notify.MockBroadcaster) {},
-			assert: func(t *testing.T, _ notify.MarkResult, err error) {
-				assert.ErrorIs(t, err, notify.ErrValidation)
+			expect: func(*testing.T, *ntfy.MockStore, *ntfy.MockBroadcaster) {},
+			assert: func(t *testing.T, _ ntfy.MarkResult, err error) {
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 			},
 		},
 		{
 			name:      "at least one identifier is required",
 			recipient: "alice",
-			expect:    func(*testing.T, *notify.MockStore, *notify.MockBroadcaster) {},
-			assert: func(t *testing.T, _ notify.MarkResult, err error) {
-				assert.ErrorIs(t, err, notify.ErrValidation)
+			expect:    func(*testing.T, *ntfy.MockStore, *ntfy.MockBroadcaster) {},
+			assert: func(t *testing.T, _ ntfy.MarkResult, err error) {
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 			},
 		},
 		{
 			name:      "marking read signals the recipient",
 			recipient: "alice",
 			ids:       []string{"n-1", "n-2"},
-			expect: func(t *testing.T, store *notify.MockStore, broadcaster *notify.MockBroadcaster) {
+			expect: func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster) {
 				gomock.InOrder(
 					store.EXPECT().MarkRead(gomock.Any(), "alice", []string{"n-1", "n-2"}, serviceAt).
-						Return(notify.MarkResult{Marked: 2}, nil),
-					broadcaster.EXPECT().Broadcast(gomock.Any(), []notify.Signal{
-						{Recipient: "alice", Change: notify.ChangeRead, At: serviceAt},
+						Return(ntfy.MarkResult{Marked: 2}, nil),
+					broadcaster.EXPECT().Broadcast(gomock.Any(), []ntfy.Signal{
+						{Recipient: "alice", Change: ntfy.ChangeRead, At: serviceAt},
 					}).Return(nil),
 				)
 			},
-			assert: func(t *testing.T, result notify.MarkResult, err error) {
+			assert: func(t *testing.T, result ntfy.MarkResult, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, int64(2), result.Marked)
 			},
@@ -152,10 +152,10 @@ func TestServiceMarkRead(t *testing.T) {
 			name:      "marking what was already read signals nobody",
 			recipient: "alice",
 			ids:       []string{"n-1"},
-			expect: func(t *testing.T, store *notify.MockStore, _ *notify.MockBroadcaster) {
-				store.EXPECT().MarkRead(gomock.Any(), "alice", []string{"n-1"}, serviceAt).Return(notify.MarkResult{}, nil)
+			expect: func(t *testing.T, store *ntfy.MockStore, _ *ntfy.MockBroadcaster) {
+				store.EXPECT().MarkRead(gomock.Any(), "alice", []string{"n-1"}, serviceAt).Return(ntfy.MarkResult{}, nil)
 			},
-			assert: func(t *testing.T, _ notify.MarkResult, err error) {
+			assert: func(t *testing.T, _ ntfy.MarkResult, err error) {
 				assert.NoError(t, err)
 			},
 		},
@@ -163,12 +163,12 @@ func TestServiceMarkRead(t *testing.T) {
 			name:      "not found is returned as it is",
 			recipient: "bob",
 			ids:       []string{"n-1"},
-			expect: func(t *testing.T, store *notify.MockStore, _ *notify.MockBroadcaster) {
+			expect: func(t *testing.T, store *ntfy.MockStore, _ *ntfy.MockBroadcaster) {
 				store.EXPECT().MarkRead(gomock.Any(), "bob", []string{"n-1"}, serviceAt).
-					Return(notify.MarkResult{}, notify.ErrNotFound)
+					Return(ntfy.MarkResult{}, ntfy.ErrNotFound)
 			},
-			assert: func(t *testing.T, _ notify.MarkResult, err error) {
-				assert.ErrorIs(t, err, notify.ErrNotFound)
+			assert: func(t *testing.T, _ ntfy.MarkResult, err error) {
+				assert.ErrorIs(t, err, ntfy.ErrNotFound)
 			},
 		},
 	}
@@ -194,33 +194,33 @@ func TestServiceMarkAllRead(t *testing.T) {
 	type testCase struct {
 		name    string
 		through time.Time
-		expect  func(t *testing.T, store *notify.MockStore, broadcaster *notify.MockBroadcaster)
-		assert  func(t *testing.T, result notify.MarkResult, err error)
+		expect  func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster)
+		assert  func(t *testing.T, result ntfy.MarkResult, err error)
 	}
 
 	cases := []testCase{
 		{
 			name:    "marking all read up to an instant signals the recipient",
 			through: through,
-			expect: func(t *testing.T, store *notify.MockStore, broadcaster *notify.MockBroadcaster) {
+			expect: func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster) {
 				gomock.InOrder(
-					store.EXPECT().MarkAllRead(gomock.Any(), "alice", through, serviceAt).Return(notify.MarkResult{Marked: 4}, nil),
-					broadcaster.EXPECT().Broadcast(gomock.Any(), []notify.Signal{
-						{Recipient: "alice", Change: notify.ChangeRead, At: serviceAt},
+					store.EXPECT().MarkAllRead(gomock.Any(), "alice", through, serviceAt).Return(ntfy.MarkResult{Marked: 4}, nil),
+					broadcaster.EXPECT().Broadcast(gomock.Any(), []ntfy.Signal{
+						{Recipient: "alice", Change: ntfy.ChangeRead, At: serviceAt},
 					}).Return(nil),
 				)
 			},
-			assert: func(t *testing.T, result notify.MarkResult, err error) {
+			assert: func(t *testing.T, result ntfy.MarkResult, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, int64(4), result.Marked)
 			},
 		},
 		{
 			name: "no instant means now",
-			expect: func(t *testing.T, store *notify.MockStore, _ *notify.MockBroadcaster) {
-				store.EXPECT().MarkAllRead(gomock.Any(), "alice", serviceAt, serviceAt).Return(notify.MarkResult{}, nil)
+			expect: func(t *testing.T, store *ntfy.MockStore, _ *ntfy.MockBroadcaster) {
+				store.EXPECT().MarkAllRead(gomock.Any(), "alice", serviceAt, serviceAt).Return(ntfy.MarkResult{}, nil)
 			},
-			assert: func(t *testing.T, _ notify.MarkResult, err error) {
+			assert: func(t *testing.T, _ ntfy.MarkResult, err error) {
 				assert.NoError(t, err)
 			},
 		},
@@ -244,17 +244,17 @@ func TestServiceReads(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		call   func(t *testing.T, svc *notify.Service) error
-		expect func(t *testing.T, store *notify.MockStore)
+		call   func(t *testing.T, svc *ntfy.Service) error
+		expect func(t *testing.T, store *ntfy.MockStore)
 	}
 
 	cases := []testCase{
 		{
 			name: "get passes through",
-			expect: func(t *testing.T, store *notify.MockStore) {
-				store.EXPECT().Get(gomock.Any(), "alice", "n-1").Return(notify.Notification{ID: "n-1"}, nil)
+			expect: func(t *testing.T, store *ntfy.MockStore) {
+				store.EXPECT().Get(gomock.Any(), "alice", "n-1").Return(ntfy.Notification{ID: "n-1"}, nil)
 			},
-			call: func(t *testing.T, svc *notify.Service) error {
+			call: func(t *testing.T, svc *ntfy.Service) error {
 				n, err := svc.Get(t.Context(), "alice", "n-1")
 				assert.Equal(t, "n-1", n.ID)
 
@@ -263,25 +263,25 @@ func TestServiceReads(t *testing.T) {
 		},
 		{
 			name:   "get needs a recipient and an identifier",
-			expect: func(*testing.T, *notify.MockStore) {},
-			call: func(t *testing.T, svc *notify.Service) error {
+			expect: func(*testing.T, *ntfy.MockStore) {},
+			call: func(t *testing.T, svc *ntfy.Service) error {
 				_, err := svc.Get(t.Context(), "", "n-1")
-				assert.ErrorIs(t, err, notify.ErrValidation)
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 
 				_, err = svc.Get(t.Context(), "alice", "")
-				assert.ErrorIs(t, err, notify.ErrValidation)
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 
 				return nil
 			},
 		},
 		{
 			name: "list passes a valid query through",
-			expect: func(t *testing.T, store *notify.MockStore) {
-				store.EXPECT().List(gomock.Any(), notify.ListQuery{Recipient: "alice", Limit: 10}).
-					Return(notify.Page{NextCursor: "next"}, nil)
+			expect: func(t *testing.T, store *ntfy.MockStore) {
+				store.EXPECT().List(gomock.Any(), ntfy.ListQuery{Recipient: "alice", Limit: 10}).
+					Return(ntfy.Page{NextCursor: "next"}, nil)
 			},
-			call: func(t *testing.T, svc *notify.Service) error {
-				page, err := svc.List(t.Context(), notify.ListQuery{Recipient: "alice", Limit: 10})
+			call: func(t *testing.T, svc *ntfy.Service) error {
+				page, err := svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice", Limit: 10})
 				assert.Equal(t, "next", page.NextCursor)
 
 				return err
@@ -289,20 +289,20 @@ func TestServiceReads(t *testing.T) {
 		},
 		{
 			name:   "list refuses an invalid query without asking the store",
-			expect: func(*testing.T, *notify.MockStore) {},
-			call: func(t *testing.T, svc *notify.Service) error {
-				_, err := svc.List(t.Context(), notify.ListQuery{Recipient: "alice", Limit: notify.MaxListLimit + 1})
-				assert.ErrorIs(t, err, notify.ErrValidation)
+			expect: func(*testing.T, *ntfy.MockStore) {},
+			call: func(t *testing.T, svc *ntfy.Service) error {
+				_, err := svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice", Limit: ntfy.MaxListLimit + 1})
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 
 				return nil
 			},
 		},
 		{
 			name: "count passes through",
-			expect: func(t *testing.T, store *notify.MockStore) {
+			expect: func(t *testing.T, store *ntfy.MockStore) {
 				store.EXPECT().CountActive(gomock.Any(), "alice").Return(int64(7), nil)
 			},
-			call: func(t *testing.T, svc *notify.Service) error {
+			call: func(t *testing.T, svc *ntfy.Service) error {
 				count, err := svc.CountActive(t.Context(), "alice")
 				assert.Equal(t, int64(7), count)
 
@@ -311,10 +311,10 @@ func TestServiceReads(t *testing.T) {
 		},
 		{
 			name:   "count needs a recipient",
-			expect: func(*testing.T, *notify.MockStore) {},
-			call: func(t *testing.T, svc *notify.Service) error {
+			expect: func(*testing.T, *ntfy.MockStore) {},
+			call: func(t *testing.T, svc *ntfy.Service) error {
 				_, err := svc.CountActive(t.Context(), "")
-				assert.ErrorIs(t, err, notify.ErrValidation)
+				assert.ErrorIs(t, err, ntfy.ErrValidation)
 
 				return nil
 			},
@@ -336,11 +336,11 @@ func TestServiceReads(t *testing.T) {
 // recording is a broadcaster that remembers every signal it is given.
 type recording struct {
 	mu      sync.Mutex
-	signals []notify.Signal
+	signals []ntfy.Signal
 }
 
-// Broadcast implements notify.Broadcaster.
-func (r *recording) Broadcast(_ context.Context, signals []notify.Signal) error {
+// Broadcast implements ntfy.Broadcaster.
+func (r *recording) Broadcast(_ context.Context, signals []ntfy.Signal) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -349,8 +349,8 @@ func (r *recording) Broadcast(_ context.Context, signals []notify.Signal) error 
 	return nil
 }
 
-// Listen implements notify.Broadcaster.
-func (r *recording) Listen(ctx context.Context, _ func(notify.Signal), ready func()) error {
+// Listen implements ntfy.Broadcaster.
+func (r *recording) Listen(ctx context.Context, _ func(ntfy.Signal), ready func()) error {
 	ready()
 
 	<-ctx.Done()
@@ -359,11 +359,11 @@ func (r *recording) Listen(ctx context.Context, _ func(notify.Signal), ready fun
 }
 
 // changes returns the recorded changes for a recipient, in order.
-func (r *recording) changes(recipient string) []notify.Change {
+func (r *recording) changes(recipient string) []ntfy.Change {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	var out []notify.Change
+	var out []ntfy.Change
 
 	for _, signal := range r.signals {
 		if signal.Recipient == recipient {
@@ -379,15 +379,15 @@ func TestServiceOnTheMemoryStore(t *testing.T) {
 
 	broadcaster := &recording{}
 
-	svc, err := notify.New(notify.NewMemoryStore(), notify.WithBroadcaster(broadcaster))
+	svc, err := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithBroadcaster(broadcaster))
 	require.NoError(t, err)
 
 	ctx := t.Context()
 
 	published, err := svc.Publish(
 		ctx,
-		notify.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer", SubjectVersion: 1},
-		notify.Draft{Recipient: "bob", SourceID: "event-1", Subject: "task-1", Kind: "offer", SubjectVersion: 1},
+		ntfy.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer", SubjectVersion: 1},
+		ntfy.Draft{Recipient: "bob", SourceID: "event-1", Subject: "task-1", Kind: "offer", SubjectVersion: 1},
 	)
 	require.NoError(t, err)
 	require.Len(t, published.Created, 2)
@@ -399,20 +399,20 @@ func TestServiceOnTheMemoryStore(t *testing.T) {
 	_, err = svc.MarkRead(ctx, "alice", published.Created[0].ID)
 	require.NoError(t, err)
 
-	closed, err := svc.Close(ctx, notify.CloseRequest{
+	closed, err := svc.Close(ctx, ntfy.CloseRequest{
 		Subject: "task-1", Kinds: []string{"offer"}, Version: 2, Reason: "taken", SuccessorSkip: []string{"bob"},
-		Successor: &notify.Successor{SourceID: "event-2", Kind: "taken", SubjectVersion: 2},
+		Successor: &ntfy.Successor{SourceID: "event-2", Kind: "taken", SubjectVersion: 2},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"alice", "bob"}, closed.Recipients)
 	require.Len(t, closed.Successors, 1)
 
-	page, err := svc.List(ctx, notify.ListQuery{Recipient: "alice", States: []notify.State{notify.StateActive}})
+	page, err := svc.List(ctx, ntfy.ListQuery{Recipient: "alice", States: []ntfy.State{ntfy.StateActive}})
 	require.NoError(t, err)
 	require.Len(t, page.Notifications, 1)
 	assert.Equal(t, "taken", page.Notifications[0].Kind)
 
-	assert.Equal(t, []notify.Change{notify.ChangeCreated, notify.ChangeRead, notify.ChangeClosed, notify.ChangeCreated},
+	assert.Equal(t, []ntfy.Change{ntfy.ChangeCreated, ntfy.ChangeRead, ntfy.ChangeClosed, ntfy.ChangeCreated},
 		broadcaster.changes("alice"))
-	assert.Equal(t, []notify.Change{notify.ChangeCreated, notify.ChangeClosed}, broadcaster.changes("bob"))
+	assert.Equal(t, []ntfy.Change{ntfy.ChangeCreated, ntfy.ChangeClosed}, broadcaster.changes("bob"))
 }

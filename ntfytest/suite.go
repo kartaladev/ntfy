@@ -1,4 +1,4 @@
-package notifytest
+package ntfytest
 
 import (
 	"encoding/json"
@@ -17,7 +17,7 @@ import (
 // Factory returns a fresh, empty store. It is called once per case, so that
 // cases run in parallel without seeing one another's notifications, and it
 // registers any cleanup the store needs on t.
-type Factory func(t *testing.T) notify.Store
+type Factory func(t *testing.T) ntfy.Store
 
 // Iterations is how many times each concurrency case repeats. A race that
 // loses one time in fifty is found in almost every run.
@@ -48,33 +48,33 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 // env is one case's store and the helpers that drive it.
 type env struct {
 	t     *testing.T
-	store notify.Store
-	ids   *notify.UUIDv7Generator
+	store ntfy.Store
+	ids   *ntfy.UUIDv7Generator
 }
 
 // newEnv builds a case's store.
 func newEnv(t *testing.T, factory Factory) *env {
 	t.Helper()
 
-	return &env{t: t, store: factory(t), ids: notify.NewUUIDv7Generator()}
+	return &env{t: t, store: factory(t), ids: ntfy.NewUUIDv7Generator()}
 }
 
 // note builds a stamped ACTIVE notification.
-func (e *env) note(recipient, source, subject, kind string, version int64, created time.Time) notify.Notification {
+func (e *env) note(recipient, source, subject, kind string, version int64, created time.Time) ntfy.Notification {
 	e.t.Helper()
 
 	id, err := e.ids.NewID()
 	require.NoError(e.t, err)
 
-	return notify.Notification{
+	return ntfy.Notification{
 		ID: id, Recipient: recipient, SourceID: source, Subject: subject, SubjectVersion: version,
-		Kind: kind, State: notify.StateActive, CreatedAt: created,
+		Kind: kind, State: ntfy.StateActive, CreatedAt: created,
 	}
 }
 
 // insert inserts notifications for their shared subject and fails the case on
 // an error.
-func (e *env) insert(coalesce bool, notifications ...notify.Notification) notify.InsertResult {
+func (e *env) insert(coalesce bool, notifications ...ntfy.Notification) ntfy.InsertResult {
 	e.t.Helper()
 
 	result, err := e.tryInsert(coalesce, notifications...)
@@ -84,17 +84,17 @@ func (e *env) insert(coalesce bool, notifications ...notify.Notification) notify
 }
 
 // tryInsert inserts notifications for their shared subject.
-func (e *env) tryInsert(coalesce bool, notifications ...notify.Notification) (notify.InsertResult, error) {
-	insertions := make([]notify.Insertion, 0, len(notifications))
+func (e *env) tryInsert(coalesce bool, notifications ...ntfy.Notification) (ntfy.InsertResult, error) {
+	insertions := make([]ntfy.Insertion, 0, len(notifications))
 	for _, n := range notifications {
-		insertions = append(insertions, notify.Insertion{Notification: n, Coalesce: coalesce})
+		insertions = append(insertions, ntfy.Insertion{Notification: n, Coalesce: coalesce})
 	}
 
 	return e.store.Insert(e.t.Context(), notifications[0].Subject, insertions)
 }
 
 // close closes and fails the case on an error.
-func (e *env) close(req notify.CloseRequest, when time.Time) notify.CloseResult {
+func (e *env) close(req ntfy.CloseRequest, when time.Time) ntfy.CloseResult {
 	e.t.Helper()
 
 	result, err := e.store.Close(e.t.Context(), req, when, e.ids)
@@ -104,7 +104,7 @@ func (e *env) close(req notify.CloseRequest, when time.Time) notify.CloseResult 
 }
 
 // get reads a notification and fails the case on an error.
-func (e *env) get(recipient, id string) notify.Notification {
+func (e *env) get(recipient, id string) ntfy.Notification {
 	e.t.Helper()
 
 	n, err := e.store.Get(e.t.Context(), recipient, id)
@@ -114,7 +114,7 @@ func (e *env) get(recipient, id string) notify.Notification {
 }
 
 // markRead marks notifications read and fails the case on an error.
-func (e *env) markRead(recipient string, when time.Time, ids ...string) notify.MarkResult {
+func (e *env) markRead(recipient string, when time.Time, ids ...string) ntfy.MarkResult {
 	e.t.Helper()
 
 	result, err := e.store.MarkRead(e.t.Context(), recipient, ids, when)
@@ -124,7 +124,7 @@ func (e *env) markRead(recipient string, when time.Time, ids ...string) notify.M
 }
 
 // list lists and fails the case on an error.
-func (e *env) list(q notify.ListQuery) notify.Page {
+func (e *env) list(q ntfy.ListQuery) ntfy.Page {
 	e.t.Helper()
 
 	page, err := e.store.List(e.t.Context(), q)
@@ -134,12 +134,12 @@ func (e *env) list(q notify.ListQuery) notify.Page {
 }
 
 // all lists every notification of a recipient, across pages.
-func (e *env) all(recipient string) []notify.Notification {
+func (e *env) all(recipient string) []ntfy.Notification {
 	e.t.Helper()
 
 	var (
-		out []notify.Notification
-		q   = notify.ListQuery{Recipient: recipient, Limit: notify.MaxListLimit}
+		out []ntfy.Notification
+		q   = ntfy.ListQuery{Recipient: recipient, Limit: ntfy.MaxListLimit}
 	)
 
 	for {
@@ -166,7 +166,7 @@ func (e *env) count(recipient string) int64 {
 }
 
 // prune prunes and fails the case on an error.
-func (e *env) prune(req notify.PruneRequest) notify.PruneResult {
+func (e *env) prune(req ntfy.PruneRequest) ntfy.PruneResult {
 	e.t.Helper()
 
 	if req.Batch == 0 {
@@ -174,7 +174,7 @@ func (e *env) prune(req notify.PruneRequest) notify.PruneResult {
 	}
 
 	if req.Strategy == "" {
-		req.Strategy = notify.EvictOldestActive
+		req.Strategy = ntfy.EvictOldestActive
 	}
 
 	result, err := e.store.Prune(e.t.Context(), req)
@@ -184,7 +184,7 @@ func (e *env) prune(req notify.PruneRequest) notify.PruneResult {
 }
 
 // ids returns the identifiers of notifications, in order.
-func idsOf(notifications []notify.Notification) []string {
+func idsOf(notifications []ntfy.Notification) []string {
 	out := make([]string, 0, len(notifications))
 	for _, n := range notifications {
 		out = append(out, n.ID)
@@ -222,7 +222,7 @@ func runInbox(t *testing.T, factory Factory) {
 		assert.Equal(t, n.ID, result.Created[0].ID)
 
 		got := e.get("alice", n.ID)
-		assert.Equal(t, notify.StateActive, got.State)
+		assert.Equal(t, ntfy.StateActive, got.State)
 		assert.Nil(t, got.ReadAt)
 		assert.Nil(t, got.ClosedAt)
 		assert.Nil(t, got.InactiveAt)
@@ -287,7 +287,7 @@ func runInbox(t *testing.T, factory Factory) {
 		e.insert(false, e.note("alice", "event-1", "task-1", "offer", 1, at(9)))
 
 		got := e.get("alice", n.ID)
-		assert.Equal(t, notify.StateRead, got.State)
+		assert.Equal(t, ntfy.StateRead, got.State)
 		sameInstant(t, at(5), got.ReadAt, "read at")
 	})
 
@@ -300,9 +300,9 @@ func runInbox(t *testing.T, factory Factory) {
 
 		e.markRead("alice", at(1), alice.ID)
 
-		assert.Equal(t, notify.StateRead, e.get("alice", alice.ID).State)
-		assert.Equal(t, notify.StateActive, e.get("bob", bob.ID).State)
-		assert.Equal(t, notify.StateActive, e.get("carol", carol.ID).State)
+		assert.Equal(t, ntfy.StateRead, e.get("alice", alice.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("bob", bob.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("carol", carol.ID).State)
 	})
 
 	parallel(t, "closing one kind leaves the others", func(t *testing.T) {
@@ -311,17 +311,17 @@ func runInbox(t *testing.T, factory Factory) {
 		assigned := e.note("bob", "event-2", "task-1", "assigned", 1, at(0))
 		e.insert(false, offer, assigned)
 
-		result := e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 1, Reason: "taken"}, at(3))
+		result := e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 1, Reason: "taken"}, at(3))
 		assert.Equal(t, int64(1), result.Closed)
 		assert.Equal(t, []string{"alice"}, result.Recipients)
 
 		closed := e.get("alice", offer.ID)
-		assert.Equal(t, notify.StateClosed, closed.State)
+		assert.Equal(t, ntfy.StateClosed, closed.State)
 		assert.Equal(t, "taken", closed.ClosedReason)
 		sameInstant(t, at(3), closed.ClosedAt, "closed at")
 		sameInstant(t, at(3), closed.InactiveAt, "inactive at")
 
-		assert.Equal(t, notify.StateActive, e.get("bob", assigned.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("bob", assigned.ID).State)
 	})
 
 	parallel(t, "closing every kind closes them all", func(t *testing.T) {
@@ -332,12 +332,12 @@ func runInbox(t *testing.T, factory Factory) {
 		e.insert(false, offer, assigned)
 		e.insert(false, other)
 
-		result := e.close(notify.CloseRequest{Subject: "task-1", Version: 2, Reason: "completed"}, at(3))
+		result := e.close(ntfy.CloseRequest{Subject: "task-1", Version: 2, Reason: "completed"}, at(3))
 		assert.Equal(t, int64(2), result.Closed)
 		assert.Equal(t, []string{"alice", "bob"}, result.Recipients)
-		assert.Equal(t, notify.StateClosed, e.get("alice", offer.ID).State)
-		assert.Equal(t, notify.StateClosed, e.get("bob", assigned.ID).State)
-		assert.Equal(t, notify.StateActive, e.get("bob", other.ID).State, "another subject is untouched")
+		assert.Equal(t, ntfy.StateClosed, e.get("alice", offer.ID).State)
+		assert.Equal(t, ntfy.StateClosed, e.get("bob", assigned.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("bob", other.ID).State, "another subject is untouched")
 	})
 
 	parallel(t, "sparing one recipient", func(t *testing.T) {
@@ -347,14 +347,14 @@ func runInbox(t *testing.T, factory Factory) {
 		carol := e.note("carol", "event-1", "task-1", "offer", 1, at(0))
 		e.insert(false, alice, bob, carol)
 
-		result := e.close(notify.CloseRequest{
+		result := e.close(ntfy.CloseRequest{
 			Subject: "task-1", Kinds: []string{"offer"}, Version: 1, Reason: "taken", Except: "carol",
 		}, at(2))
 
 		assert.Equal(t, []string{"alice", "bob"}, result.Recipients)
-		assert.Equal(t, notify.StateClosed, e.get("alice", alice.ID).State)
-		assert.Equal(t, notify.StateClosed, e.get("bob", bob.ID).State)
-		assert.Equal(t, notify.StateActive, e.get("carol", carol.ID).State)
+		assert.Equal(t, ntfy.StateClosed, e.get("alice", alice.ID).State)
+		assert.Equal(t, ntfy.StateClosed, e.get("bob", bob.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("carol", carol.ID).State)
 	})
 
 	parallel(t, "a newer notification survives an older close", func(t *testing.T) {
@@ -362,11 +362,11 @@ func runInbox(t *testing.T, factory Factory) {
 		n := e.note("alice", "event-7", "task-1", "assigned", 7, at(0))
 		e.insert(false, n)
 
-		result := e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"assigned"}, Version: 6, Reason: "x"}, at(1))
+		result := e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"assigned"}, Version: 6, Reason: "x"}, at(1))
 
 		assert.Zero(t, result.Closed)
 		assert.Empty(t, result.Recipients)
-		assert.Equal(t, notify.StateActive, e.get("alice", n.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("alice", n.ID).State)
 	})
 
 	parallel(t, "a read notification can still be closed and keeps its read time", func(t *testing.T) {
@@ -375,10 +375,10 @@ func runInbox(t *testing.T, factory Factory) {
 		e.insert(false, n)
 		e.markRead("alice", at(2), n.ID)
 
-		e.close(notify.CloseRequest{Subject: "task-1", Version: 1, Reason: "completed"}, at(8))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Version: 1, Reason: "completed"}, at(8))
 
 		got := e.get("alice", n.ID)
-		assert.Equal(t, notify.StateClosed, got.State)
+		assert.Equal(t, ntfy.StateClosed, got.State)
 		sameInstant(t, at(2), got.ReadAt, "read at")
 		sameInstant(t, at(8), got.ClosedAt, "closed at")
 		sameInstant(t, at(2), got.InactiveAt, "inactive at stays when it first went inactive")
@@ -388,9 +388,9 @@ func runInbox(t *testing.T, factory Factory) {
 		e := newEnv(t, factory)
 		n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
 		e.insert(false, n)
-		e.close(notify.CloseRequest{Subject: "task-1", Version: 1, Reason: "taken"}, at(2))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Version: 1, Reason: "taken"}, at(2))
 
-		result := e.close(notify.CloseRequest{Subject: "task-1", Version: 3, Reason: "completed"}, at(4))
+		result := e.close(ntfy.CloseRequest{Subject: "task-1", Version: 3, Reason: "completed"}, at(4))
 
 		assert.Zero(t, result.Closed)
 		got := e.get("alice", n.ID)
@@ -401,7 +401,7 @@ func runInbox(t *testing.T, factory Factory) {
 	parallel(t, "newest first with exact paging while notifications arrive", func(t *testing.T) {
 		e := newEnv(t, factory)
 
-		var published []notify.Notification
+		var published []ntfy.Notification
 
 		for i := range 5 {
 			n := e.note("alice", fmt.Sprintf("event-%d", i), fmt.Sprintf("task-%d", i), "offer", 1, at(i))
@@ -411,19 +411,19 @@ func runInbox(t *testing.T, factory Factory) {
 
 		e.insert(false, e.note("bob", "event-bob", "task-9", "offer", 1, at(3)))
 
-		first := e.list(notify.ListQuery{Recipient: "alice", Limit: 2})
+		first := e.list(ntfy.ListQuery{Recipient: "alice", Limit: 2})
 		require.NotEmpty(t, first.NextCursor)
 
 		e.insert(false, e.note("alice", "event-late", "task-late", "offer", 1, at(10)))
 
-		second := e.list(notify.ListQuery{Recipient: "alice", Limit: 2, Cursor: first.NextCursor})
+		second := e.list(ntfy.ListQuery{Recipient: "alice", Limit: 2, Cursor: first.NextCursor})
 		require.NotEmpty(t, second.NextCursor)
 
-		third := e.list(notify.ListQuery{Recipient: "alice", Limit: 2, Cursor: second.NextCursor})
+		third := e.list(ntfy.ListQuery{Recipient: "alice", Limit: 2, Cursor: second.NextCursor})
 		assert.Empty(t, third.NextCursor)
 
-		var got []notify.Notification
-		for _, page := range []notify.Page{first, second, third} {
+		var got []ntfy.Notification
+		for _, page := range []ntfy.Page{first, second, third} {
 			got = append(got, page.Notifications...)
 		}
 
@@ -435,7 +435,7 @@ func runInbox(t *testing.T, factory Factory) {
 	parallel(t, "notifications created at the same instant page exactly", func(t *testing.T) {
 		e := newEnv(t, factory)
 
-		var published []notify.Notification
+		var published []ntfy.Notification
 
 		for i := range 7 {
 			n := e.note("alice", fmt.Sprintf("event-%d", i), "task-1", "offer", int64(i), at(0))
@@ -444,9 +444,9 @@ func runInbox(t *testing.T, factory Factory) {
 
 		e.insert(false, published...)
 
-		var got []notify.Notification
+		var got []ntfy.Notification
 
-		q := notify.ListQuery{Recipient: "alice", Limit: 3}
+		q := ntfy.ListQuery{Recipient: "alice", Limit: 3}
 
 		for {
 			page := e.list(q)
@@ -473,20 +473,20 @@ func runInbox(t *testing.T, factory Factory) {
 		e.insert(false, offer2)
 		e.markRead("alice", at(3), offer2.ID)
 
-		byState := e.list(notify.ListQuery{Recipient: "alice", States: []notify.State{notify.StateActive}})
+		byState := e.list(ntfy.ListQuery{Recipient: "alice", States: []ntfy.State{ntfy.StateActive}})
 		assert.Equal(t, []string{taken1.ID, offer1.ID}, idsOf(byState.Notifications))
 
-		byKind := e.list(notify.ListQuery{Recipient: "alice", Kinds: []string{"offer"}})
+		byKind := e.list(ntfy.ListQuery{Recipient: "alice", Kinds: []string{"offer"}})
 		assert.Equal(t, []string{offer2.ID, offer1.ID}, idsOf(byKind.Notifications))
 
-		bySubject := e.list(notify.ListQuery{Recipient: "alice", Subject: "task-1", Kinds: []string{"taken", "offer"}})
+		bySubject := e.list(ntfy.ListQuery{Recipient: "alice", Subject: "task-1", Kinds: []string{"taken", "offer"}})
 		assert.Equal(t, []string{taken1.ID, offer1.ID}, idsOf(bySubject.Notifications))
 	})
 
 	parallel(t, "counting counts only active notifications", func(t *testing.T) {
 		e := newEnv(t, factory)
 
-		var all []notify.Notification
+		var all []ntfy.Notification
 		for i := range 6 {
 			all = append(all, e.note("alice", fmt.Sprintf("event-%d", i), "task-1", fmt.Sprintf("k%d", i), 1, at(i)))
 		}
@@ -494,7 +494,7 @@ func runInbox(t *testing.T, factory Factory) {
 		e.insert(false, all...)
 		e.insert(false, e.note("bob", "event-bob", "task-1", "k0", 1, at(0)))
 		e.markRead("alice", at(10), all[3].ID, all[4].ID)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"k5"}, Version: 1}, at(11))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"k5"}, Version: 1}, at(11))
 
 		assert.Equal(t, int64(3), e.count("alice"))
 		assert.Equal(t, int64(1), e.count("bob"))
@@ -507,7 +507,7 @@ func runInbox(t *testing.T, factory Factory) {
 		closed := e.note("alice", "event-2", "task-2", "offer", 1, at(0))
 		e.insert(false, active)
 		e.insert(false, closed)
-		e.close(notify.CloseRequest{Subject: "task-2", Version: 1, Reason: "taken"}, at(1))
+		e.close(ntfy.CloseRequest{Subject: "task-2", Version: 1, Reason: "taken"}, at(1))
 
 		first := e.markRead("alice", at(2), active.ID)
 		assert.Equal(t, int64(1), first.Marked)
@@ -516,7 +516,7 @@ func runInbox(t *testing.T, factory Factory) {
 		assert.Zero(t, again.Marked)
 
 		read := e.get("alice", active.ID)
-		assert.Equal(t, notify.StateRead, read.State)
+		assert.Equal(t, ntfy.StateRead, read.State)
 		sameInstant(t, at(2), read.ReadAt, "read at is the first read")
 		sameInstant(t, at(2), read.InactiveAt, "inactive at")
 
@@ -524,7 +524,7 @@ func runInbox(t *testing.T, factory Factory) {
 		assert.Zero(t, closedResult.Marked)
 
 		got := e.get("alice", closed.ID)
-		assert.Equal(t, notify.StateClosed, got.State)
+		assert.Equal(t, ntfy.StateClosed, got.State)
 		sameInstant(t, at(6), got.ReadAt, "a closed notification records when it was read")
 		sameInstant(t, at(1), got.InactiveAt, "inactive at")
 	})
@@ -543,10 +543,10 @@ func runInbox(t *testing.T, factory Factory) {
 		require.NoError(t, err)
 
 		assert.Equal(t, int64(2), result.Marked)
-		assert.Equal(t, notify.StateRead, e.get("alice", early.ID).State)
-		assert.Equal(t, notify.StateRead, e.get("alice", loaded.ID).State)
-		assert.Equal(t, notify.StateActive, e.get("alice", later.ID).State)
-		assert.Equal(t, notify.StateActive, e.get("bob", bobs.ID).State)
+		assert.Equal(t, ntfy.StateRead, e.get("alice", early.ID).State)
+		assert.Equal(t, ntfy.StateRead, e.get("alice", loaded.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("alice", later.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("bob", bobs.ID).State)
 	})
 
 	parallel(t, "another recipient's notification is not found", func(t *testing.T) {
@@ -556,26 +556,26 @@ func runInbox(t *testing.T, factory Factory) {
 		e.insert(false, alices, bobs)
 
 		_, err := e.store.Get(t.Context(), "bob", alices.ID)
-		require.ErrorIs(t, err, notify.ErrNotFound)
+		require.ErrorIs(t, err, ntfy.ErrNotFound)
 
 		_, err = e.store.Get(t.Context(), "bob", "no-such-id")
-		require.ErrorIs(t, err, notify.ErrNotFound)
+		require.ErrorIs(t, err, ntfy.ErrNotFound)
 
 		_, err = e.store.MarkRead(t.Context(), "bob", []string{alices.ID}, at(1))
-		require.ErrorIs(t, err, notify.ErrNotFound)
+		require.ErrorIs(t, err, ntfy.ErrNotFound)
 
 		_, err = e.store.MarkRead(t.Context(), "bob", []string{bobs.ID, alices.ID}, at(1))
-		require.ErrorIs(t, err, notify.ErrNotFound)
+		require.ErrorIs(t, err, ntfy.ErrNotFound)
 
-		assert.Equal(t, notify.StateActive, e.get("alice", alices.ID).State)
-		assert.Equal(t, notify.StateActive, e.get("bob", bobs.ID).State, "nothing is marked when any id is not found")
+		assert.Equal(t, ntfy.StateActive, e.get("alice", alices.ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("bob", bobs.ID).State, "nothing is marked when any id is not found")
 	})
 }
 
 func runWatermark(t *testing.T, factory Factory) {
 	parallel(t, "a retried older source is suppressed", func(t *testing.T) {
 		e := newEnv(t, factory)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
 
 		result := e.insert(false, e.note("alice", "event-1", "task-1", "offer", 1, at(1)))
 
@@ -586,18 +586,18 @@ func runWatermark(t *testing.T, factory Factory) {
 
 	parallel(t, "a newer source still publishes after a close", func(t *testing.T) {
 		e := newEnv(t, factory)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
 
 		result := e.insert(false, e.note("alice", "event-6", "task-1", "offer", 6, at(1)))
 
 		require.Len(t, result.Created, 1)
-		assert.Equal(t, notify.StateActive, e.get("alice", result.Created[0].ID).State)
+		assert.Equal(t, ntfy.StateActive, e.get("alice", result.Created[0].ID).State)
 	})
 
 	parallel(t, "a close and a publish at the same version can both stand", func(t *testing.T) {
 		e := newEnv(t, factory)
 		e.insert(false, e.note("alice", "event-1", "task-1", "assigned", 1, at(0)))
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"assigned"}, Version: 4, Except: "bob"}, at(1))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"assigned"}, Version: 4, Except: "bob"}, at(1))
 
 		result := e.insert(false, e.note("bob", "event-4", "task-1", "assigned", 4, at(1)))
 
@@ -606,7 +606,7 @@ func runWatermark(t *testing.T, factory Factory) {
 
 	parallel(t, "a close of one kind does not suppress another kind", func(t *testing.T) {
 		e := newEnv(t, factory)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
 
 		result := e.insert(false, e.note("alice", "event-1", "task-1", "assigned", 1, at(1)))
 
@@ -615,7 +615,7 @@ func runWatermark(t *testing.T, factory Factory) {
 
 	parallel(t, "closing every kind suppresses every kind", func(t *testing.T) {
 		e := newEnv(t, factory)
-		e.close(notify.CloseRequest{Subject: "task-1", Version: 9}, at(0))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Version: 9}, at(0))
 
 		older := e.insert(false, e.note("alice", "event-8", "task-1", "taken", 8, at(1)))
 		assert.Empty(t, older.Created)
@@ -627,8 +627,8 @@ func runWatermark(t *testing.T, factory Factory) {
 
 	parallel(t, "a watermark is never lowered by an older close", func(t *testing.T) {
 		e := newEnv(t, factory)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 8}, at(0))
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 3}, at(1))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 8}, at(0))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 3}, at(1))
 
 		result := e.insert(false, e.note("alice", "event-5", "task-1", "offer", 5, at(2)))
 
@@ -637,7 +637,7 @@ func runWatermark(t *testing.T, factory Factory) {
 
 	parallel(t, "suppression applies per notification within one insert", func(t *testing.T) {
 		e := newEnv(t, factory)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, at(0))
 
 		result := e.insert(false,
 			e.note("alice", "event-1", "task-1", "offer", 1, at(1)),
@@ -657,10 +657,10 @@ func runSuccessors(t *testing.T, factory Factory) {
 			e.note("carol", "event-1", "task-1", "offer", 1, at(0)))
 	}
 
-	taken := func(skip ...string) notify.CloseRequest {
-		return notify.CloseRequest{
+	taken := func(skip ...string) ntfy.CloseRequest {
+		return ntfy.CloseRequest{
 			Subject: "task-1", Kinds: []string{"offer"}, Version: 5, Reason: "taken",
-			Successor: &notify.Successor{
+			Successor: &ntfy.Successor{
 				SourceID: "event-5", Kind: "taken", Title: "Taken by carol", SubjectVersion: 5,
 				Links: map[string]string{"task": "/v1/tasks/task-1"}, Data: json.RawMessage(`{"by":"carol"}`),
 			},
@@ -680,7 +680,7 @@ func runSuccessors(t *testing.T, factory Factory) {
 		assert.Zero(t, result.SuccessorsSuppressed)
 
 		for _, recipient := range []string{"alice", "bob"} {
-			page := e.list(notify.ListQuery{Recipient: recipient, States: []notify.State{notify.StateActive}})
+			page := e.list(ntfy.ListQuery{Recipient: recipient, States: []ntfy.State{ntfy.StateActive}})
 			require.Lenf(t, page.Notifications, 1, "%s has one active notification", recipient)
 
 			got := page.Notifications[0]
@@ -694,7 +694,7 @@ func runSuccessors(t *testing.T, factory Factory) {
 			assert.Contains(t, idsOf(result.Successors), got.ID, "the result lists exactly what was created")
 		}
 
-		assert.Empty(t, e.list(notify.ListQuery{Recipient: "carol", States: []notify.State{notify.StateActive}}).Notifications)
+		assert.Empty(t, e.list(ntfy.ListQuery{Recipient: "carol", States: []ntfy.State{ntfy.StateActive}}).Notifications)
 	})
 
 	parallel(t, "a retried close creates no further successors", func(t *testing.T) {
@@ -709,7 +709,7 @@ func runSuccessors(t *testing.T, factory Factory) {
 		assert.Empty(t, second.Successors)
 
 		for _, recipient := range []string{"alice", "bob"} {
-			page := e.list(notify.ListQuery{Recipient: recipient, Kinds: []string{"taken"}})
+			page := e.list(ntfy.ListQuery{Recipient: recipient, Kinds: []string{"taken"}})
 			assert.Lenf(t, page.Notifications, 1, "%s keeps exactly one successor", recipient)
 		}
 	})
@@ -717,20 +717,20 @@ func runSuccessors(t *testing.T, factory Factory) {
 	parallel(t, "a successor below a newer watermark is suppressed", func(t *testing.T) {
 		e := newEnv(t, factory)
 		offers(e)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"taken"}, Version: 8}, at(2))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"taken"}, Version: 8}, at(2))
 
 		result := e.close(taken(), at(4))
 
 		assert.Equal(t, int64(3), result.Closed)
 		assert.Empty(t, result.Successors)
 		assert.Equal(t, 3, result.SuccessorsSuppressed)
-		assert.Empty(t, e.list(notify.ListQuery{Recipient: "alice", Kinds: []string{"taken"}}).Notifications)
+		assert.Empty(t, e.list(ntfy.ListQuery{Recipient: "alice", Kinds: []string{"taken"}}).Notifications)
 	})
 
 	parallel(t, "only recipients this close closed get a successor", func(t *testing.T) {
 		e := newEnv(t, factory)
 		offers(e)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 1, Except: "alice"}, at(1))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 1, Except: "alice"}, at(1))
 		e.insert(false, e.note("alice", "event-2", "task-1", "offer", 2, at(2)))
 
 		result := e.close(taken(), at(4))
@@ -772,7 +772,7 @@ func runCoalescing(t *testing.T, factory Factory) {
 	parallel(t, "a closed notification does not absorb it", func(t *testing.T) {
 		e := newEnv(t, factory)
 		e.insert(false, e.note("alice", "event-1", "task-1", "offer", 1, at(0)))
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 3}, at(1))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 3}, at(1))
 
 		result := e.insert(true, e.note("alice", "event-4", "task-1", "offer", 4, at(2)))
 
@@ -829,7 +829,7 @@ func runConcurrency(t *testing.T, factory Factory) {
 			)
 
 			wg.Go(func() {
-				_, closeErr = e.store.Close(t.Context(), notify.CloseRequest{
+				_, closeErr = e.store.Close(t.Context(), ntfy.CloseRequest{
 					Subject: subject, Kinds: []string{"offer"}, Version: 5, Reason: "taken",
 				}, at(2), e.ids)
 			})
@@ -841,9 +841,9 @@ func runConcurrency(t *testing.T, factory Factory) {
 			require.NoError(t, closeErr)
 			require.NoError(t, insertEr)
 
-			page := e.list(notify.ListQuery{
+			page := e.list(ntfy.ListQuery{
 				Recipient: "alice", Subject: subject, Kinds: []string{"offer"},
-				States: []notify.State{notify.StateActive},
+				States: []ntfy.State{ntfy.StateActive},
 			})
 
 			for _, n := range page.Notifications {
@@ -873,7 +873,7 @@ func runConcurrency(t *testing.T, factory Factory) {
 			require.NoError(t, errA)
 			require.NoError(t, errB)
 
-			page := e.list(notify.ListQuery{Recipient: "alice", Subject: subject})
+			page := e.list(ntfy.ListQuery{Recipient: "alice", Subject: subject})
 			require.Lenf(t, page.Notifications, 1, "iteration %d", i)
 		}
 	})
@@ -884,8 +884,8 @@ func runRetention(t *testing.T, factory Factory) {
 
 	// seed inserts n notifications for a recipient, created a second apart
 	// starting at from, each on its own subject.
-	seed := func(e *env, recipient, prefix string, n int, from time.Time) []notify.Notification {
-		out := make([]notify.Notification, 0, n)
+	seed := func(e *env, recipient, prefix string, n int, from time.Time) []ntfy.Notification {
+		out := make([]ntfy.Notification, 0, n)
 
 		for i := range n {
 			subject := fmt.Sprintf("%s-%s-%d", recipient, prefix, i)
@@ -897,7 +897,7 @@ func runRetention(t *testing.T, factory Factory) {
 		return out
 	}
 
-	readAll := func(e *env, recipient string, when time.Time, notifications []notify.Notification) {
+	readAll := func(e *env, recipient string, when time.Time, notifications []ntfy.Notification) {
 		e.markRead(recipient, when, idsOf(notifications)...)
 	}
 
@@ -908,7 +908,7 @@ func runRetention(t *testing.T, factory Factory) {
 		readAll(e, "alice", now.Add(-days(10)), recent)
 		readAll(e, "alice", now.Add(-days(95)), old)
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxAge: days(90)})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxAge: days(90)})
 
 		assert.Equal(t, int64(1), result.DeletedForAge)
 		assert.Equal(t, idsOf(recent), idsOf(e.all("alice")))
@@ -918,7 +918,7 @@ func runRetention(t *testing.T, factory Factory) {
 		e := newEnv(t, factory)
 		active := seed(e, "alice", "active", 1, now.Add(-days(200)))
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxAge: days(90)})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxAge: days(90)})
 
 		assert.Zero(t, result.DeletedForAge)
 		assert.Equal(t, idsOf(active), idsOf(e.all("alice")))
@@ -930,7 +930,7 @@ func runRetention(t *testing.T, factory Factory) {
 		kept := seed(e, "alice", "kept", 40, now.Add(-days(50)))
 		readAll(e, "alice", now.Add(-days(40)), old)
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxAge: days(30), MaxPerRecipient: 100, Batch: 3})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxAge: days(30), MaxPerRecipient: 100, Batch: 3})
 
 		assert.Equal(t, int64(10), result.DeletedForAge)
 		assert.Zero(t, result.DeletedForCount)
@@ -943,7 +943,7 @@ func runRetention(t *testing.T, factory Factory) {
 		active := seed(e, "alice", "active", 4, now.Add(-days(6)))
 		readAll(e, "alice", now.Add(-days(1)), read)
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxPerRecipient: 5})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxPerRecipient: 5})
 
 		assert.Equal(t, int64(2), result.DeletedForCount)
 		assert.Zero(t, result.EvictedActive)
@@ -956,7 +956,7 @@ func runRetention(t *testing.T, factory Factory) {
 		e := newEnv(t, factory)
 		active := seed(e, "alice", "active", 8, now.Add(-days(3)))
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxPerRecipient: 5, Strategy: notify.EvictOldestActive, Batch: 2})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxPerRecipient: 5, Strategy: ntfy.EvictOldestActive, Batch: 2})
 
 		assert.Equal(t, int64(3), result.EvictedActive)
 		assert.Zero(t, result.DeletedForCount)
@@ -968,7 +968,7 @@ func runRetention(t *testing.T, factory Factory) {
 		e := newEnv(t, factory)
 		active := seed(e, "alice", "active", 8, now.Add(-days(3)))
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxPerRecipient: 5, Strategy: notify.RetainActive})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxPerRecipient: 5, Strategy: ntfy.RetainActive})
 
 		assert.Zero(t, result.EvictedActive)
 		assert.Zero(t, result.DeletedForCount)
@@ -985,7 +985,7 @@ func runRetention(t *testing.T, factory Factory) {
 		readAll(e, "alice", now.Add(-days(40)), old)
 		readAll(e, "alice", now.Add(-days(2)), recent)
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxAge: days(30), MaxPerRecipient: 5, Batch: 2})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxAge: days(30), MaxPerRecipient: 5, Batch: 2})
 
 		assert.Equal(t, int64(7), result.DeletedForAge)
 		assert.Equal(t, int64(3), result.DeletedForCount)
@@ -999,11 +999,11 @@ func runRetention(t *testing.T, factory Factory) {
 		e := newEnv(t, factory)
 		kept := seed(e, "alice", "active", 3, now.Add(-days(1)))
 
-		result := e.prune(notify.PruneRequest{
+		result := e.prune(ntfy.PruneRequest{
 			Now: now, MaxAge: days(30), MaxPerRecipient: 5, WatermarkRetention: days(7),
 		})
 
-		assert.Equal(t, notify.PruneResult{}, withoutNilRecipients(result))
+		assert.Equal(t, ntfy.PruneResult{}, withoutNilRecipients(result))
 		assert.ElementsMatch(t, idsOf(kept), idsOf(e.all("alice")))
 	})
 
@@ -1014,12 +1014,12 @@ func runRetention(t *testing.T, factory Factory) {
 		recent := "recent"
 		occupied := "occupied"
 
-		e.close(notify.CloseRequest{Subject: expired, Kinds: []string{"offer"}, Version: 5}, now.Add(-days(8)))
-		e.close(notify.CloseRequest{Subject: recent, Kinds: []string{"offer"}, Version: 5}, now.Add(-days(2)))
+		e.close(ntfy.CloseRequest{Subject: expired, Kinds: []string{"offer"}, Version: 5}, now.Add(-days(8)))
+		e.close(ntfy.CloseRequest{Subject: recent, Kinds: []string{"offer"}, Version: 5}, now.Add(-days(2)))
 		e.insert(false, e.note("bob", "event-occupied", occupied, "assigned", 6, now.Add(-days(9))))
-		e.close(notify.CloseRequest{Subject: occupied, Kinds: []string{"offer"}, Version: 5}, now.Add(-days(8)))
+		e.close(ntfy.CloseRequest{Subject: occupied, Kinds: []string{"offer"}, Version: 5}, now.Add(-days(8)))
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxAge: days(90), WatermarkRetention: days(7)})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxAge: days(90), WatermarkRetention: days(7)})
 
 		assert.Positive(t, result.WatermarksDeleted)
 
@@ -1035,9 +1035,9 @@ func runRetention(t *testing.T, factory Factory) {
 
 	parallel(t, "close records never expire without a retention", func(t *testing.T) {
 		e := newEnv(t, factory)
-		e.close(notify.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, now.Add(-days(300)))
+		e.close(ntfy.CloseRequest{Subject: "task-1", Kinds: []string{"offer"}, Version: 5}, now.Add(-days(300)))
 
-		result := e.prune(notify.PruneRequest{Now: now, MaxAge: days(1)})
+		result := e.prune(ntfy.PruneRequest{Now: now, MaxAge: days(1)})
 
 		assert.Zero(t, result.WatermarksDeleted)
 		assert.Equal(t, 1, e.insert(false, e.note("alice", "event-1", "task-1", "offer", 1, now)).Suppressed)
@@ -1046,7 +1046,7 @@ func runRetention(t *testing.T, factory Factory) {
 
 // withoutNilRecipients normalises an empty recipient list, so that a store
 // returning an empty slice and one returning nil compare equal.
-func withoutNilRecipients(result notify.PruneResult) notify.PruneResult {
+func withoutNilRecipients(result ntfy.PruneResult) ntfy.PruneResult {
 	if len(result.Recipients) == 0 {
 		result.Recipients = nil
 	}

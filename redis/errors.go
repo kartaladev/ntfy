@@ -15,7 +15,7 @@ var (
 	// [Broadcaster.Listen], before a single signal is published or received.
 	ErrConfiguration = errors.New("redis: invalid configuration")
 
-	// ErrPublish reports that the broker did not take a message. The notify
+	// ErrPublish reports that the broker did not take a message. The ntfy
 	// service hands it to its signal error handler; it never fails the
 	// notification write that produced the signal.
 	ErrPublish = errors.New("redis: publish failed")
@@ -33,10 +33,10 @@ func (e *ConfigurationError) Error() string {
 }
 
 // Unwrap makes the error match [ErrConfiguration], and also
-// [notify.ErrConfiguration], because a broadcaster wired wrongly is a notify
+// [ntfy.ErrConfiguration], because a broadcaster wired wrongly is a ntfy
 // wiring mistake too.
 func (e *ConfigurationError) Unwrap() []error {
-	return []error{ErrConfiguration, notify.ErrConfiguration}
+	return []error{ErrConfiguration, ntfy.ErrConfiguration}
 }
 
 // PublishError reports a message the broker did not take: a broker that could

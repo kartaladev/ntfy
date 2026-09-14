@@ -10,8 +10,8 @@ import (
 	"github.com/kartaladev/sqlkit"
 )
 
-// Get implements [notify.Store].
-func (s *Store) Get(ctx context.Context, recipient, id string) (notify.Notification, error) {
+// Get implements [ntfy.Store].
+func (s *Store) Get(ctx context.Context, recipient, id string) (ntfy.Notification, error) {
 	w := sqlkit.NewWriter(s.dialect)
 	w.Write("SELECT ", s.columnList(notificationColumns...), " FROM ", s.notificationsTable(),
 		" WHERE ", s.quote("id"), " = ", w.Bind(id),
@@ -19,21 +19,21 @@ func (s *Store) Get(ctx context.Context, recipient, id string) (notify.Notificat
 
 	found, err := s.queryNotifications(s.own(ctx), w.Done())
 	if err != nil {
-		return notify.Notification{}, err
+		return ntfy.Notification{}, err
 	}
 
 	if len(found) == 0 {
-		return notify.Notification{}, notify.ErrNotFound
+		return ntfy.Notification{}, ntfy.ErrNotFound
 	}
 
 	return found[0], nil
 }
 
-// List implements [notify.Store].
-func (s *Store) List(ctx context.Context, q notify.ListQuery) (notify.Page, error) {
-	position, continued, err := notify.DecodeCursor(q)
+// List implements [ntfy.Store].
+func (s *Store) List(ctx context.Context, q ntfy.ListQuery) (ntfy.Page, error) {
+	position, continued, err := ntfy.DecodeCursor(q)
 	if err != nil {
-		return notify.Page{}, err
+		return ntfy.Page{}, err
 	}
 
 	createdAt, id := s.quote("created_at"), s.quote("id")
@@ -72,14 +72,14 @@ func (s *Store) List(ctx context.Context, q notify.ListQuery) (notify.Page, erro
 
 	found, err := s.queryNotifications(s.own(ctx), w.Done())
 	if err != nil {
-		return notify.Page{}, err
+		return ntfy.Page{}, err
 	}
 
-	page := notify.Page{}
+	page := ntfy.Page{}
 
 	if len(found) > limit {
 		last := found[limit-1]
-		page.NextCursor = notify.EncodeCursor(q, notify.CursorPosition{CreatedAt: last.CreatedAt, ID: last.ID})
+		page.NextCursor = ntfy.EncodeCursor(q, ntfy.CursorPosition{CreatedAt: last.CreatedAt, ID: last.ID})
 		found = found[:limit]
 	}
 
@@ -88,27 +88,27 @@ func (s *Store) List(ctx context.Context, q notify.ListQuery) (notify.Page, erro
 	return page, nil
 }
 
-// CountActive implements [notify.Store].
+// CountActive implements [ntfy.Store].
 func (s *Store) CountActive(ctx context.Context, recipient string) (int64, error) {
 	w := sqlkit.NewWriter(s.dialect)
 	w.Write("SELECT COUNT(*) FROM ", s.notificationsTable(),
 		" WHERE ", s.quote("recipient"), " = ", w.Bind(recipient),
-		" AND ", s.quote("state"), " = ", w.Bind(string(notify.StateActive)))
+		" AND ", s.quote("state"), " = ", w.Bind(string(ntfy.StateActive)))
 
 	return s.queryInt(s.own(ctx), w.Done())
 }
 
-// MarkRead implements [notify.Store].
-func (s *Store) MarkRead(ctx context.Context, recipient string, ids []string, at time.Time) (notify.MarkResult, error) {
+// MarkRead implements [ntfy.Store].
+func (s *Store) MarkRead(ctx context.Context, recipient string, ids []string, at time.Time) (ntfy.MarkResult, error) {
 	unique := slices.Compact(slices.Sorted(slices.Values(ids)))
 	if len(unique) == 0 {
-		return notify.MarkResult{}, nil
+		return ntfy.MarkResult{}, nil
 	}
 
 	at = sqlkit.NormalizeTime(at)
 	instant := sqlkit.EncodeTime(s.dialect, &at)
 
-	var result notify.MarkResult
+	var result ntfy.MarkResult
 
 	err := s.do(ctx, func(ctx context.Context) error {
 		for _, chunk := range chunks(unique, chunkSize) {
@@ -123,18 +123,18 @@ func (s *Store) MarkRead(ctx context.Context, recipient string, ids []string, at
 			}
 
 			if found < int64(len(chunk)) {
-				return notify.ErrNotFound
+				return ntfy.ErrNotFound
 			}
 		}
 
 		for _, chunk := range chunks(unique, chunkSize) {
 			w := sqlkit.NewWriter(s.dialect)
 			w.Write("UPDATE ", s.notificationsTable(), " SET ",
-				s.quote("state"), " = ", w.Bind(string(notify.StateRead)), ", ",
+				s.quote("state"), " = ", w.Bind(string(ntfy.StateRead)), ", ",
 				s.quote("read_at"), " = ", w.Bind(instant), ", ",
 				s.quote("inactive_at"), " = ", w.Bind(instant),
 				" WHERE ", s.quote("recipient"), " = ", w.Bind(recipient),
-				" AND ", s.quote("state"), " = ", w.Bind(string(notify.StateActive)),
+				" AND ", s.quote("state"), " = ", w.Bind(string(ntfy.StateActive)),
 				" AND ", s.quote("id"), " IN (", w.BindAll(anys(chunk)...), ")")
 
 			marked, err := s.executor.Exec(ctx, w.Done())
@@ -150,7 +150,7 @@ func (s *Store) MarkRead(ctx context.Context, recipient string, ids []string, at
 			w.Write("UPDATE ", s.notificationsTable(), " SET ",
 				s.quote("read_at"), " = ", w.Bind(instant),
 				" WHERE ", s.quote("recipient"), " = ", w.Bind(recipient),
-				" AND ", s.quote("state"), " = ", w.Bind(string(notify.StateClosed)),
+				" AND ", s.quote("state"), " = ", w.Bind(string(ntfy.StateClosed)),
 				" AND ", s.quote("read_at"), " IS NULL",
 				" AND ", s.quote("id"), " IN (", w.BindAll(anys(chunk)...), ")")
 
@@ -162,25 +162,25 @@ func (s *Store) MarkRead(ctx context.Context, recipient string, ids []string, at
 		return nil
 	})
 	if err != nil {
-		return notify.MarkResult{}, err
+		return ntfy.MarkResult{}, err
 	}
 
 	return result, nil
 }
 
-// MarkAllRead implements [notify.Store].
-func (s *Store) MarkAllRead(ctx context.Context, recipient string, through, at time.Time) (notify.MarkResult, error) {
+// MarkAllRead implements [ntfy.Store].
+func (s *Store) MarkAllRead(ctx context.Context, recipient string, through, at time.Time) (ntfy.MarkResult, error) {
 	at = sqlkit.NormalizeTime(at)
 	through = sqlkit.NormalizeTime(through)
 	instant := sqlkit.EncodeTime(s.dialect, &at)
 
 	w := sqlkit.NewWriter(s.dialect)
 	w.Write("UPDATE ", s.notificationsTable(), " SET ",
-		s.quote("state"), " = ", w.Bind(string(notify.StateRead)), ", ",
+		s.quote("state"), " = ", w.Bind(string(ntfy.StateRead)), ", ",
 		s.quote("read_at"), " = ", w.Bind(instant), ", ",
 		s.quote("inactive_at"), " = ", w.Bind(instant),
 		" WHERE ", s.quote("recipient"), " = ", w.Bind(recipient),
-		" AND ", s.quote("state"), " = ", w.Bind(string(notify.StateActive)),
+		" AND ", s.quote("state"), " = ", w.Bind(string(ntfy.StateActive)),
 		" AND ", s.quote("created_at"), " <= ", w.Bind(sqlkit.EncodeTime(s.dialect, &through)))
 
 	var marked int64
@@ -193,8 +193,8 @@ func (s *Store) MarkAllRead(ctx context.Context, recipient string, through, at t
 		return err
 	})
 	if err != nil {
-		return notify.MarkResult{}, err
+		return ntfy.MarkResult{}, err
 	}
 
-	return notify.MarkResult{Marked: marked}, nil
+	return ntfy.MarkResult{Marked: marked}, nil
 }

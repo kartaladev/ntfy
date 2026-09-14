@@ -1,11 +1,11 @@
-package notify
+package ntfy
 
 import (
 	"errors"
 	"strings"
 )
 
-// The sentinels every notify error matches. Match them with [errors.Is]; the
+// The sentinels every ntfy error matches. Match them with [errors.Is]; the
 // concrete types below carry the detail.
 var (
 	// ErrNotFound reports a notification that does not exist, or that belongs to

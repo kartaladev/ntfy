@@ -1,8 +1,8 @@
 // Change signals and the broadcaster that carries them between instances.
 //
-//go:generate mockgen -source=realtime.go -package=notify -destination=realtime_mock_test.go -typed
+//go:generate mockgen -source=realtime.go -package=ntfy -destination=realtime_mock_test.go -typed
 
-package notify
+package ntfy
 
 import (
 	"context"
@@ -42,10 +42,10 @@ type Signal struct {
 //
 // The default is [InProcessBroadcaster], which reaches only its own process. A
 // deployment of more than one instance supplies one that crosses instances,
-// such as notify/redis or notify/nats. Delivery is best effort: a signal lost
+// such as ntfy/redis or ntfy/nats. Delivery is best effort: a signal lost
 // on the way costs a client nothing it cannot recover by re-reading.
 //
-// notify/notifytest.RunBroadcasterSuite checks an implementation against this
+// ntfytest.RunBroadcasterSuite checks an implementation against this
 // contract.
 type Broadcaster interface {
 	// Broadcast hands signals to every listener, on this instance and others.

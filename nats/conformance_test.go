@@ -13,7 +13,7 @@ import (
 	"github.com/kartaladev/ntfy/ntfytest"
 )
 
-// TestBroadcasterConformance holds the NATS broadcaster to the notify
+// TestBroadcasterConformance holds the NATS broadcaster to the ntfy
 // broadcaster contract. Publisher and listener are two broadcasters with their
 // own connections to one server, as two instances would be; each pair gets a
 // subject of its own, so the suite's cases cannot see each other's signals.
@@ -26,7 +26,7 @@ func TestBroadcasterConformance(t *testing.T) {
 
 	var pairs atomic.Int64
 
-	notifytest.RunBroadcasterSuite(t, func(t *testing.T) (publisher, listener notify.Broadcaster) {
+	ntfytest.RunBroadcasterSuite(t, func(t *testing.T) (publisher, listener ntfy.Broadcaster) {
 		t.Helper()
 
 		subject := fmt.Sprintf("test.conformance.%d", pairs.Add(1))

@@ -1,4 +1,4 @@
-package notify
+package ntfy
 
 import (
 	"crypto/rand"
@@ -29,9 +29,7 @@ func (f IDGeneratorFunc) NewID() (string, error) { return f() }
 // within one millisecond and even if the wall clock steps backwards. That keeps
 // newest-first listings stable when two notifications share a creation time.
 //
-// It is the same algorithm the task engine uses, copied rather than imported so
-// that notify stays free of the engine. A UUIDv7Generator is safe for concurrent
-// use.
+// A UUIDv7Generator is safe for concurrent use.
 type UUIDv7Generator struct {
 	mu      sync.Mutex
 	lastMS  int64

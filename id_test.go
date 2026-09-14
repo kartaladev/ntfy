@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"sync"
@@ -16,13 +16,13 @@ func TestUUIDv7Generator(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		assert func(t *testing.T, generator *notify.UUIDv7Generator)
+		assert func(t *testing.T, generator *ntfy.UUIDv7Generator)
 	}
 
 	cases := []testCase{
 		{
 			name: "identifiers are version 7 UUIDs",
-			assert: func(t *testing.T, generator *notify.UUIDv7Generator) {
+			assert: func(t *testing.T, generator *ntfy.UUIDv7Generator) {
 				id, err := generator.NewID()
 				require.NoError(t, err)
 				require.Len(t, id, 36)
@@ -32,7 +32,7 @@ func TestUUIDv7Generator(t *testing.T) {
 		},
 		{
 			name: "identifiers minted in a row sort in the order they were minted",
-			assert: func(t *testing.T, generator *notify.UUIDv7Generator) {
+			assert: func(t *testing.T, generator *ntfy.UUIDv7Generator) {
 				previous := ""
 
 				for range 10_000 {
@@ -46,7 +46,7 @@ func TestUUIDv7Generator(t *testing.T) {
 		},
 		{
 			name: "identifiers minted concurrently are unique",
-			assert: func(t *testing.T, generator *notify.UUIDv7Generator) {
+			assert: func(t *testing.T, generator *ntfy.UUIDv7Generator) {
 				var (
 					mu   sync.Mutex
 					seen = make(map[string]struct{})
@@ -76,7 +76,7 @@ func TestUUIDv7Generator(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			tc.assert(t, notify.NewUUIDv7Generator())
+			tc.assert(t, ntfy.NewUUIDv7Generator())
 		})
 	}
 }
@@ -88,21 +88,21 @@ func TestClocks(t *testing.T) {
 
 	type testCase struct {
 		name   string
-		clock  notify.Clock
+		clock  ntfy.Clock
 		assert func(t *testing.T, now time.Time)
 	}
 
 	cases := []testCase{
 		{
 			name:  "the system clock reads the current time",
-			clock: notify.SystemClock{},
+			clock: ntfy.SystemClock{},
 			assert: func(t *testing.T, now time.Time) {
 				assert.WithinDuration(t, time.Now(), now, time.Second)
 			},
 		},
 		{
 			name:  "a clock function reads whatever it returns",
-			clock: notify.ClockFunc(func() time.Time { return fixed }),
+			clock: ntfy.ClockFunc(func() time.Time { return fixed }),
 			assert: func(t *testing.T, now time.Time) {
 				assert.Equal(t, fixed, now)
 			},

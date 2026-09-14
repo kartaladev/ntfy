@@ -1,4 +1,4 @@
-// Package sqlstore is a [notify.Store] on PostgreSQL, MySQL and SQLite.
+// Package sqlstore is a [ntfy.Store] on PostgreSQL, MySQL and SQLite.
 //
 // It is written once, against [sqlkit.Executor], and runs natively on each
 // executor module: database/sql, pgx and GORM. The schema is published per

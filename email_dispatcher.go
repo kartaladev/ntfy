@@ -1,4 +1,4 @@
-package notify
+package ntfy
 
 import (
 	"context"
@@ -201,7 +201,7 @@ func NewEmailDispatcher(
 
 	store, ok := svc.store.(EmailStore)
 	if !ok {
-		return refuse("the service's store does not record email deliveries; NewMemoryStore and notify/sqlstore do")
+		return refuse("the service's store does not record email deliveries; NewMemoryStore and ntfy/sqlstore do")
 	}
 
 	var cfg emailConfig

@@ -1,9 +1,9 @@
-package notify
+package ntfy
 
 import "time"
 
-// Clock is the library's source of time. It has the same method set as the
-// task engine's clock, so a host passes its engine clock unchanged.
+// Clock is the library's source of time. Its only method is Now, so a host's
+// existing clock abstraction usually satisfies it unchanged.
 type Clock interface {
 	// Now returns the current instant.
 	Now() time.Time

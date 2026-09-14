@@ -1,4 +1,4 @@
-package notify
+package ntfy
 
 import (
 	"bytes"
@@ -114,7 +114,7 @@ func NewHandler(svc *Service, hub *Hub, opts ...HandlerOption) (*Handler, error)
 		return nil, &ConfigurationError{Detail: "WithActor is required: the handler authenticates nobody"}
 	case cfg.authorizerSet && cfg.authorizer == nil:
 		return nil, &ConfigurationError{
-			Detail: "WithSubscriptionAuthorizer was given no policy; pass notify.AllowAll to permit every subscription",
+			Detail: "WithSubscriptionAuthorizer was given no policy; pass ntfy.AllowAll to permit every subscription",
 		}
 	}
 
@@ -388,8 +388,8 @@ func eventFor(signal Signal) string {
 	return "event: unread-changed\ndata: " + string(data) + "\n\n"
 }
 
-// errorResponse is every error's body: the same shape and code vocabulary as the
-// task engine's HTTP contract, written here rather than imported.
+// errorResponse is every error's body: one shape and one code vocabulary for
+// every endpoint and every status.
 type errorResponse struct {
 	Error errorDetail `json:"error"`
 }
@@ -414,7 +414,7 @@ const internalMessage = "the request could not be completed"
 //   - [ErrUnavailable]: 503, unavailable;
 //   - anything else: 500, internal, with a generic message and no detail.
 //
-// It is exported so that other transports, such as notify/websocket, answer
+// It is exported so that other transports, such as ntfy/websocket, answer
 // with the same mapping instead of copying it.
 func WriteError(w http.ResponseWriter, err error) {
 	status, detail := http.StatusInternalServerError, errorDetail{Code: "internal", Message: internalMessage}

@@ -12,8 +12,8 @@ import (
 	"github.com/kartaladev/ntfy/nats"
 )
 
-// The broadcaster is a notify.Broadcaster.
-var _ notify.Broadcaster = (*nats.Broadcaster)(nil)
+// The broadcaster is a ntfy.Broadcaster.
+var _ ntfy.Broadcaster = (*nats.Broadcaster)(nil)
 
 func TestNewBroadcaster(t *testing.T) {
 	t.Parallel()
@@ -33,7 +33,7 @@ func TestNewBroadcaster(t *testing.T) {
 		t.Helper()
 
 		require.ErrorIs(t, err, nats.ErrConfiguration)
-		require.ErrorIs(t, err, notify.ErrConfiguration, "a broadcaster wiring mistake is a notify wiring mistake")
+		require.ErrorIs(t, err, ntfy.ErrConfiguration, "a broadcaster wiring mistake is a ntfy wiring mistake")
 		assert.Nil(t, b)
 	}
 

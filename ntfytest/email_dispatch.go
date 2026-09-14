@@ -1,4 +1,4 @@
-package notifytest
+package ntfytest
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 
 		d.clock.advance(10 * time.Minute)
 
-		opts := []notify.EmailOption{notify.WithEmailClaimLimit(5), notify.WithEmailBatchLimit(2)}
+		opts := []ntfy.EmailOption{ntfy.WithEmailClaimLimit(5), ntfy.WithEmailBatchLimit(2)}
 		one, two := d.dispatcher("one", opts...), d.dispatcher("two", opts...)
 
 		for round := 0; ; round++ {
@@ -40,7 +40,7 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 
 			var (
 				wg           sync.WaitGroup
-				first, other notify.DispatchResult
+				first, other ntfy.DispatchResult
 				errA, errB   error
 			)
 
@@ -69,7 +69,7 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 		assert.Empty(t, d.reported())
 	})
 
-	for _, guarantee := range []notify.DeliveryGuarantee{notify.AtMostOnce, notify.AtLeastOnce} {
+	for _, guarantee := range []ntfy.DeliveryGuarantee{ntfy.AtMostOnce, ntfy.AtLeastOnce} {
 		parallel(t, "a dispatcher that stops after sending, under "+string(guarantee), func(t *testing.T) {
 			d := newDispatchEnv(t, factory)
 			d.publish("alice")
@@ -77,21 +77,21 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 
 			ctx, cancel := context.WithCancel(t.Context())
 
-			d.onSend = func(notify.EmailMessage) { cancel() }
+			d.onSend = func(ntfy.EmailMessage) { cancel() }
 
-			stopping := d.dispatcher("stopping", notify.WithDeliveryGuarantee(guarantee))
+			stopping := d.dispatcher("stopping", ntfy.WithDeliveryGuarantee(guarantee))
 			_, err := stopping.Dispatch(ctx)
 			require.NoError(t, err)
 			require.Len(t, d.sent(), 1)
 
 			d.onSend = nil
-			d.clock.advance(notify.DefaultEmailLease + time.Minute)
+			d.clock.advance(ntfy.DefaultEmailLease + time.Minute)
 
-			next := d.dispatcher("next", notify.WithDeliveryGuarantee(guarantee))
+			next := d.dispatcher("next", ntfy.WithDeliveryGuarantee(guarantee))
 			result, err := next.Dispatch(t.Context())
 			require.NoError(t, err)
 
-			if guarantee == notify.AtMostOnce {
+			if guarantee == ntfy.AtMostOnce {
 				assert.Equal(t, 1, result.Abandoned)
 				assert.Len(t, d.sent(), 1, "never sent again")
 
@@ -122,7 +122,7 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 		require.NoError(t, err)
 		require.Equal(t, 1, before.Sent)
 
-		d.clock.advance(notify.DefaultEmailLease + time.Hour)
+		d.clock.advance(ntfy.DefaultEmailLease + time.Hour)
 
 		after, err := d.dispatcher("after").Dispatch(t.Context())
 		require.NoError(t, err)
@@ -145,11 +145,11 @@ func (c *dispatchClock) advance(d time.Duration) {
 // cancelled, as a store talking to a database does, so that a cancelled pass
 // behaves identically on every store.
 type contextEmailStore struct {
-	notify.Store
-	notify.EmailStore
+	ntfy.Store
+	ntfy.EmailStore
 }
 
-func (s contextEmailStore) RecordEmails(ctx context.Context, record notify.EmailRecord) (int64, error) {
+func (s contextEmailStore) RecordEmails(ctx context.Context, record ntfy.EmailRecord) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -161,12 +161,12 @@ func (s contextEmailStore) RecordEmails(ctx context.Context, record notify.Email
 type dispatchEnv struct {
 	t     *testing.T
 	clock *dispatchClock
-	svc   *notify.Service
+	svc   *ntfy.Service
 
 	mu       sync.Mutex
-	messages []notify.EmailMessage
+	messages []ntfy.EmailMessage
 	errs     []error
-	onSend   func(notify.EmailMessage)
+	onSend   func(ntfy.EmailMessage)
 	seq      int
 }
 
@@ -178,14 +178,14 @@ func newDispatchEnv(t *testing.T, factory EmailFactory) *dispatchEnv {
 	start := base
 	clock.now.Store(&start)
 
-	svc, err := notify.New(contextEmailStore{Store: store, EmailStore: store}, notify.WithClock(clock))
+	svc, err := ntfy.New(contextEmailStore{Store: store, EmailStore: store}, ntfy.WithClock(clock))
 	require.NoError(t, err)
 
 	return &dispatchEnv{t: t, clock: clock, svc: svc}
 }
 
 // publish publishes a notification for a recipient on a subject of its own.
-func (d *dispatchEnv) publish(recipient string) notify.Notification {
+func (d *dispatchEnv) publish(recipient string) ntfy.Notification {
 	d.t.Helper()
 
 	d.mu.Lock()
@@ -193,7 +193,7 @@ func (d *dispatchEnv) publish(recipient string) notify.Notification {
 	id := d.seq
 	d.mu.Unlock()
 
-	result, err := d.svc.Publish(d.t.Context(), notify.Draft{
+	result, err := d.svc.Publish(d.t.Context(), ntfy.Draft{
 		Recipient: recipient, SourceID: fmt.Sprintf("event-%d", id), Subject: fmt.Sprintf("task-%d", id), Kind: "offer",
 	})
 	require.NoError(d.t, err)
@@ -204,10 +204,10 @@ func (d *dispatchEnv) publish(recipient string) notify.Notification {
 
 // dispatcher builds a dispatcher with an owner of its own over the case's
 // service.
-func (d *dispatchEnv) dispatcher(owner string, opts ...notify.EmailOption) *notify.EmailDispatcher {
+func (d *dispatchEnv) dispatcher(owner string, opts ...ntfy.EmailOption) *ntfy.EmailDispatcher {
 	d.t.Helper()
 
-	mailer := notify.MailerFunc(func(_ context.Context, message notify.EmailMessage) error {
+	mailer := ntfy.MailerFunc(func(_ context.Context, message ntfy.EmailMessage) error {
 		d.mu.Lock()
 		d.messages = append(d.messages, message)
 		onSend := d.onSend
@@ -220,17 +220,17 @@ func (d *dispatchEnv) dispatcher(owner string, opts ...notify.EmailOption) *noti
 		return nil
 	})
 
-	book := notify.AddressBookFunc(func(_ context.Context, recipient string) (string, bool, error) {
+	book := ntfy.AddressBookFunc(func(_ context.Context, recipient string) (string, bool, error) {
 		return recipient + "@example.com", true, nil
 	})
 
-	template := notify.EmailTemplateFunc(func(context.Context, notify.EmailBatch) (notify.EmailContent, error) {
-		return notify.EmailContent{Subject: "work for you", TextBody: "see the application"}, nil
+	template := ntfy.EmailTemplateFunc(func(context.Context, ntfy.EmailBatch) (ntfy.EmailContent, error) {
+		return ntfy.EmailContent{Subject: "work for you", TextBody: "see the application"}, nil
 	})
 
-	opts = append([]notify.EmailOption{
-		notify.WithEmailOwner(owner),
-		notify.WithEmailErrorHandler(func(_ context.Context, err error) {
+	opts = append([]ntfy.EmailOption{
+		ntfy.WithEmailOwner(owner),
+		ntfy.WithEmailErrorHandler(func(_ context.Context, err error) {
 			d.mu.Lock()
 			defer d.mu.Unlock()
 
@@ -238,14 +238,14 @@ func (d *dispatchEnv) dispatcher(owner string, opts ...notify.EmailOption) *noti
 		}),
 	}, opts...)
 
-	dispatcher, err := notify.NewEmailDispatcher(d.svc, mailer, book, template, opts...)
+	dispatcher, err := ntfy.NewEmailDispatcher(d.svc, mailer, book, template, opts...)
 	require.NoError(d.t, err)
 
 	return dispatcher
 }
 
 // sent returns the messages sent so far.
-func (d *dispatchEnv) sent() []notify.EmailMessage {
+func (d *dispatchEnv) sent() []ntfy.EmailMessage {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

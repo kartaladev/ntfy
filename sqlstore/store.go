@@ -30,7 +30,7 @@ var documentFiles = map[string]string{
 	sqlkit.SQLite.Name():     "ddl/sqlite.sql",
 }
 
-// Store is a [notify.Store] over a [sqlkit.Executor].
+// Store is a [ntfy.Store] over a [sqlkit.Executor].
 //
 // A Store is safe for concurrent use, and so is using several Stores, in one
 // process or many, over the same tables.
@@ -43,7 +43,7 @@ type Store struct {
 	document string
 }
 
-var _ notify.Store = (*Store)(nil)
+var _ ntfy.Store = (*Store)(nil)
 
 // Option configures a [Store].
 type Option func(*config)
@@ -71,10 +71,10 @@ var plainPrefix = regexp.MustCompile(`^[A-Za-z0-9_]*$`)
 // does, and its dialect must be one this store publishes a schema for:
 // PostgreSQL, MySQL or SQLite. A nil executor, an executor that fails either
 // requirement, or a prefix that is not a plain identifier is a
-// [notify.ConfigurationError].
+// [ntfy.ConfigurationError].
 func New(executor sqlkit.Executor, opts ...Option) (*Store, error) {
 	if executor == nil {
-		return nil, &notify.ConfigurationError{Detail: "sqlstore: an executor is required"}
+		return nil, &ntfy.ConfigurationError{Detail: "sqlstore: an executor is required"}
 	}
 
 	var cfg config
@@ -91,14 +91,14 @@ func New(executor sqlkit.Executor, opts ...Option) (*Store, error) {
 
 	switch {
 	case !isExecer || !isQuerier:
-		return nil, &notify.ConfigurationError{
+		return nil, &ntfy.ConfigurationError{
 			Detail: "sqlstore: the executor must also implement sqlkit.Execer and sqlkit.Querier, " +
 				"as every sqlkit executor module does",
 		}
 	case dialect == nil:
-		return nil, &notify.ConfigurationError{Detail: "sqlstore: the executor has no dialect"}
+		return nil, &ntfy.ConfigurationError{Detail: "sqlstore: the executor has no dialect"}
 	case !plainPrefix.MatchString(cfg.prefix):
-		return nil, &notify.ConfigurationError{
+		return nil, &ntfy.ConfigurationError{
 			Detail: "sqlstore: a table prefix may contain only letters, digits and underscores",
 		}
 	}
@@ -122,7 +122,7 @@ func New(executor sqlkit.Executor, opts ...Option) (*Store, error) {
 func documentFor(dialect sqlkit.Dialect) (string, error) {
 	file, ok := documentFiles[dialect.Name()]
 	if !ok {
-		return "", &notify.ConfigurationError{
+		return "", &ntfy.ConfigurationError{
 			Detail: "sqlstore: no schema is published for the " + dialect.Name() +
 				" dialect; PostgreSQL, MySQL and SQLite are supported",
 		}
@@ -130,7 +130,7 @@ func documentFor(dialect sqlkit.Dialect) (string, error) {
 
 	raw, err := documents.ReadFile(file)
 	if err != nil {
-		return "", &notify.ConfigurationError{Detail: "sqlstore: read the " + dialect.Name() + " schema: " + err.Error()}
+		return "", &ntfy.ConfigurationError{Detail: "sqlstore: read the " + dialect.Name() + " schema: " + err.Error()}
 	}
 
 	return string(raw), nil

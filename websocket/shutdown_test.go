@@ -25,10 +25,10 @@ import (
 func TestShutdownClosesConnectionsAsGoingAway(t *testing.T) {
 	t.Parallel()
 
-	svc, err := notify.New(notify.NewMemoryStore())
+	svc, err := ntfy.New(ntfy.NewMemoryStore())
 	require.NoError(t, err)
 
-	hub, err := notify.NewHub(svc.Broadcaster(), notify.WithMaxStreamsPerRecipient(1))
+	hub, err := ntfy.NewHub(svc.Broadcaster(), ntfy.WithMaxStreamsPerRecipient(1))
 	require.NoError(t, err)
 
 	runHub(t, hub)

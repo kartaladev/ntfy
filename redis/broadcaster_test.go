@@ -12,8 +12,8 @@ import (
 	"github.com/kartaladev/ntfy/redis"
 )
 
-// The broadcaster is a notify.Broadcaster.
-var _ notify.Broadcaster = (*redis.Broadcaster)(nil)
+// The broadcaster is a ntfy.Broadcaster.
+var _ ntfy.Broadcaster = (*redis.Broadcaster)(nil)
 
 func TestNewBroadcaster(t *testing.T) {
 	t.Parallel()

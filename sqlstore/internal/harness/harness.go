@@ -89,8 +89,8 @@ func NewStore(t *testing.T, executor sqlkit.Executor) *sqlstore.Store {
 
 // Factory returns a conformance factory building a store over an executor, on
 // freshly migrated tables for every case.
-func Factory(executor sqlkit.Executor) notifytest.Factory {
-	return func(t *testing.T) notify.Store {
+func Factory(executor sqlkit.Executor) ntfytest.Factory {
+	return func(t *testing.T) ntfy.Store {
 		t.Helper()
 
 		return NewStore(t, executor)
@@ -124,8 +124,8 @@ func NewEmailStore(t *testing.T, executor sqlkit.Executor) *sqlstore.Store {
 
 // EmailFactory returns an email conformance factory building a store over an
 // executor, on freshly migrated tables for every case.
-func EmailFactory(executor sqlkit.Executor) notifytest.EmailFactory {
-	return func(t *testing.T) notifytest.EmailStore {
+func EmailFactory(executor sqlkit.Executor) ntfytest.EmailFactory {
+	return func(t *testing.T) ntfytest.EmailStore {
 		t.Helper()
 
 		return NewEmailStore(t, executor)

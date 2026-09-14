@@ -1,8 +1,8 @@
 // Email delivery: the store port, the host ports and the values that cross them.
 //
-//go:generate mockgen -source=email.go -package=notify -destination=email_mock_test.go -typed
+//go:generate mockgen -source=email.go -package=ntfy -destination=email_mock_test.go -typed
 
-package notify
+package ntfy
 
 import (
 	"context"
@@ -77,8 +77,8 @@ const (
 
 // EmailStore records email delivery state, one row per notification.
 //
-// [NewMemoryStore] and notify/sqlstore implement it; a host store may too,
-// provided it passes notifytest.RunEmail. Every method is its own transaction.
+// [NewMemoryStore] and ntfy/sqlstore implement it; a host store may too,
+// provided it passes ntfytest.RunEmail. Every method is its own transaction.
 type EmailStore interface {
 	// ClaimEmails takes a lease on notifications due for email and returns them.
 	// A notification another claim holds is never returned, so two dispatchers

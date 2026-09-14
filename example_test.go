@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"context"
@@ -20,17 +20,17 @@ import (
 // adaptor.HTTPHandler(handler)). See docs/notifications.md for what streams
 // through Fiber's adaptor.
 func ExampleNewHandler() {
-	svc, err := notify.New(notify.NewMemoryStore())
+	svc, err := ntfy.New(ntfy.NewMemoryStore())
 	if err != nil {
 		panic(err)
 	}
 
-	hub, err := notify.NewHub(svc.Broadcaster())
+	hub, err := ntfy.NewHub(svc.Broadcaster())
 	if err != nil {
 		panic(err)
 	}
 
-	handler, err := notify.NewHandler(svc, hub, notify.WithActor(func(r *http.Request) (string, error) {
+	handler, err := ntfy.NewHandler(svc, hub, ntfy.WithActor(func(r *http.Request) (string, error) {
 		return r.Header.Get("X-User"), nil
 	}))
 	if err != nil {
@@ -44,7 +44,7 @@ func ExampleNewHandler() {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	_, err = svc.Publish(context.Background(), notify.Draft{
+	_, err = svc.Publish(context.Background(), ntfy.Draft{
 		Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer", Title: "A task is available",
 	})
 	if err != nil {

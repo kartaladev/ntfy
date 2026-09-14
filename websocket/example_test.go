@@ -25,12 +25,12 @@ func userFromContext(context.Context) string { return "alice" }
 // Fiber is not supported: its adaptor cannot hand over the hijacked connection
 // a WebSocket needs, so Fiber hosts use the server-sent event stream.
 func Example() {
-	svc, err := notify.New(notify.NewMemoryStore())
+	svc, err := ntfy.New(ntfy.NewMemoryStore())
 	if err != nil {
 		panic(err)
 	}
 
-	hub, err := notify.NewHub(svc.Broadcaster())
+	hub, err := ntfy.NewHub(svc.Broadcaster())
 	if err != nil {
 		panic(err)
 	}

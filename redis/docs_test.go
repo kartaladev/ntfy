@@ -12,7 +12,7 @@ import (
 )
 
 // TestTheOperationsGuideMatchesTheBroadcaster keeps
-// notify/docs/realtime-operations.md from drifting away from the Redis
+// docs/realtime-operations.md from drifting away from the Redis
 // broadcaster's defaults.
 func TestTheOperationsGuideMatchesTheBroadcaster(t *testing.T) {
 	t.Parallel()

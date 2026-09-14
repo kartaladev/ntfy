@@ -75,7 +75,7 @@ func TestListenReturnsErrorWhenSubscriptionIsNotConfirmed(t *testing.T) {
 
 			done := make(chan error, 1)
 
-			go func() { done <- b.Listen(ctx, func(notify.Signal) {}, func() { readies.Add(1) }) }()
+			go func() { done <- b.Listen(ctx, func(ntfy.Signal) {}, func() { readies.Add(1) }) }()
 
 			select {
 			case err := <-done:

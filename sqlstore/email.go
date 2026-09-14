@@ -29,7 +29,7 @@ var emailDocumentFiles = map[string]string{
 	sqlkit.SQLite.Name():     "ddl/email/sqlite.sql",
 }
 
-var _ notify.EmailStore = (*Store)(nil)
+var _ ntfy.EmailStore = (*Store)(nil)
 
 // emailSchemaExpectation is what [Store.VerifyEmailSchema] requires, before the
 // table prefix.
@@ -90,14 +90,14 @@ type dueEmail struct {
 	recorded bool
 }
 
-// ClaimEmails implements [notify.EmailStore].
+// ClaimEmails implements [ntfy.EmailStore].
 //
 // It follows the escalation sweep's lease pattern, with no row locking: select
 // the due notifications, insert delivery records for the unrecorded ones while
 // ignoring a record a concurrent claim wrote first, take over lapsed records
 // with an update that repeats the selection's condition, and read back only the
 // records this claim's owner and lease now hold.
-func (s *Store) ClaimEmails(ctx context.Context, claim notify.EmailClaim) ([]notify.EmailCandidate, error) {
+func (s *Store) ClaimEmails(ctx context.Context, claim ntfy.EmailClaim) ([]ntfy.EmailCandidate, error) {
 	if claim.Limit <= 0 {
 		return nil, nil
 	}
@@ -105,7 +105,7 @@ func (s *Store) ClaimEmails(ctx context.Context, claim notify.EmailClaim) ([]not
 	now := sqlkit.NormalizeTime(claim.Now)
 	until := sqlkit.NormalizeTime(now.Add(claim.Lease))
 
-	var claimed []notify.EmailCandidate
+	var claimed []ntfy.EmailCandidate
 
 	err := s.do(ctx, func(ctx context.Context) error {
 		due, err := s.dueEmails(ctx, claim, now)
@@ -148,7 +148,7 @@ func (s *Store) ClaimEmails(ctx context.Context, claim notify.EmailClaim) ([]not
 }
 
 // statusList renders email statuses as bind arguments.
-func statusList(statuses ...notify.EmailStatus) []any {
+func statusList(statuses ...ntfy.EmailStatus) []any {
 	out := make([]any, 0, len(statuses))
 	for _, status := range statuses {
 		out = append(out, string(status))
@@ -161,16 +161,16 @@ func statusList(statuses ...notify.EmailStatus) []any {
 // be claimed: an unleased or lapsed CLAIMED or RETRY record that is due, or a
 // lapsed SENDING record. column qualifies a column name.
 func (s *Store) writeLapsed(w *sqlkit.Writer, column func(string) string, now any) {
-	w.Write("((", column("status"), " IN (", w.BindAll(statusList(notify.EmailStatusClaimed, notify.EmailStatusRetry)...), ")",
+	w.Write("((", column("status"), " IN (", w.BindAll(statusList(ntfy.EmailStatusClaimed, ntfy.EmailStatusRetry)...), ")",
 		" AND (", column("lease_until"), " IS NULL OR ", column("lease_until"), " <= ", w.Bind(now), ")",
 		" AND (", column("next_attempt_at"), " IS NULL OR ", column("next_attempt_at"), " <= ", w.Bind(now), "))",
-		" OR (", column("status"), " = ", w.Bind(string(notify.EmailStatusSending)),
+		" OR (", column("status"), " = ", w.Bind(string(ntfy.EmailStatusSending)),
 		" AND (", column("lease_until"), " IS NULL OR ", column("lease_until"), " <= ", w.Bind(now), ")))")
 }
 
 // dueEmails selects, oldest first, up to the claim's limit of notifications due
 // for email.
-func (s *Store) dueEmails(ctx context.Context, claim notify.EmailClaim, now time.Time) ([]dueEmail, error) {
+func (s *Store) dueEmails(ctx context.Context, claim ntfy.EmailClaim, now time.Time) ([]dueEmail, error) {
 	n := func(name string) string { return "n." + s.quote(name) }
 	d := func(name string) string { return "d." + s.quote(name) }
 
@@ -179,7 +179,7 @@ func (s *Store) dueEmails(ctx context.Context, claim notify.EmailClaim, now time
 	createdFrom := sqlkit.NormalizeTime(claim.CreatedFrom)
 
 	qualifies := func(w *sqlkit.Writer) {
-		w.Write(n("state"), " = ", w.Bind(string(notify.StateActive)),
+		w.Write(n("state"), " = ", w.Bind(string(ntfy.StateActive)),
 			" AND ", n("created_at"), " <= ", w.Bind(sqlkit.EncodeTime(s.dialect, &createdUntil)),
 			" AND ", n("created_at"), " >= ", w.Bind(sqlkit.EncodeTime(s.dialect, &createdFrom)))
 	}
@@ -189,9 +189,9 @@ func (s *Store) dueEmails(ctx context.Context, claim notify.EmailClaim, now time
 		" FROM ", s.notificationsTable(), " n LEFT JOIN ", s.emailTable(), " d ON ", d("notification_id"), " = ", n("id"),
 		" WHERE (", d("notification_id"), " IS NULL AND ")
 	qualifies(w)
-	w.Write(") OR (", d("status"), " = ", w.Bind(string(notify.EmailStatusSending)), " AND ")
+	w.Write(") OR (", d("status"), " = ", w.Bind(string(ntfy.EmailStatusSending)), " AND ")
 	s.writeLapsed(w, d, instant)
-	w.Write(") OR (", d("status"), " <> ", w.Bind(string(notify.EmailStatusSending)), " AND ")
+	w.Write(") OR (", d("status"), " <> ", w.Bind(string(ntfy.EmailStatusSending)), " AND ")
 	s.writeLapsed(w, d, instant)
 	w.Write(" AND ")
 	qualifies(w)
@@ -215,7 +215,7 @@ func (s *Store) insertDeliveries(ctx context.Context, ids []string, owner string
 	for _, chunk := range chunks(ids, chunkSize) {
 		w := sqlkit.NewWriter(s.dialect)
 		w.Write("INSERT INTO ", s.emailTable(), " (", s.columnList(columns...), ") SELECT ",
-			s.quote("id"), ", ", s.quote("recipient"), ", ", w.Bind(string(notify.EmailStatusClaimed)), ", ",
+			s.quote("id"), ", ", s.quote("recipient"), ", ", w.Bind(string(ntfy.EmailStatusClaimed)), ", ",
 			w.Bind(owner), ", ", w.Bind(sqlkit.EncodeTime(s.dialect, &until)), ", 0, ",
 			w.Bind(sqlkit.EncodeTime(s.dialect, &now)),
 			" FROM ", s.notificationsTable(), " WHERE ", s.quote("id"), " IN (", w.BindAll(anys(chunk)...), ")")
@@ -247,8 +247,8 @@ func (s *Store) takeOverDeliveries(ctx context.Context, ids []string, owner stri
 	for _, chunk := range chunks(ids, chunkSize) {
 		w := sqlkit.NewWriter(s.dialect)
 		w.Write("UPDATE ", s.emailTable(), " SET ",
-			status, " = CASE WHEN ", status, " = ", w.Bind(string(notify.EmailStatusSending)),
-			" THEN ", status, " ELSE ", w.Bind(string(notify.EmailStatusClaimed)), " END, ",
+			status, " = CASE WHEN ", status, " = ", w.Bind(string(ntfy.EmailStatusSending)),
+			" THEN ", status, " ELSE ", w.Bind(string(ntfy.EmailStatusClaimed)), " END, ",
 			s.quote("owner"), " = ", w.Bind(owner), ", ",
 			s.quote("lease_until"), " = ", w.Bind(sqlkit.EncodeTime(s.dialect, &until)), ", ",
 			s.quote("updated_at"), " = ", w.Bind(sqlkit.EncodeTime(s.dialect, &now)),
@@ -265,8 +265,8 @@ func (s *Store) takeOverDeliveries(ctx context.Context, ids []string, owner stri
 
 // claimedEmails reads back the notifications among ids whose delivery records
 // owner now holds under this claim's lease, oldest first.
-func (s *Store) claimedEmails(ctx context.Context, owner string, until time.Time, ids []string) ([]notify.EmailCandidate, error) {
-	var out []notify.EmailCandidate
+func (s *Store) claimedEmails(ctx context.Context, owner string, until time.Time, ids []string) ([]ntfy.EmailCandidate, error) {
+	var out []ntfy.EmailCandidate
 
 	columns := make([]string, 0, len(notificationColumns)+3)
 	for _, column := range notificationColumns {
@@ -304,9 +304,9 @@ func (s *Store) claimedEmails(ctx context.Context, owner string, until time.Time
 				var dec decoder
 
 				rest := values[len(notificationColumns):]
-				candidate := notify.EmailCandidate{
+				candidate := ntfy.EmailCandidate{
 					Notification: n,
-					Status:       notify.EmailStatus(dec.text(rest[0])),
+					Status:       ntfy.EmailStatus(dec.text(rest[0])),
 					BatchID:      dec.text(rest[1]),
 					Attempts:     int(dec.integer(rest[2])),
 				}
@@ -325,7 +325,7 @@ func (s *Store) claimedEmails(ctx context.Context, owner string, until time.Time
 		}
 	}
 
-	slices.SortFunc(out, func(a, b notify.EmailCandidate) int {
+	slices.SortFunc(out, func(a, b ntfy.EmailCandidate) int {
 		if c := a.Notification.CreatedAt.Compare(b.Notification.CreatedAt); c != 0 {
 			return c
 		}
@@ -336,9 +336,9 @@ func (s *Store) claimedEmails(ctx context.Context, owner string, until time.Time
 	return out, nil
 }
 
-// RecordEmails implements [notify.EmailStore]. It changes only the records
+// RecordEmails implements [ntfy.EmailStore]. It changes only the records
 // record.Owner still holds.
-func (s *Store) RecordEmails(ctx context.Context, record notify.EmailRecord) (int64, error) {
+func (s *Store) RecordEmails(ctx context.Context, record ntfy.EmailRecord) (int64, error) {
 	ids := slices.Compact(slices.Sorted(slices.Values(record.IDs)))
 	if len(ids) == 0 {
 		return 0, nil
@@ -358,7 +358,7 @@ func (s *Store) RecordEmails(ctx context.Context, record notify.EmailRecord) (in
 
 			var next any
 
-			if record.Status == notify.EmailStatusRetry && record.NextAttemptAt != nil {
+			if record.Status == ntfy.EmailStatusRetry && record.NextAttemptAt != nil {
 				due := sqlkit.NormalizeTime(*record.NextAttemptAt)
 				next = sqlkit.EncodeTime(s.dialect, &due)
 			}
@@ -377,11 +377,11 @@ func (s *Store) RecordEmails(ctx context.Context, record notify.EmailRecord) (in
 				w.Write(", ", s.quote("attempts"), " = ", s.quote("attempts"), " + 1")
 			}
 
-			if record.Status == notify.EmailStatusSent {
+			if record.Status == ntfy.EmailStatusSent {
 				w.Write(", ", s.quote("sent_at"), " = ", w.Bind(instant))
 			}
 
-			if record.Status != notify.EmailStatusSending {
+			if record.Status != ntfy.EmailStatusSending {
 				w.Write(", ", s.quote("owner"), " = NULL, ", s.quote("lease_until"), " = NULL")
 			}
 
@@ -405,7 +405,7 @@ func (s *Store) RecordEmails(ctx context.Context, record notify.EmailRecord) (in
 	return changed, nil
 }
 
-// PurgeEmailRecords implements [notify.EmailStore]. It selects orphaned records
+// PurgeEmailRecords implements [ntfy.EmailStore]. It selects orphaned records
 // and then deletes them by identifier, re-checking that each is still orphaned.
 func (s *Store) PurgeEmailRecords(ctx context.Context, limit int) (int64, error) {
 	if limit <= 0 {

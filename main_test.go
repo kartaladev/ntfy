@@ -1,4 +1,4 @@
-package notify_test
+package ntfy_test
 
 import (
 	"testing"

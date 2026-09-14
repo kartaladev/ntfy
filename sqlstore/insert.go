@@ -10,18 +10,18 @@ import (
 	"github.com/kartaladev/sqlkit"
 )
 
-// Insert implements [notify.Store].
+// Insert implements [ntfy.Store].
 //
 // It locks the subject's '*' watermark row first, so that every publish and
 // close for the subject serialises on it without SELECT ... FOR UPDATE, and then
 // decides each notification in the order the memory store does: suppression,
 // coalescing, then idempotency.
-func (s *Store) Insert(ctx context.Context, subject string, insertions []notify.Insertion) (notify.InsertResult, error) {
+func (s *Store) Insert(ctx context.Context, subject string, insertions []ntfy.Insertion) (ntfy.InsertResult, error) {
 	if len(insertions) == 0 {
-		return notify.InsertResult{}, nil
+		return ntfy.InsertResult{}, nil
 	}
 
-	var result notify.InsertResult
+	var result ntfy.InsertResult
 
 	err := s.do(ctx, func(ctx context.Context) error {
 		if err := s.ensureWatermark(ctx, subject, allKinds, insertions[0].Notification.CreatedAt); err != nil {
@@ -35,7 +35,7 @@ func (s *Store) Insert(ctx context.Context, subject string, insertions []notify.
 		return err
 	})
 	if err != nil {
-		return notify.InsertResult{}, err
+		return ntfy.InsertResult{}, err
 	}
 
 	return result, nil
@@ -55,25 +55,25 @@ func (s *Store) ensureWatermark(ctx context.Context, subject, kind string, at ti
 
 // insert decides and writes notifications for a subject whose watermark row
 // the transaction already holds.
-func (s *Store) insert(ctx context.Context, subject string, insertions []notify.Insertion) (notify.InsertResult, error) {
+func (s *Store) insert(ctx context.Context, subject string, insertions []ntfy.Insertion) (ntfy.InsertResult, error) {
 	floors, err := s.floors(ctx, subject, insertions)
 	if err != nil {
-		return notify.InsertResult{}, err
+		return ntfy.InsertResult{}, err
 	}
 
 	open, err := s.openKinds(ctx, subject, insertions)
 	if err != nil {
-		return notify.InsertResult{}, err
+		return ntfy.InsertResult{}, err
 	}
 
 	sources, err := s.existingSources(ctx, insertions)
 	if err != nil {
-		return notify.InsertResult{}, err
+		return ntfy.InsertResult{}, err
 	}
 
 	var (
-		result   notify.InsertResult
-		accepted []notify.Notification
+		result   ntfy.InsertResult
+		accepted []ntfy.Notification
 	)
 
 	for _, insertion := range insertions {
@@ -107,7 +107,7 @@ func (s *Store) insert(ctx context.Context, subject string, insertions []notify.
 
 	created, err := s.writeNotifications(ctx, accepted)
 	if err != nil {
-		return notify.InsertResult{}, err
+		return ntfy.InsertResult{}, err
 	}
 
 	for _, n := range accepted {
@@ -140,7 +140,7 @@ func floorFor(floors map[string]int64, kind string) int64 {
 }
 
 // floors reads a subject's close records for every kind the insertions carry.
-func (s *Store) floors(ctx context.Context, subject string, insertions []notify.Insertion) (map[string]int64, error) {
+func (s *Store) floors(ctx context.Context, subject string, insertions []ntfy.Insertion) (map[string]int64, error) {
 	kinds := []string{allKinds}
 	for _, insertion := range insertions {
 		if !slices.Contains(kinds, insertion.Notification.Kind) {
@@ -187,10 +187,10 @@ func (s *Store) floors(ctx context.Context, subject string, insertions []notify.
 
 // openKinds reads which coalescing insertions' recipients already have an
 // ACTIVE or READ notification of their kind on the subject.
-func (s *Store) openKinds(ctx context.Context, subject string, insertions []notify.Insertion) (map[string]bool, error) {
+func (s *Store) openKinds(ctx context.Context, subject string, insertions []ntfy.Insertion) (map[string]bool, error) {
 	open := make(map[string]bool)
 
-	var coalescing []notify.Insertion
+	var coalescing []ntfy.Insertion
 
 	for _, insertion := range insertions {
 		if insertion.Coalesce {
@@ -209,7 +209,7 @@ func (s *Store) openKinds(ctx context.Context, subject string, insertions []noti
 		w := sqlkit.NewWriter(s.dialect)
 		w.Write("SELECT ", s.columnList("recipient", "kind"), " FROM ", s.notificationsTable(),
 			" WHERE ", s.quote("subject"), " = ", w.Bind(subject),
-			" AND ", s.quote("state"), " <> ", w.Bind(string(notify.StateClosed)),
+			" AND ", s.quote("state"), " <> ", w.Bind(string(ntfy.StateClosed)),
 			" AND ", s.quote("recipient"), " IN (", w.BindAll(recipients...), ")",
 			" AND ", s.quote("kind"), " IN (", w.BindAll(kinds...), ")")
 
@@ -226,7 +226,7 @@ func (s *Store) openKinds(ctx context.Context, subject string, insertions []noti
 // existingSources reads which insertions' source and recipient already have a
 // notification. Each chunk binds the sources and recipients of its own
 // insertions, which covers every insertion's own pair.
-func (s *Store) existingSources(ctx context.Context, insertions []notify.Insertion) (map[string]bool, error) {
+func (s *Store) existingSources(ctx context.Context, insertions []ntfy.Insertion) (map[string]bool, error) {
 	existing := make(map[string]bool)
 
 	for _, chunk := range chunks(insertions, chunkSize) {
@@ -254,7 +254,7 @@ func (s *Store) existingSources(ctx context.Context, insertions []notify.Inserti
 
 // writeNotifications inserts notifications, skipping any whose source and
 // recipient already have one, and reports which identifiers were written.
-func (s *Store) writeNotifications(ctx context.Context, notifications []notify.Notification) (map[string]bool, error) {
+func (s *Store) writeNotifications(ctx context.Context, notifications []ntfy.Notification) (map[string]bool, error) {
 	written := make(map[string]bool, len(notifications))
 
 	// A row binds one value per column; keep a statement's binds near chunkSize.

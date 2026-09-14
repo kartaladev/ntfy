@@ -1,16 +1,16 @@
 ## 1. Import from hmntsk (D1, D2, D5)
 
-- [ ] 1.1 Record hmntsk's committed `main` HEAD, and confirm `git -C ../hmntsk diff --quiet <commit> -- notify sqlkit` is clean. Verify: the hash is noted for the import commit and `pkg/sqlkit/SOURCE`.
-- [ ] 1.2 Extract `notify/` with `git archive <commit>` into the repository root (`notify/*` → `./`, `notify/notifytest` → `ntfytest/`). Verify: the extracted file list matches `git -C ../hmntsk ls-tree -r --name-only <commit> notify` after the path mapping.
-- [ ] 1.3 Extract `sqlkit/` with `git archive <commit>` into `pkg/sqlkit/`, apply only the `github.com/kartaladev/hmntsk/sqlkit` → `github.com/kartaladev/sqlkit` rewrite, and add `pkg/sqlkit/README.md` and `pkg/sqlkit/SOURCE`. Verify: `grep -r 'kartaladev/hmntsk' pkg/sqlkit` finds nothing.
-- [ ] 1.4 Rewrite ntfy import paths and module lines (`github.com/kartaladev/hmntsk/notify` → `github.com/kartaladev/ntfy`, `.../notifytest` → `.../ntfytest`, `hmntsk/sqlkit` → `kartaladev/sqlkit`), and update the `go.mod` comments that mention hmntsk's go.work. Verify: `grep -rn 'kartaladev/hmntsk' --include='*.go' --include=go.mod .` finds nothing.
-- [ ] 1.5 Create `go.work` listing the six ntfy modules and the five `pkg/sqlkit` modules. Verify: `go build ./...` succeeds in every module, and `go test -count=1 ./...` passes in the root module while the package is still named `notify`.
-- [ ] 1.6 Commit the import as one commit citing the hmntsk hash, with no other change mixed in. Verify: `git show --stat HEAD` contains only imported files, `go.work` and the rewrites.
+- [x] 1.1 Record hmntsk's committed `main` HEAD, and confirm `git -C ../hmntsk diff --quiet <commit> -- notify sqlkit` is clean. Verify: the hash is noted for the import commit and `pkg/sqlkit/SOURCE`.
+- [x] 1.2 Extract `notify/` with `git archive <commit>` into the repository root (`notify/*` → `./`, `notify/notifytest` → `ntfytest/`). Verify: the extracted file list matches `git -C ../hmntsk ls-tree -r --name-only <commit> notify` after the path mapping.
+- [x] 1.3 Extract `sqlkit/` with `git archive <commit>` into `pkg/sqlkit/`, apply only the `github.com/kartaladev/hmntsk/sqlkit` → `github.com/kartaladev/sqlkit` rewrite, and add `pkg/sqlkit/README.md` and `pkg/sqlkit/SOURCE`. Verify: `grep -r 'kartaladev/hmntsk' pkg/sqlkit` finds nothing.
+- [x] 1.4 Rewrite ntfy import paths and module lines (`github.com/kartaladev/hmntsk/notify` → `github.com/kartaladev/ntfy`, `.../notifytest` → `.../ntfytest`, `hmntsk/sqlkit` → `kartaladev/sqlkit`), and update the `go.mod` comments that mention hmntsk's go.work. Verify: `grep -rn 'kartaladev/hmntsk' --include='*.go' --include=go.mod .` finds nothing.
+- [x] 1.5 Create `go.work` listing the six ntfy modules and the five `pkg/sqlkit` modules. Verify: `go build ./...` succeeds in every module, and `go test -count=1 ./...` passes in the root module while the package is still named `notify`.
+- [x] 1.6 Commit the import as one commit citing the hmntsk hash, with no other change mixed in. Verify: `git show --stat HEAD` contains only imported files, `go.work` and the rewrites.
 
 ## 2. Rename the package (D3), test-first
 
-- [ ] 2.1 Rename `package notify`/`notify_test` to `ntfy`/`ntfy_test` and `notifytest` to `ntfytest` with gopls, together with every qualifier in the adapters and tests. Verify: `go vet ./...` passes in every module, and `go test -count=1 ./...` passes in the root, `ntfytest`, `websocket`, `redis`, `nats` and `sqlstore` (unit only).
-- [ ] 2.2 Update doc links (`[notify.X]` → `[ntfy.X]`) and prose or error details that name the package (for example "pass notify.AllowAll", "notify/sqlstore"). Verify: gopls reports no broken doc links, and `grep -rnw 'notify' --include='*.go' .` shows only the English verb.
+- [x] 2.1 Rename `package notify`/`notify_test` to `ntfy`/`ntfy_test` and `notifytest` to `ntfytest` with gopls, together with every qualifier in the adapters and tests. Verify: `go vet ./...` passes in every module, and `go test -count=1 ./...` passes in the root, `ntfytest`, `websocket`, `redis`, `nats` and `sqlstore` (unit only).
+- [x] 2.2 Update doc links (`[notify.X]` → `[ntfy.X]`) and prose or error details that name the package (for example "pass notify.AllowAll", "notify/sqlstore"). Verify: gopls reports no broken doc links, and `grep -rnw 'notify' --include='*.go' .` shows only the English verb.
 
 ## 3. Rename storage and wire names (D4, spec `ntfy-modules`), test-first
 

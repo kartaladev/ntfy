@@ -1,8 +1,8 @@
 // The storage port and the requests and results that cross it.
 //
-//go:generate mockgen -source=store.go -package=notify -destination=store_mock_test.go -typed
+//go:generate mockgen -source=store.go -package=ntfy -destination=store_mock_test.go -typed
 
-package notify
+package ntfy
 
 import (
 	"context"
@@ -17,8 +17,8 @@ import (
 )
 
 // Store is where notifications live. The default is [NewMemoryStore];
-// notify/sqlstore stores them in PostgreSQL, MySQL or SQLite; a host may supply
-// its own, provided it passes the notify/notifytest conformance suite.
+// ntfy/sqlstore stores them in PostgreSQL, MySQL or SQLite; a host may supply
+// its own, provided it passes the ntfytest conformance suite.
 //
 // Every method is its own transaction, and never joins a transaction the caller
 // holds for other data. Callers are the [Service] and the [Pruner]: requests

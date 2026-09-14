@@ -19,16 +19,16 @@ func someActor(*http.Request) (string, error) { return "alice", nil }
 func TestNewHandler(t *testing.T) {
 	t.Parallel()
 
-	svc, err := notify.New(notify.NewMemoryStore())
+	svc, err := ntfy.New(ntfy.NewMemoryStore())
 	require.NoError(t, err)
 
-	hub, err := notify.NewHub(svc.Broadcaster())
+	hub, err := ntfy.NewHub(svc.Broadcaster())
 	require.NoError(t, err)
 
 	type testCase struct {
 		name   string
-		svc    *notify.Service
-		hub    *notify.Hub
+		svc    *ntfy.Service
+		hub    *ntfy.Hub
 		opts   []websocket.Option
 		assert func(t *testing.T, handler *websocket.Handler, err error)
 	}
@@ -36,7 +36,7 @@ func TestNewHandler(t *testing.T) {
 	configurationError := func(t *testing.T, handler *websocket.Handler, err error) {
 		t.Helper()
 
-		require.ErrorIs(t, err, notify.ErrConfiguration)
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
 		assert.Nil(t, handler)
 	}
 
@@ -64,7 +64,7 @@ func TestNewHandler(t *testing.T) {
 			svc:  svc, hub: hub,
 			opts: []websocket.Option{
 				websocket.WithActor(someActor),
-				websocket.WithSubscriptionAuthorizer(notify.AllowAll),
+				websocket.WithSubscriptionAuthorizer(ntfy.AllowAll),
 				websocket.WithOriginPatterns("app.example.com"),
 				websocket.WithReadLimit(1024),
 				websocket.WithPingInterval(time.Second),

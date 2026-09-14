@@ -141,7 +141,7 @@ func nullable(value string) any {
 
 // encode renders a notification as bind arguments, in notificationColumns
 // order.
-func (s *Store) encode(n notify.Notification) ([]any, error) {
+func (s *Store) encode(n ntfy.Notification) ([]any, error) {
 	var links any
 
 	if len(n.Links) > 0 {
@@ -232,7 +232,7 @@ func (d *decoder) links(value any) map[string]string {
 }
 
 // scanNotification reads one row selected with notificationColumns.
-func scanNotification(rows sqlkit.Rows) (notify.Notification, error) {
+func scanNotification(rows sqlkit.Rows) (ntfy.Notification, error) {
 	values := make([]any, len(notificationColumns))
 	dest := make([]any, len(values))
 
@@ -241,24 +241,24 @@ func scanNotification(rows sqlkit.Rows) (notify.Notification, error) {
 	}
 
 	if err := rows.Scan(dest...); err != nil {
-		return notify.Notification{}, fmt.Errorf("sqlstore: scan a notification: %w", err)
+		return ntfy.Notification{}, fmt.Errorf("sqlstore: scan a notification: %w", err)
 	}
 
 	return decodeNotification(values)
 }
 
 // decodeNotification reads column values selected with notificationColumns.
-func decodeNotification(values []any) (notify.Notification, error) {
+func decodeNotification(values []any) (ntfy.Notification, error) {
 	var d decoder
 
-	n := notify.Notification{
+	n := ntfy.Notification{
 		ID:             d.text(values[0]),
 		Recipient:      d.text(values[1]),
 		SourceID:       d.text(values[2]),
 		Subject:        d.text(values[3]),
 		SubjectVersion: d.integer(values[4]),
 		Kind:           d.text(values[5]),
-		State:          notify.State(d.text(values[6])),
+		State:          ntfy.State(d.text(values[6])),
 		ClosedReason:   d.text(values[7]),
 		Title:          d.text(values[8]),
 		Links:          d.links(values[9]),
@@ -273,15 +273,15 @@ func decodeNotification(values []any) (notify.Notification, error) {
 	}
 
 	if d.err != nil {
-		return notify.Notification{}, fmt.Errorf("sqlstore: decode a notification: %w", d.err)
+		return ntfy.Notification{}, fmt.Errorf("sqlstore: decode a notification: %w", d.err)
 	}
 
 	return n, nil
 }
 
 // queryNotifications runs a statement selecting notificationColumns.
-func (s *Store) queryNotifications(ctx context.Context, statement sqlkit.Statement) ([]notify.Notification, error) {
-	var out []notify.Notification
+func (s *Store) queryNotifications(ctx context.Context, statement sqlkit.Statement) ([]ntfy.Notification, error) {
+	var out []ntfy.Notification
 
 	err := s.executor.Query(ctx, statement, func(rows sqlkit.Rows) error {
 		for rows.Next() {

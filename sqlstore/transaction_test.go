@@ -35,9 +35,9 @@ func TestNotificationWritesDoNotJoinTheCallersTransaction(t *testing.T) {
 
 	created := time.Date(2026, 9, 14, 8, 30, 0, 0, time.UTC)
 
-	_, err = store.Insert(callerCtx, "task-1", []notify.Insertion{{Notification: notify.Notification{
+	_, err = store.Insert(callerCtx, "task-1", []ntfy.Insertion{{Notification: ntfy.Notification{
 		ID: "n-1", Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer",
-		State: notify.StateActive, CreatedAt: created,
+		State: ntfy.StateActive, CreatedAt: created,
 	}}})
 	require.NoError(t, err)
 
@@ -45,5 +45,5 @@ func TestNotificationWritesDoNotJoinTheCallersTransaction(t *testing.T) {
 
 	got, err := store.Get(t.Context(), "alice", "n-1")
 	require.NoError(t, err, "the notification survives the caller's rollback")
-	assert.Equal(t, notify.StateActive, got.State)
+	assert.Equal(t, ntfy.StateActive, got.State)
 }

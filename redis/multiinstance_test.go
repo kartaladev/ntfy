@@ -24,7 +24,7 @@ import (
 // instance is one application instance: its own client, store, service and
 // hub, sharing a broker with the others.
 type instance struct {
-	svc          *notify.Service
+	svc          *ntfy.Service
 	url          string
 	signalErrors chan error
 	published    atomic.Int64
@@ -39,13 +39,13 @@ func startInstance(t *testing.T, broker *goredis.Client, channel string, opts ..
 
 	var err error
 
-	in.svc, err = notify.New(notify.NewMemoryStore(),
-		notify.WithBroadcaster(newBroadcaster(t, broker, channel, opts...)),
-		notify.WithSignalErrorHandler(func(_ context.Context, err error) { in.signalErrors <- err }),
+	in.svc, err = ntfy.New(ntfy.NewMemoryStore(),
+		ntfy.WithBroadcaster(newBroadcaster(t, broker, channel, opts...)),
+		ntfy.WithSignalErrorHandler(func(_ context.Context, err error) { in.signalErrors <- err }),
 	)
 	require.NoError(t, err)
 
-	hub, err := notify.NewHub(in.svc.Broadcaster())
+	hub, err := ntfy.NewHub(in.svc.Broadcaster())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,8 +64,8 @@ func startInstance(t *testing.T, broker *goredis.Client, channel string, opts ..
 		<-done
 	})
 
-	handler, err := notify.NewHandler(in.svc, hub,
-		notify.WithActor(func(r *http.Request) (string, error) { return r.Header.Get("X-Actor"), nil }))
+	handler, err := ntfy.NewHandler(in.svc, hub,
+		ntfy.WithActor(func(r *http.Request) (string, error) { return r.Header.Get("X-Actor"), nil }))
 	require.NoError(t, err)
 
 	server := httptest.NewServer(handler)
@@ -88,7 +88,7 @@ func startInstance(t *testing.T, broker *goredis.Client, channel string, opts ..
 func (in *instance) publish(t *testing.T, recipient string) error {
 	t.Helper()
 
-	_, err := in.svc.Publish(t.Context(), notify.Draft{
+	_, err := in.svc.Publish(t.Context(), ntfy.Draft{
 		Recipient: recipient,
 		SourceID:  fmt.Sprintf("event-%d", in.published.Add(1)),
 		Subject:   "task-42",

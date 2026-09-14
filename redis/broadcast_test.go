@@ -15,14 +15,14 @@ import (
 
 // signalsFor builds n signals at distinct microsecond instants, as the codec
 // writes them, so that a decoded message compares equal to what was sent.
-func signalsFor(n int) []notify.Signal {
+func signalsFor(n int) []ntfy.Signal {
 	base := time.Date(2026, 9, 14, 8, 30, 0, 0, time.UTC)
-	signals := make([]notify.Signal, n)
+	signals := make([]ntfy.Signal, n)
 
 	for i := range signals {
-		signals[i] = notify.Signal{
+		signals[i] = ntfy.Signal{
 			Recipient: fmt.Sprintf("user-%04d", i),
-			Change:    notify.ChangeCreated,
+			Change:    ntfy.ChangeCreated,
 			At:        base.Add(time.Duration(i) * time.Microsecond),
 		}
 	}
@@ -42,31 +42,31 @@ func TestBroadcast(t *testing.T) {
 	type testCase struct {
 		name    string
 		client  goredis.UniversalClient
-		signals []notify.Signal
+		signals []ntfy.Signal
 		// assert receives the messages a raw subscriber saw on the channel, and
 		// how long the broadcast took.
-		assert func(t *testing.T, messages [][]notify.Signal, took time.Duration, err error)
+		assert func(t *testing.T, messages [][]ntfy.Signal, took time.Duration, err error)
 	}
 
 	cases := []testCase{
 		{
-			name:    "one signal is one message in the notify format",
+			name:    "one signal is one message in the ntfy format",
 			client:  client,
 			signals: signalsFor(1),
-			assert: func(t *testing.T, messages [][]notify.Signal, _ time.Duration, err error) {
+			assert: func(t *testing.T, messages [][]ntfy.Signal, _ time.Duration, err error) {
 				require.NoError(t, err)
-				assert.Equal(t, [][]notify.Signal{signalsFor(1)}, messages)
+				assert.Equal(t, [][]ntfy.Signal{signalsFor(1)}, messages)
 			},
 		},
 		{
 			name:    "a broadcast larger than one message is split at the maximum",
 			client:  client,
 			signals: signalsFor(2*redis.MaxSignalsPerMessage + 1),
-			assert: func(t *testing.T, messages [][]notify.Signal, _ time.Duration, err error) {
+			assert: func(t *testing.T, messages [][]ntfy.Signal, _ time.Duration, err error) {
 				require.NoError(t, err)
 
 				all := signalsFor(2*redis.MaxSignalsPerMessage + 1)
-				assert.Equal(t, [][]notify.Signal{
+				assert.Equal(t, [][]ntfy.Signal{
 					all[:redis.MaxSignalsPerMessage],
 					all[redis.MaxSignalsPerMessage : 2*redis.MaxSignalsPerMessage],
 					all[2*redis.MaxSignalsPerMessage:],
@@ -77,7 +77,7 @@ func TestBroadcast(t *testing.T) {
 			name:    "no signals publish nothing",
 			client:  client,
 			signals: nil,
-			assert: func(t *testing.T, messages [][]notify.Signal, _ time.Duration, err error) {
+			assert: func(t *testing.T, messages [][]ntfy.Signal, _ time.Duration, err error) {
 				require.NoError(t, err)
 				assert.Empty(t, messages)
 			},
@@ -86,7 +86,7 @@ func TestBroadcast(t *testing.T) {
 			name:    "an unreachable broker is a publish error within the timeout",
 			client:  unreachable,
 			signals: signalsFor(1),
-			assert: func(t *testing.T, _ [][]notify.Signal, took time.Duration, err error) {
+			assert: func(t *testing.T, _ [][]ntfy.Signal, took time.Duration, err error) {
 				require.ErrorIs(t, err, redis.ErrPublish)
 
 				var publish *redis.PublishError
@@ -120,7 +120,7 @@ func TestBroadcast(t *testing.T) {
 			// sent, so the test reads exactly the broadcast's messages.
 			require.NoError(t, client.Publish(t.Context(), channel, "end").Err())
 
-			var messages [][]notify.Signal
+			var messages [][]ntfy.Signal
 
 			for {
 				msg, receiveErr := subscriber.ReceiveMessage(t.Context())
@@ -130,8 +130,8 @@ func TestBroadcast(t *testing.T) {
 					break
 				}
 
-				decoded, decodeErr := notify.DecodeSignals([]byte(msg.Payload))
-				require.NoError(t, decodeErr, "every message is in the notify signal format")
+				decoded, decodeErr := ntfy.DecodeSignals([]byte(msg.Payload))
+				require.NoError(t, decodeErr, "every message is in the ntfy signal format")
 
 				messages = append(messages, decoded)
 			}
