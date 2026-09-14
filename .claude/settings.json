@@ -1,0 +1,8 @@
+{
+  "enabledPlugins": {
+    "golang-be-crafter@kartala-plugins": true,
+    "cc-skills-golang@kartala-plugins": true,
+    "gopls-lsp@claude-plugins-official": true,
+    "cc-skills-golang@samber": true
+  }
+}
