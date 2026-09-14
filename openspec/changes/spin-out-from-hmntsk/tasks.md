@@ -28,7 +28,7 @@
 - [x] 5.1 Write the `Makefile` with `NTFY_MODULES`, `SQLKIT_COPY_MODULES` and the targets build, lint, fmt, test, test-race, test-integration, tidy, vuln, generate, split-check, sqlkit-copy-check and store-matrix. Verify: `make build test split-check` succeeds.
 - [x] 5.2 Implement `sqlkit-copy-check`: fetch hmntsk at `SOURCE`, apply the path rewrite, diff against `pkg/sqlkit` excluding `go.sum`. Verify: it passes, and fails after a one-character edit to a copy file (edit reverted).
 - [x] 5.3 Port `.golangci.yml` with the ntfy/sqlkit depguard rule and `pkg/sqlkit/**` excluded. Verify: `make lint` passes with no new `//nolint`.
-- [ ] 5.4 Add `.github/workflows/ci.yml` with jobs `lint` (lint, split-check, sqlkit-copy-check), `unit` and the seven-entry `store-matrix` on Go 1.26. Verify: the workflow runs green on a pushed branch.
+- [x] 5.4 Add `.github/workflows/ci.yml` with jobs `lint` (lint, split-check, sqlkit-copy-check), `unit` and the seven-entry `store-matrix` on Go 1.26. Verify: the workflow runs green on a pushed branch.
 - [x] 5.5 Run the full store conformance matrix locally or in CI (stdsql PostgreSQL, MySQL, SQLite; pgx PostgreSQL; GORM PostgreSQL, MySQL, SQLite). Verify: all seven entries pass.
 
 ## 6. Documentation (D9)
