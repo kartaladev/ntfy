@@ -44,6 +44,7 @@ func TestNew(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, sqlkit.SQLite, store.Dialect())
 				assert.Equal(t, []string{sqlstore.NotificationsTable, sqlstore.WatermarksTable}, store.Tables())
+				assert.Equal(t, []string{"ntfy_notifications", "ntfy_watermarks"}, store.Tables(), "the default table names carry the library's name")
 			},
 		},
 		{
@@ -53,6 +54,7 @@ func TestNew(t *testing.T) {
 			assert: func(t *testing.T, store *sqlstore.Store, err error) {
 				require.NoError(t, err)
 				assert.Equal(t, []string{"app_" + sqlstore.NotificationsTable, "app_" + sqlstore.WatermarksTable}, store.Tables())
+				assert.Equal(t, []string{"app_ntfy_notifications", "app_ntfy_watermarks"}, store.Tables())
 			},
 		},
 		{

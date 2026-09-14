@@ -1,4 +1,4 @@
--- SQLite schema for notify's optional email delivery records, 3.35 or later.
+-- SQLite schema for ntfy's optional email delivery records, 3.35 or later.
 --
 -- A host that emails notifications applies this document in addition to the
 -- notification store's own; a host that does not never needs it.
@@ -10,7 +10,7 @@
 --
 -- Instants are TEXT in the one fixed encoding the notification store uses.
 
-CREATE TABLE IF NOT EXISTS "app_notify_email_deliveries" (
+CREATE TABLE IF NOT EXISTS "app_ntfy_email_deliveries" (
     "notification_id"  TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
     "recipient"        TEXT COLLATE BINARY NOT NULL,
     "status"           TEXT COLLATE BINARY NOT NULL,
@@ -25,9 +25,9 @@ CREATE TABLE IF NOT EXISTS "app_notify_email_deliveries" (
 );
 
 -- Finding leases that lapsed.
-CREATE INDEX IF NOT EXISTS "app_notify_email_deliveries_lease_idx"
-    ON "app_notify_email_deliveries" ("status", "lease_until");
+CREATE INDEX IF NOT EXISTS "app_ntfy_email_deliveries_lease_idx"
+    ON "app_ntfy_email_deliveries" ("status", "lease_until");
 
 -- Finding retries that are due.
-CREATE INDEX IF NOT EXISTS "app_notify_email_deliveries_retry_idx"
-    ON "app_notify_email_deliveries" ("status", "next_attempt_at");
+CREATE INDEX IF NOT EXISTS "app_ntfy_email_deliveries_retry_idx"
+    ON "app_ntfy_email_deliveries" ("status", "next_attempt_at");

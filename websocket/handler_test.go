@@ -114,5 +114,5 @@ func TestDefaultReadLimit(t *testing.T) {
 	t.Parallel()
 
 	assert.EqualValues(t, 4096, websocket.DefaultReadLimit)
-	assert.Equal(t, "notify.v1", websocket.Subprotocol)
+	assert.Equal(t, "ntfy.v1", websocket.Subprotocol)
 }

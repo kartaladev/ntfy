@@ -27,7 +27,7 @@ directly, and exists for tests and development only.
 
 ## Tables
 
-### `notify_notifications`
+### `ntfy_notifications`
 
 One row per notification.
 
@@ -49,7 +49,7 @@ One row per notification.
 | `closed_at` | when it was closed | nullable timestamp |
 | `inactive_at` | when it first left `ACTIVE`; the age bound measures from it | nullable timestamp |
 
-### `notify_watermarks`
+### `ntfy_watermarks`
 
 A subject's close records: for each subject and kind, the highest version its
 notifications were closed at, and under kind `*` the highest version every kind
@@ -74,12 +74,12 @@ statement fail; it makes it read the whole table.
 
 | Index | Columns | Serves |
 | --- | --- | --- |
-| `notify_notifications_source_key` (unique) | `source_id`, `recipient` | idempotent publishing |
-| `notify_notifications_recipient_idx` | `recipient`, `created_at`, `id` | a recipient's listing and its keyset paging |
-| `notify_notifications_state_idx` | `recipient`, `state` | counting active notifications; choosing what the count bound deletes |
-| `notify_notifications_subject_idx` | `subject`, `kind`, `state` | closing by subject and kind; coalescing |
-| `notify_notifications_inactive_idx` | `state`, `inactive_at` | the age bound |
-| `notify_watermarks_updated_idx` | `updated_at` | expiring close records |
+| `ntfy_notifications_source_key` (unique) | `source_id`, `recipient` | idempotent publishing |
+| `ntfy_notifications_recipient_idx` | `recipient`, `created_at`, `id` | a recipient's listing and its keyset paging |
+| `ntfy_notifications_state_idx` | `recipient`, `state` | counting active notifications; choosing what the count bound deletes |
+| `ntfy_notifications_subject_idx` | `subject`, `kind`, `state` | closing by subject and kind; coalescing |
+| `ntfy_notifications_inactive_idx` | `state`, `inactive_at` | the age bound |
+| `ntfy_watermarks_updated_idx` | `updated_at` | expiring close records |
 
 ## Dialect choices
 
@@ -107,7 +107,7 @@ prefix.
 - A prefix may contain only letters, digits and underscores; anything else is a
   configuration error from `sqlstore.New`.
 - PostgreSQL truncates identifiers at 63 bytes and MySQL refuses names over 64.
-  The longest index name is `notify_notifications_recipient_idx`, 34 bytes, so
+  The longest index name is `ntfy_notifications_recipient_idx`, 34 bytes, so
   keep a prefix to 29 bytes or fewer.
 
 ## Verifying the schema at startup
@@ -148,5 +148,5 @@ the busy timeout, because SQLite has one writer. Publish after committing.
 ## Rolling back
 
 The schema is additive. To remove it, stop running the pruner, hub and handlers,
-then drop `notify_notifications` and `notify_watermarks`. Nothing else depends on
+then drop `ntfy_notifications` and `ntfy_watermarks`. Nothing else depends on
 them.

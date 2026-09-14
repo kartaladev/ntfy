@@ -1,4 +1,4 @@
--- SQLite schema for the notify notification store, 3.35 or later.
+-- SQLite schema for the ntfy notification store, 3.35 or later.
 --
 -- SQLite has no native timestamp type, so instants are stored as TEXT in one
 -- fixed encoding: UTC, RFC 3339, exactly six fractional digits. That makes
@@ -12,7 +12,7 @@
 -- Table and index names carry the host's configured prefix, applied when this
 -- document is rendered; with no prefix configured they are exactly as written.
 
-CREATE TABLE IF NOT EXISTS "{{PREFIX}}notify_notifications" (
+CREATE TABLE IF NOT EXISTS "{{PREFIX}}ntfy_notifications" (
     "id"               TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
     "recipient"        TEXT COLLATE BINARY NOT NULL,
     "source_id"        TEXT COLLATE BINARY NOT NULL,
@@ -31,29 +31,29 @@ CREATE TABLE IF NOT EXISTS "{{PREFIX}}notify_notifications" (
 );
 
 -- Idempotency: one notification per source and recipient.
-CREATE UNIQUE INDEX IF NOT EXISTS "{{PREFIX}}notify_notifications_source_key"
-    ON "{{PREFIX}}notify_notifications" ("source_id", "recipient");
+CREATE UNIQUE INDEX IF NOT EXISTS "{{PREFIX}}ntfy_notifications_source_key"
+    ON "{{PREFIX}}ntfy_notifications" ("source_id", "recipient");
 
 -- A recipient's listing, newest first, and its keyset paging.
-CREATE INDEX IF NOT EXISTS "{{PREFIX}}notify_notifications_recipient_idx"
-    ON "{{PREFIX}}notify_notifications" ("recipient", "created_at", "id");
+CREATE INDEX IF NOT EXISTS "{{PREFIX}}ntfy_notifications_recipient_idx"
+    ON "{{PREFIX}}ntfy_notifications" ("recipient", "created_at", "id");
 
 -- Counting active notifications, and choosing what the count bound deletes.
-CREATE INDEX IF NOT EXISTS "{{PREFIX}}notify_notifications_state_idx"
-    ON "{{PREFIX}}notify_notifications" ("recipient", "state");
+CREATE INDEX IF NOT EXISTS "{{PREFIX}}ntfy_notifications_state_idx"
+    ON "{{PREFIX}}ntfy_notifications" ("recipient", "state");
 
 -- Closing a subject's notifications by kind, and coalescing.
-CREATE INDEX IF NOT EXISTS "{{PREFIX}}notify_notifications_subject_idx"
-    ON "{{PREFIX}}notify_notifications" ("subject", "kind", "state");
+CREATE INDEX IF NOT EXISTS "{{PREFIX}}ntfy_notifications_subject_idx"
+    ON "{{PREFIX}}ntfy_notifications" ("subject", "kind", "state");
 
 -- The age bound.
-CREATE INDEX IF NOT EXISTS "{{PREFIX}}notify_notifications_inactive_idx"
-    ON "{{PREFIX}}notify_notifications" ("state", "inactive_at");
+CREATE INDEX IF NOT EXISTS "{{PREFIX}}ntfy_notifications_inactive_idx"
+    ON "{{PREFIX}}ntfy_notifications" ("state", "inactive_at");
 
 -- A subject's close records: the highest version closed per kind, and per
 -- every kind under kind '*'. SQLite has one writer, which is what serialises
 -- publishing and closing a subject.
-CREATE TABLE IF NOT EXISTS "{{PREFIX}}notify_watermarks" (
+CREATE TABLE IF NOT EXISTS "{{PREFIX}}ntfy_watermarks" (
     "subject"     TEXT COLLATE BINARY NOT NULL,
     "kind"        TEXT COLLATE BINARY NOT NULL,
     "version"     INTEGER NOT NULL,
@@ -62,5 +62,5 @@ CREATE TABLE IF NOT EXISTS "{{PREFIX}}notify_watermarks" (
 );
 
 -- Expiring close records.
-CREATE INDEX IF NOT EXISTS "{{PREFIX}}notify_watermarks_updated_idx"
-    ON "{{PREFIX}}notify_watermarks" ("updated_at");
+CREATE INDEX IF NOT EXISTS "{{PREFIX}}ntfy_watermarks_updated_idx"
+    ON "{{PREFIX}}ntfy_watermarks" ("updated_at");

@@ -18,7 +18,7 @@ const SignalFormatVersion = 1
 
 // ErrUnknownSignalFormat reports a message in a format version this library does
 // not read. A broadcaster reports it rather than delivering the message.
-var ErrUnknownSignalFormat = errors.New("notify: unknown signal format")
+var ErrUnknownSignalFormat = errors.New("ntfy: unknown signal format")
 
 // signalMessage is the wire format.
 type signalMessage struct {
@@ -46,7 +46,7 @@ func EncodeSignals(signals []Signal) ([]byte, error) {
 
 	encoded, err := json.Marshal(message)
 	if err != nil {
-		return nil, fmt.Errorf("notify: encode signals: %w", err)
+		return nil, fmt.Errorf("ntfy: encode signals: %w", err)
 	}
 
 	return encoded, nil
@@ -58,7 +58,7 @@ func EncodeSignals(signals []Signal) ([]byte, error) {
 func DecodeSignals(data []byte) ([]Signal, error) {
 	var message signalMessage
 	if err := json.Unmarshal(data, &message); err != nil {
-		return nil, fmt.Errorf("notify: decode signals: %w", err)
+		return nil, fmt.Errorf("ntfy: decode signals: %w", err)
 	}
 
 	if message.Version != SignalFormatVersion {

@@ -14,7 +14,7 @@ import (
 // DefaultChannel is the pub/sub channel signals travel on unless [WithChannel]
 // replaces it. It shares nothing with the stream delivery/redis appends durable
 // events to.
-const DefaultChannel = "notify.signals"
+const DefaultChannel = "ntfy.signals"
 
 // DefaultPublishTimeout bounds one publish unless [WithPublishTimeout] replaces
 // it. A broker that has not answered by then is reported as unreachable; the

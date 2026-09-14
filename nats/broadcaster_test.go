@@ -78,11 +78,11 @@ func TestNewBroadcaster(t *testing.T) {
 		{name: "a negative subscribe timeout", conn: conn, opts: []nats.Option{nats.WithSubscribeTimeout(-time.Second)}, assert: configurationError},
 		{name: "no connection", assert: configurationError},
 		{name: "an empty subject", conn: conn, opts: subject(""), assert: configurationError},
-		{name: "a single-token wildcard", conn: conn, opts: subject("notify.*"), assert: configurationError},
-		{name: "a full wildcard", conn: conn, opts: subject("notify.>"), assert: configurationError},
-		{name: "an empty token", conn: conn, opts: subject("notify..signals"), assert: configurationError},
-		{name: "a trailing dot", conn: conn, opts: subject("notify.signals."), assert: configurationError},
-		{name: "whitespace", conn: conn, opts: subject("notify signals"), assert: configurationError},
+		{name: "a single-token wildcard", conn: conn, opts: subject("ntfy.*"), assert: configurationError},
+		{name: "a full wildcard", conn: conn, opts: subject("ntfy.>"), assert: configurationError},
+		{name: "an empty token", conn: conn, opts: subject("ntfy..signals"), assert: configurationError},
+		{name: "a trailing dot", conn: conn, opts: subject("ntfy.signals."), assert: configurationError},
+		{name: "whitespace", conn: conn, opts: subject("ntfy signals"), assert: configurationError},
 	}
 
 	for _, tc := range cases {
@@ -98,7 +98,7 @@ func TestNewBroadcaster(t *testing.T) {
 func TestDefaults(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "notify.signals", nats.DefaultSubject)
+	assert.Equal(t, "ntfy.signals", nats.DefaultSubject)
 	assert.Equal(t, 500, nats.MaxSignalsPerMessage)
 	assert.Equal(t, 5*time.Second, nats.DefaultSubscribeTimeout)
 }

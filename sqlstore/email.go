@@ -15,7 +15,7 @@ import (
 
 // EmailDeliveriesTable holds email delivery state, one row per notification,
 // before any prefix. It exists only where a host applied the email schema.
-const EmailDeliveriesTable = "notify_email_deliveries"
+const EmailDeliveriesTable = "ntfy_email_deliveries"
 
 // emailDocuments holds the published email DDL, one document per dialect.
 //
@@ -40,7 +40,7 @@ var emailSchemaExpectation = sqlkit.SchemaExpectation{
 			"next_attempt_at", "reason", "sent_at", "updated_at",
 		},
 		IdentifierColumns: []string{"notification_id", "recipient", "status", "batch_id", "owner"},
-		Indexes:           []string{"notify_email_deliveries_lease_idx", "notify_email_deliveries_retry_idx"},
+		Indexes:           []string{"ntfy_email_deliveries_lease_idx", "ntfy_email_deliveries_retry_idx"},
 	},
 }
 

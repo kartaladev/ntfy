@@ -406,7 +406,7 @@ func (d *EmailDispatcher) Dispatch(ctx context.Context) (DispatchResult, error) 
 	pass.result.Purged = purged
 
 	if err != nil {
-		d.onError(ctx, fmt.Errorf("notify: purge email records: %w", err))
+		d.onError(ctx, fmt.Errorf("ntfy: purge email records: %w", err))
 	}
 
 	return pass.result, nil
@@ -455,9 +455,9 @@ type emailPass struct {
 // report sends an error, naming the recipient, to the email error handler.
 func (p *emailPass) report(recipient, batch string, err error) {
 	if batch != "" {
-		err = fmt.Errorf("notify: email for %s in batch %s: %w", recipient, batch, err)
+		err = fmt.Errorf("ntfy: email for %s in batch %s: %w", recipient, batch, err)
 	} else {
-		err = fmt.Errorf("notify: email for %s: %w", recipient, err)
+		err = fmt.Errorf("ntfy: email for %s: %w", recipient, err)
 	}
 
 	p.d.onError(p.ctx, err)

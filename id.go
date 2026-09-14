@@ -47,7 +47,7 @@ func (g *UUIDv7Generator) NewID() (string, error) {
 	var buf [16]byte
 
 	if _, err := rand.Read(buf[8:]); err != nil {
-		return "", fmt.Errorf("notify: read randomness for an identifier: %w", err)
+		return "", fmt.Errorf("ntfy: read randomness for an identifier: %w", err)
 	}
 
 	ms, counter := g.tick()

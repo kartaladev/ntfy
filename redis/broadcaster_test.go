@@ -79,7 +79,7 @@ func TestNewBroadcaster(t *testing.T) {
 func TestDefaults(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "notify.signals", redis.DefaultChannel)
+	assert.Equal(t, "ntfy.signals", redis.DefaultChannel)
 	assert.Equal(t, 5*time.Second, redis.DefaultPublishTimeout)
 	assert.Equal(t, 500, redis.MaxSignalsPerMessage)
 }

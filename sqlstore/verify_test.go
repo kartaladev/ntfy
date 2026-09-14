@@ -15,12 +15,12 @@ import (
 
 // The indexes VerifySchema requires, before the table prefix.
 var requiredIndexes = []string{
-	"notify_notifications_source_key",
-	"notify_notifications_recipient_idx",
-	"notify_notifications_state_idx",
-	"notify_notifications_subject_idx",
-	"notify_notifications_inactive_idx",
-	"notify_watermarks_updated_idx",
+	"ntfy_notifications_source_key",
+	"ntfy_notifications_recipient_idx",
+	"ntfy_notifications_state_idx",
+	"ntfy_notifications_subject_idx",
+	"ntfy_notifications_inactive_idx",
+	"ntfy_watermarks_updated_idx",
 }
 
 // prefixOf recovers a store's table prefix from its prefixed tables.
@@ -56,7 +56,7 @@ func dropIndex(t *testing.T, executor sqlkit.Executor, store *sqlstore.Store, in
 
 	if dialect.Name() == sqlkit.MySQL.Name() {
 		table := store.Tables()[0]
-		if strings.HasPrefix(index, "notify_watermarks") {
+		if strings.HasPrefix(index, "ntfy_watermarks") {
 			table = store.Tables()[1]
 		}
 

@@ -16,7 +16,7 @@ import (
 // DefaultSubject is the subject signals travel on unless [WithSubject] replaces
 // it. It shares nothing with the subjects delivery/nats publishes durable
 // events under.
-const DefaultSubject = "notify.signals"
+const DefaultSubject = "ntfy.signals"
 
 // DefaultSubscribeTimeout bounds how long [Broadcaster.Listen] waits for the
 // server to confirm its subscription unless [WithSubscribeTimeout] replaces it.

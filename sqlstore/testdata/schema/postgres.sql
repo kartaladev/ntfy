@@ -1,4 +1,4 @@
--- PostgreSQL schema for the notify notification store.
+-- PostgreSQL schema for the ntfy notification store.
 --
 -- Identifier columns are pinned to the C collation. The default collation
 -- already compares case-sensitively; C is for ordering. A locale-aware
@@ -13,7 +13,7 @@
 -- Table and index names carry the host's configured prefix, applied when this
 -- document is rendered; with no prefix configured they are exactly as written.
 
-CREATE TABLE IF NOT EXISTS "notify_notifications" (
+CREATE TABLE IF NOT EXISTS "ntfy_notifications" (
     "id"               text COLLATE "C" NOT NULL,
     "recipient"        text COLLATE "C" NOT NULL,
     "source_id"        text COLLATE "C" NOT NULL,
@@ -29,40 +29,40 @@ CREATE TABLE IF NOT EXISTS "notify_notifications" (
     "read_at"          timestamptz(6),
     "closed_at"        timestamptz(6),
     "inactive_at"      timestamptz(6),
-    CONSTRAINT "notify_notifications_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "ntfy_notifications_pkey" PRIMARY KEY ("id")
 );
 
 -- Idempotency: one notification per source and recipient.
-CREATE UNIQUE INDEX IF NOT EXISTS "notify_notifications_source_key"
-    ON "notify_notifications" ("source_id", "recipient");
+CREATE UNIQUE INDEX IF NOT EXISTS "ntfy_notifications_source_key"
+    ON "ntfy_notifications" ("source_id", "recipient");
 
 -- A recipient's listing, newest first, and its keyset paging.
-CREATE INDEX IF NOT EXISTS "notify_notifications_recipient_idx"
-    ON "notify_notifications" ("recipient", "created_at", "id");
+CREATE INDEX IF NOT EXISTS "ntfy_notifications_recipient_idx"
+    ON "ntfy_notifications" ("recipient", "created_at", "id");
 
 -- Counting active notifications, and choosing what the count bound deletes.
-CREATE INDEX IF NOT EXISTS "notify_notifications_state_idx"
-    ON "notify_notifications" ("recipient", "state");
+CREATE INDEX IF NOT EXISTS "ntfy_notifications_state_idx"
+    ON "ntfy_notifications" ("recipient", "state");
 
 -- Closing a subject's notifications by kind, and coalescing.
-CREATE INDEX IF NOT EXISTS "notify_notifications_subject_idx"
-    ON "notify_notifications" ("subject", "kind", "state");
+CREATE INDEX IF NOT EXISTS "ntfy_notifications_subject_idx"
+    ON "ntfy_notifications" ("subject", "kind", "state");
 
 -- The age bound.
-CREATE INDEX IF NOT EXISTS "notify_notifications_inactive_idx"
-    ON "notify_notifications" ("state", "inactive_at");
+CREATE INDEX IF NOT EXISTS "ntfy_notifications_inactive_idx"
+    ON "ntfy_notifications" ("state", "inactive_at");
 
 -- A subject's close records: the highest version closed per kind, and per
 -- every kind under kind '*'. Publishing and closing a subject both lock its '*'
 -- row first, which is what serialises them.
-CREATE TABLE IF NOT EXISTS "notify_watermarks" (
+CREATE TABLE IF NOT EXISTS "ntfy_watermarks" (
     "subject"     text COLLATE "C" NOT NULL,
     "kind"        text COLLATE "C" NOT NULL,
     "version"     bigint NOT NULL,
     "updated_at"  timestamptz(6) NOT NULL,
-    CONSTRAINT "notify_watermarks_pkey" PRIMARY KEY ("subject", "kind")
+    CONSTRAINT "ntfy_watermarks_pkey" PRIMARY KEY ("subject", "kind")
 );
 
 -- Expiring close records.
-CREATE INDEX IF NOT EXISTS "notify_watermarks_updated_idx"
-    ON "notify_watermarks" ("updated_at");
+CREATE INDEX IF NOT EXISTS "ntfy_watermarks_updated_idx"
+    ON "ntfy_watermarks" ("updated_at");

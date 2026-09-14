@@ -2,6 +2,7 @@ package ntfy_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,6 +48,23 @@ func TestErrorsMatchTheirSentinels(t *testing.T) {
 			assert: func(t *testing.T, err error) {
 				assert.ErrorIs(t, err, ntfy.ErrValidation)
 				assert.Contains(t, err.Error(), "request is not valid")
+			},
+		},
+		{
+			name: "every error's text names the library",
+			err:  ntfy.ErrNotFound,
+			assert: func(t *testing.T, _ error) {
+				errs := []error{
+					ntfy.ErrNotFound, ntfy.ErrValidation, ntfy.ErrUnauthorized,
+					ntfy.ErrConfiguration, ntfy.ErrTooManyStreams, ntfy.ErrUnavailable,
+					ntfy.ErrMailRejected, ntfy.ErrMailInDoubt, ntfy.ErrUnknownSignalFormat,
+					&ntfy.ConfigurationError{Detail: "a store is required"},
+					&ntfy.ValidationError{Subject: "draft"},
+					&ntfy.ValidationError{Subject: "draft", Issues: []ntfy.ValidationIssue{{Pointer: "/kind", Detail: "is required"}}},
+				}
+				for _, err := range errs {
+					assert.Truef(t, strings.HasPrefix(err.Error(), "ntfy: "), "%q starts with %q", err.Error(), "ntfy: ")
+				}
 			},
 		},
 		{

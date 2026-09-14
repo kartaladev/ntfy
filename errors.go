@@ -11,19 +11,19 @@ var (
 	// ErrNotFound reports a notification that does not exist, or that belongs to
 	// another recipient. The two are indistinguishable on purpose, so that
 	// identifiers cannot be probed.
-	ErrNotFound = errors.New("notify: not found")
+	ErrNotFound = errors.New("ntfy: not found")
 	// ErrValidation reports a request or draft that is not valid.
-	ErrValidation = errors.New("notify: not valid")
+	ErrValidation = errors.New("ntfy: not valid")
 	// ErrUnauthorized reports an acting user who may not do what they asked,
 	// or no acting user at all.
-	ErrUnauthorized = errors.New("notify: unauthorized")
+	ErrUnauthorized = errors.New("ntfy: unauthorized")
 	// ErrConfiguration reports a wiring mistake, found at construction.
-	ErrConfiguration = errors.New("notify: invalid configuration")
+	ErrConfiguration = errors.New("ntfy: invalid configuration")
 	// ErrTooManyStreams reports a recipient over the per-instance stream cap.
-	ErrTooManyStreams = errors.New("notify: too many streams")
+	ErrTooManyStreams = errors.New("ntfy: too many streams")
 	// ErrUnavailable reports a realtime stream requested while the hub is not
 	// receiving signals.
-	ErrUnavailable = errors.New("notify: unavailable")
+	ErrUnavailable = errors.New("ntfy: unavailable")
 )
 
 // ConfigurationError reports a contradictory or incomplete configuration. It is
@@ -34,7 +34,7 @@ type ConfigurationError struct {
 }
 
 // Error implements the error interface.
-func (e *ConfigurationError) Error() string { return "notify: " + e.Detail }
+func (e *ConfigurationError) Error() string { return "ntfy: " + e.Detail }
 
 // Unwrap makes the error match [ErrConfiguration].
 func (e *ConfigurationError) Unwrap() error { return ErrConfiguration }
@@ -74,7 +74,7 @@ func (e *ValidationError) Error() string {
 	}
 
 	if len(e.Issues) == 0 {
-		return "notify: " + subject + " is not valid"
+		return "ntfy: " + subject + " is not valid"
 	}
 
 	parts := make([]string, 0, len(e.Issues))
@@ -82,7 +82,7 @@ func (e *ValidationError) Error() string {
 		parts = append(parts, issue.String())
 	}
 
-	return "notify: " + subject + " is not valid: " + strings.Join(parts, "; ")
+	return "ntfy: " + subject + " is not valid: " + strings.Join(parts, "; ")
 }
 
 // Unwrap makes the error match [ErrValidation].

@@ -130,7 +130,7 @@ func TestReadLoop(t *testing.T) {
 				send(t, conn, `{"type":"mark-read","ref":"r1","ids":["`+bobs[:len(bobs)-1]+`x"]}`)
 				forUnknown := readRaw(t, conn)
 
-				assert.JSONEq(t, `{"type":"error","ref":"r1","code":"not_found","message":"notify: not found"}`, string(forBob))
+				assert.JSONEq(t, `{"type":"error","ref":"r1","code":"not_found","message":"ntfy: not found"}`, string(forBob))
 				assert.Equal(t, forUnknown, forBob, "the two replies are byte for byte identical")
 
 				count, err := s.svc.CountActive(t.Context(), "bob")

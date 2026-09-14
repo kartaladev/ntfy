@@ -14,9 +14,9 @@
 
 ## 3. Rename storage and wire names (D4, spec `ntfy-modules`), test-first
 
-- [ ] 3.1 Red: change the existing tests that assert error text, table and index names, the subprotocol, and the Redis and NATS defaults so they expect the `ntfy` names. Add a scenario test for `WithTablePrefix("app_")` if none covers it. Verify: `go test -run '<those tests>' -count=1 ./...` fails on the old names, not on compilation.
-- [ ] 3.2 Green: rename the `ntfy:` error prefixes, `websocket.Subprotocol`, `redis.DefaultChannel`, `nats.DefaultSubject`, the `sqlstore` table and index constants, and every DDL file under `sqlstore/ddl/`. Verify: the tests from 3.1 pass, and `grep -rn 'notify_\|notify\.v1\|notify\.signals\|"notify:' .` outside `openspec/changes/archive` finds nothing.
-- [ ] 3.3 Run the SQLite store conformance entries (`TestStoreOnStdSQLSQLite`, `TestStoreOnGormSQLite`) against the renamed DDL. Verify: both pass.
+- [x] 3.1 Red: change the existing tests that assert error text, table and index names, the subprotocol, and the Redis and NATS defaults so they expect the `ntfy` names. Add a scenario test for `WithTablePrefix("app_")` if none covers it. Verify: `go test -run '<those tests>' -count=1 ./...` fails on the old names, not on compilation.
+- [x] 3.2 Green: rename the `ntfy:` error prefixes, `websocket.Subprotocol`, `redis.DefaultChannel`, `nats.DefaultSubject`, the `sqlstore` table and index constants, and every DDL file under `sqlstore/ddl/`. Verify: the tests from 3.1 pass, and `grep -rn 'notify_\|notify\.v1\|notify\.signals\|"notify:' .` outside `openspec/changes/archive` finds nothing.
+- [x] 3.3 Run the SQLite store conformance entries (`TestStoreOnStdSQLSQLite`, `TestStoreOnGormSQLite`) against the renamed DDL. Verify: both pass.
 
 ## 4. Dependency boundary (D7, spec `ntfy-modules`), test-first
 

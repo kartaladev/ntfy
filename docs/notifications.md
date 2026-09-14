@@ -11,7 +11,7 @@ what you get with no configuration and how to change it. The schema of the SQL
 store is in [schema.md](schema.md).
 
 Email is optional and documented in [email.md](email.md). A host that emails
-applies one more table, `notify_email_deliveries`; one that does not needs none of
+applies one more table, `ntfy_email_deliveries`; one that does not needs none of
 it.
 
 ## The model

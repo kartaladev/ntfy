@@ -51,9 +51,9 @@ broadcaster, err := nats.NewBroadcaster(conn, nats.WithDecodeErrorHandler(logErr
 
 | Setting | Default | Override |
 | --- | --- | --- |
-| Redis channel | `notify.signals` | `redis.WithChannel` |
+| Redis channel | `ntfy.signals` | `redis.WithChannel` |
 | Redis publish timeout | 5s | `redis.WithPublishTimeout` |
-| NATS subject | `notify.signals` | `nats.WithSubject` (no wildcards, whitespace or empty tokens) |
+| NATS subject | `ntfy.signals` | `nats.WithSubject` (no wildcards, whitespace or empty tokens) |
 | NATS subscribe timeout | 5s | `nats.WithSubscribeTimeout` |
 | Signals per message | 500 | none: a larger broadcast is split into several messages |
 
@@ -122,7 +122,7 @@ WebSocket defaults:
 | Largest client message | 4096 bytes (the connection is closed with 1009 beyond it) | `websocket.WithReadLimit` |
 | Ping interval | the hub's heartbeat, 25s | `websocket.WithPingInterval` |
 | Write timeout | the hub's write timeout, 10s | `websocket.WithWriteTimeout` |
-| Subprotocol offered | `notify.v1` | none |
+| Subprotocol offered | `ntfy.v1` | none |
 
 Mounting:
 

@@ -1,4 +1,4 @@
--- MySQL schema for the notify notification store, 8.0 or later.
+-- MySQL schema for the ntfy notification store, 8.0 or later.
 --
 -- Identifier columns are pinned to utf8mb4_0900_as_cs. The server default,
 -- utf8mb4_0900_ai_ci, is case-insensitive, which would deliver a notification
@@ -21,7 +21,7 @@
 -- Table and index names carry the host's configured prefix, applied when this
 -- document is rendered; with no prefix configured they are exactly as written.
 
-CREATE TABLE IF NOT EXISTS `{{PREFIX}}notify_notifications` (
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}ntfy_notifications` (
     `id`               VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
     `recipient`        VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
     `source_id`        VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
@@ -38,21 +38,21 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}notify_notifications` (
     `closed_at`        DATETIME(6) NULL,
     `inactive_at`      DATETIME(6) NULL,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `{{PREFIX}}notify_notifications_source_key` (`source_id`, `recipient`),
-    KEY `{{PREFIX}}notify_notifications_recipient_idx` (`recipient`, `created_at`, `id`),
-    KEY `{{PREFIX}}notify_notifications_state_idx` (`recipient`, `state`),
-    KEY `{{PREFIX}}notify_notifications_subject_idx` (`subject`, `kind`, `state`),
-    KEY `{{PREFIX}}notify_notifications_inactive_idx` (`state`, `inactive_at`)
+    UNIQUE KEY `{{PREFIX}}ntfy_notifications_source_key` (`source_id`, `recipient`),
+    KEY `{{PREFIX}}ntfy_notifications_recipient_idx` (`recipient`, `created_at`, `id`),
+    KEY `{{PREFIX}}ntfy_notifications_state_idx` (`recipient`, `state`),
+    KEY `{{PREFIX}}ntfy_notifications_subject_idx` (`subject`, `kind`, `state`),
+    KEY `{{PREFIX}}ntfy_notifications_inactive_idx` (`state`, `inactive_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- A subject's close records: the highest version closed per kind, and per
 -- every kind under kind '*'. Publishing and closing a subject both lock its '*'
 -- row first, which is what serialises them.
-CREATE TABLE IF NOT EXISTS `{{PREFIX}}notify_watermarks` (
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}ntfy_watermarks` (
     `subject`     VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
     `kind`        VARCHAR(100) COLLATE utf8mb4_0900_as_cs NOT NULL,
     `version`     BIGINT NOT NULL,
     `updated_at`  DATETIME(6) NOT NULL,
     PRIMARY KEY (`subject`, `kind`),
-    KEY `{{PREFIX}}notify_watermarks_updated_idx` (`updated_at`)
+    KEY `{{PREFIX}}ntfy_watermarks_updated_idx` (`updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

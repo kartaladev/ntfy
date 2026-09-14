@@ -63,8 +63,8 @@ func TestSchema(t *testing.T) {
 			}
 
 			if prefix != "" {
-				assert.NotContains(t, schema, `"notify_`, "no unprefixed table or index")
-				assert.NotContains(t, schema, "`notify_", "no unprefixed table or index")
+				assert.NotContains(t, schema, `"ntfy_`, "no unprefixed table or index")
+				assert.NotContains(t, schema, "`ntfy_", "no unprefixed table or index")
 			}
 
 			path := filepath.Join("testdata", "schema", file)

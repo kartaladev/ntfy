@@ -16,10 +16,10 @@ import (
 var (
 	// ErrMailRejected reports a message the sender refused for good, such as an
 	// address the provider will never accept. It is not retried.
-	ErrMailRejected = errors.New("notify: mail rejected")
+	ErrMailRejected = errors.New("ntfy: mail rejected")
 	// ErrMailInDoubt reports a send the sender cannot say happened or not, such
 	// as a timeout after the provider accepted the request.
-	ErrMailInDoubt = errors.New("notify: mail in doubt")
+	ErrMailInDoubt = errors.New("ntfy: mail in doubt")
 )
 
 // EmailStatus is where one notification's email delivery stands.

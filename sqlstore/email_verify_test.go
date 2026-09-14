@@ -14,8 +14,8 @@ import (
 
 // The indexes VerifyEmailSchema requires, before the table prefix.
 var requiredEmailIndexes = []string{
-	"notify_email_deliveries_lease_idx",
-	"notify_email_deliveries_retry_idx",
+	"ntfy_email_deliveries_lease_idx",
+	"ntfy_email_deliveries_retry_idx",
 }
 
 // dropEmailIndex drops a prefixed email index in the executor's dialect.

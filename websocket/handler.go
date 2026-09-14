@@ -23,7 +23,7 @@ const DefaultReadLimit int64 = 4096
 
 // Subprotocol is the WebSocket subprotocol the handler offers. A client may
 // request it; one that does not is still accepted.
-const Subprotocol = "notify.v1"
+const Subprotocol = "ntfy.v1"
 
 // Handler serves a recipient's change signals over a WebSocket connection, and
 // accepts requests to mark notifications read over it.

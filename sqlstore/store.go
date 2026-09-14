@@ -13,9 +13,9 @@ import (
 // The tables the store owns, before any prefix.
 const (
 	// NotificationsTable holds one row per notification.
-	NotificationsTable = "notify_notifications"
+	NotificationsTable = "ntfy_notifications"
 	// WatermarksTable holds each subject's close records.
-	WatermarksTable = "notify_watermarks"
+	WatermarksTable = "ntfy_watermarks"
 )
 
 // documents holds the published DDL, one document per dialect.
@@ -167,17 +167,17 @@ var schemaExpectation = sqlkit.SchemaExpectation{
 		Columns:           notificationColumns,
 		IdentifierColumns: []string{"id", "recipient", "source_id", "subject", "kind", "state"},
 		Indexes: []string{
-			"notify_notifications_source_key",
-			"notify_notifications_recipient_idx",
-			"notify_notifications_state_idx",
-			"notify_notifications_subject_idx",
-			"notify_notifications_inactive_idx",
+			"ntfy_notifications_source_key",
+			"ntfy_notifications_recipient_idx",
+			"ntfy_notifications_state_idx",
+			"ntfy_notifications_subject_idx",
+			"ntfy_notifications_inactive_idx",
 		},
 	},
 	WatermarksTable: {
 		Columns:           []string{"subject", "kind", "version", "updated_at"},
 		IdentifierColumns: []string{"subject", "kind"},
-		Indexes:           []string{"notify_watermarks_updated_idx"},
+		Indexes:           []string{"ntfy_watermarks_updated_idx"},
 	},
 }
 
