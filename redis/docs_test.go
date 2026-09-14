@@ -26,7 +26,7 @@ func TestTheOperationsGuideMatchesTheBroadcaster(t *testing.T) {
 		"| Redis channel | `" + redis.DefaultChannel + "` |",
 		"| Redis publish timeout | " + redis.DefaultPublishTimeout.String() + " |",
 		"| Signals per message | " + strconv.Itoa(redis.MaxSignalsPerMessage) + " |",
-		"not the task engine's `delivery/redis`",
+		"ephemeral signals, not durable events",
 	} {
 		assert.Containsf(t, document, stated, "the guide states %q", stated)
 	}

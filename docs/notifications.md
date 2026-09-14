@@ -1,8 +1,9 @@
 # Notifications
 
-`notify` is a durable inbox of notifications, each addressed to one recipient,
-that knows nothing about the domain publishing into it. A publisher, such as the
-task engine's `tasknotify` adapter, decides who is told what; `notify` stores
+`ntfy` is a durable inbox of notifications, each addressed to one recipient,
+that knows nothing about the domain publishing into it. A publisher, typically an
+adapter in the host that turns its own domain events into drafts, decides who is
+told what; `ntfy` stores
 it, keeps it in step with its subject, bounds how much is kept, and tells each
 recipient's connected clients that something changed.
 
@@ -33,18 +34,18 @@ first left `ACTIVE`, by being read or closed.
 
 ## Defaults and overrides
 
-Everything goes through a `Service`, built with `notify.New(store, options...)`:
+Everything goes through a `Service`, built with `ntfy.New(store, options...)`:
 
 ```go
-svc, err := notify.New(notify.NewMemoryStore())
+svc, err := ntfy.New(ntfy.NewMemoryStore())
 ```
 
 | Concern | Default | Override |
 | --- | --- | --- |
-| Storage | none: a store is required | `NewMemoryStore()` for a single process; `notify/sqlstore` for PostgreSQL, MySQL or SQLite; any `Store` that passes `notify/notifytest` |
+| Storage | none: a store is required | `NewMemoryStore()` for a single process; `ntfy/sqlstore` for PostgreSQL, MySQL or SQLite; any `Store` that passes `ntfytest` |
 | Time | the system clock | `WithClock` |
 | Identifiers | UUIDv7, sorting in the order they were minted | `WithIDGenerator` |
-| Change signals | `InProcessBroadcaster`, which reaches only its own process | `WithBroadcaster`, such as notify/redis or notify/nats |
+| Change signals | `InProcessBroadcaster`, which reaches only its own process | `WithBroadcaster`, such as ntfy/redis or ntfy/nats |
 | Broadcast failures | ignored, silently | `WithSignalErrorHandler` — supply one that logs |
 
 A nil option is ignored and keeps the default. A nil store is a configuration
@@ -62,8 +63,8 @@ anything is written, so one invalid draft publishes nothing.
   this is what makes that safe.
 - **Coalescing.** A draft with `Coalesce` set creates nothing when its recipient
   already has an `ACTIVE` or `READ` notification of the same kind on the same
-  subject. A task adapter uses it so that widening a task's pool does not offer it
-  twice to the same person.
+  subject. A publisher that re-announces the same thing, such as offering a piece
+  of work again to a widened group, uses it so that nobody is told twice.
 
 `Close(ctx, request)` closes a subject's notifications:
 
@@ -86,8 +87,9 @@ when they race on different instances.
 
 **Successors.** A close can name a `Successor`: a notification published, in the
 same transaction, to every recipient the close moved to `CLOSED`, except those in
-`SuccessorSkip`. A task adapter uses it to tell the other candidates "taken" when
-someone claims a task. A retried close closes nothing further and creates no
+`SuccessorSkip`. A publisher uses it to tell everyone else who was offered
+something that it has been taken, sparing the person who took it. A retried close
+closes nothing further and creates no
 second successor; a successor below a newer watermark is suppressed like any
 late publish.
 
@@ -96,7 +98,7 @@ late publish.
 Nothing is deleted unless the host runs a `Pruner`:
 
 ```go
-pruner, err := notify.NewPruner(svc)
+pruner, err := ntfy.NewPruner(svc)
 go pruner.Run(ctx, time.Hour) // or pruner.Prune(ctx) from a scheduler
 ```
 
@@ -104,7 +106,7 @@ go pruner.Run(ctx, time.Hour) // or pruner.Prune(ctx) from a scheduler
 | --- | --- | --- |
 | Notifications per recipient | 500 | `WithMaxPerRecipient`, or `WithoutMaxPerRecipient` |
 | Age of inactive notifications | 90 days after they became inactive | `WithMaxAge`, or `WithoutMaxAge` |
-| Strategy | `EvictOldestActive` | `WithRetentionStrategy(notify.RetainActive)` |
+| Strategy | `EvictOldestActive` | `WithRetentionStrategy(ntfy.RetainActive)` |
 | Close records of empty subjects | 7 days | `WithWatermarkRetention` |
 | Rows per delete | 1000 | `WithPruneBatch` |
 | Failed passes in `Run` | ignored, silently | `WithPruneErrorHandler` |
@@ -136,7 +138,7 @@ host runs it, and accepts streams only once its broadcaster has confirmed its
 subscription:
 
 ```go
-hub, err := notify.NewHub(svc.Broadcaster())
+hub, err := ntfy.NewHub(svc.Broadcaster())
 
 runErr := make(chan error, 1)
 go func() { runErr <- hub.Run(ctx) }()
@@ -178,7 +180,7 @@ streams refused as unavailable until the hub is ready, and clients retry.
   clients recover by re-reading.
 - **A broadcaster of your own** implements `Listen(ctx, deliver, ready)`: it calls
   `ready` once its subscription is confirmed, and never calling it leaves the hub
-  refusing every stream. `notifytest.RunBroadcasterSuite` checks it against the
+  refusing every stream. `ntfytest.RunBroadcasterSuite` checks it against the
   contract.
 
 ## HTTP and mounting
@@ -207,9 +209,9 @@ acting user is read from a request.
   `event: unread-changed` with `data: {"change":"created","at":"..."}`, and writes
   `: heartbeat` comments while idle. It sets `Content-Type: text/event-stream`,
   `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
-- Errors use one body, `{"error":{"code","message"}}`, in the same vocabulary as
-  the task HTTP contract. `WriteError` is exported so that other transports answer
-  the same way.
+- Errors use one body, `{"error":{"code","message"}}`, with one code vocabulary
+  for every endpoint and status. `WriteError` is exported so that other
+  transports answer the same way.
 
 | Condition | Status | Code |
 | --- | --- | --- |
@@ -223,7 +225,7 @@ acting user is read from a request.
 **Mounting.** On the standard library:
 
 ```go
-handler, err := notify.NewHandler(svc, hub, notify.WithActor(currentUser))
+handler, err := ntfy.NewHandler(svc, hub, ntfy.WithActor(currentUser))
 mux.Handle("/v1/notifications", handler)
 mux.Handle("/v1/notifications/", handler)
 ```

@@ -27,7 +27,7 @@ func TestTheOperationsGuideMatchesTheBroadcaster(t *testing.T) {
 		"| Signals per message | " + strconv.Itoa(nats.MaxSignalsPerMessage) + " |",
 		"| NATS subscribe timeout | " + nats.DefaultSubscribeTimeout.String() + " |",
 		"no queue group",
-		"`delivery/nats`",
+		"ephemeral signals, not durable events",
 	} {
 		assert.Containsf(t, document, stated, "the guide states %q", stated)
 	}

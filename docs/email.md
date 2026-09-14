@@ -13,7 +13,7 @@ The dispatcher needs three things only the host has: who a recipient's address i
 how a message is rendered, and how it is sent.
 
 ```go
-dispatcher, err := notify.NewEmailDispatcher(svc, mailer, addressBook, template)
+dispatcher, err := ntfy.NewEmailDispatcher(svc, mailer, addressBook, template)
 go dispatcher.Run(ctx, time.Minute) // or dispatcher.Dispatch(ctx) from a scheduler
 ```
 
@@ -25,11 +25,11 @@ go dispatcher.Run(ctx, time.Minute) // or dispatcher.Dispatch(ctx) from a schedu
 | `EmailFilter` | optional: which notifications are emailed |
 
 Each has a `Func` adapter. A nil port is a configuration error, and so is a store
-that does not record email deliveries: `NewMemoryStore()` and `notify/sqlstore`
+that does not record email deliveries: `NewMemoryStore()` and `ntfy/sqlstore`
 do.
 
 **The SQL store needs one more table.** Apply `Store.EmailSchema()` (the documents
-under `notify/sqlstore/ddl/email/`) through your migration pipeline, and call
+under `ntfy/sqlstore/ddl/email/`) through your migration pipeline, and call
 `Store.VerifyEmailSchema(ctx)` at startup alongside `Store.VerifySchema(ctx)`,
 which does not require it.
 
@@ -48,7 +48,7 @@ with `Run`, or from its own scheduler; constructing a dispatcher starts nothing.
 | Attempts before a delivery fails | 5 | `WithEmailMaxAttempts` |
 | Delay between attempts | 1 minute, doubling, at most 1 hour, 20% jitter | `WithEmailBackoff` |
 | Which notifications | every kind | `WithEmailKinds`, or `WithEmailFilter` |
-| Delivery guarantee | `AtMostOnce` | `WithDeliveryGuarantee(notify.AtLeastOnce)` |
+| Delivery guarantee | `AtMostOnce` | `WithDeliveryGuarantee(ntfy.AtLeastOnce)` |
 | Owner recorded in leases | `email-` and a UUIDv7 | `WithEmailOwner` |
 | Failures in a pass | ignored, silently | `WithEmailErrorHandler` — supply one that logs |
 
@@ -118,10 +118,10 @@ filter rejects is skipped for good, and an error from the filter is retried. A
 filter that answers from the host's preference store might look like this:
 
 ```go
-filter := notify.EmailFilterFunc(func(ctx context.Context, n notify.Notification) (bool, error) {
+filter := ntfy.EmailFilterFunc(func(ctx context.Context, n ntfy.Notification) (bool, error) {
     return preferences.WantsEmail(ctx, n.Recipient, n.Kind)
 })
-dispatcher, err := notify.NewEmailDispatcher(svc, mailer, addressBook, template, notify.WithEmailFilter(filter))
+dispatcher, err := ntfy.NewEmailDispatcher(svc, mailer, addressBook, template, ntfy.WithEmailFilter(filter))
 ```
 
 ## Stated limits

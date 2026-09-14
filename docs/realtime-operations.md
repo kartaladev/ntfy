@@ -1,6 +1,6 @@
 # Running realtime notifications
 
-`notify` tells a client that its notifications changed, as a signal: the kind of
+`ntfy` tells a client that its notifications changed, as a signal: the kind of
 change and when it happened, never the notification itself. The client then
 re-reads its unread count or list from the store, which is the source of truth.
 This guide covers the choices a deployment makes: which broadcaster carries
@@ -15,9 +15,9 @@ to the other.
 
 | Deployment | Broadcaster | Wiring |
 | --- | --- | --- |
-| One instance | `notify.NewInProcessBroadcaster()` (the default) | nothing |
-| Several instances, Redis available | `notify/redis` | `redis.NewBroadcaster(client)` |
-| Several instances, NATS available | `notify/nats` | `nats.NewBroadcaster(conn)` |
+| One instance | `ntfy.NewInProcessBroadcaster()` (the default) | nothing |
+| Several instances, Redis available | `ntfy/redis` | `redis.NewBroadcaster(client)` |
+| Several instances, NATS available | `ntfy/nats` | `nats.NewBroadcaster(conn)` |
 
 **Stated limit:** with the in-process default, a signal reaches only connections
 on the instance that produced it. A deployment of more than one instance needs a
@@ -31,11 +31,11 @@ client := goredis.NewClient(&goredis.Options{Addr: "redis:6379"})
 broadcaster, err := redis.NewBroadcaster(client,
     redis.WithDecodeErrorHandler(logError),
 )
-svc, err := notify.New(store,
-    notify.WithBroadcaster(broadcaster),
-    notify.WithSignalErrorHandler(logError),
+svc, err := ntfy.New(store,
+    ntfy.WithBroadcaster(broadcaster),
+    ntfy.WithSignalErrorHandler(logError),
 )
-hub, err := notify.NewHub(svc.Broadcaster())
+hub, err := ntfy.NewHub(svc.Broadcaster())
 go hub.Run(ctx)
 ```
 
@@ -73,7 +73,7 @@ explanation; the host decides when to run it again.
 
 - A broker that cannot be reached never fails the notification write. The
   notification is stored, and the broadcast error goes to the service's signal
-  error handler (`notify.WithSignalErrorHandler`), which is silent by default.
+  error handler (`ntfy.WithSignalErrorHandler`), which is silent by default.
 - Signals broadcast while an instance is disconnected are not replayed to it.
   Both clients reconnect and resubscribe on their own, without the host
   restarting anything.
@@ -89,19 +89,20 @@ travel on the broker.** Where they are sensitive, run the broker on a private
 network with TLS and authentication, configured on the client the host passes
 in.
 
-These broadcasters are not the task engine's `delivery/redis` and
-`delivery/nats` sinks. Those deliver durable events to a stream or subject and
-retry them; these carry ephemeral signals on a channel or subject of their own,
-and the default names do not overlap.
+These broadcasters carry ephemeral signals, not durable events: nothing is
+retried or replayed, and the notification store stays the source of truth. A
+host that also needs durable events should publish them to a Redis stream or a
+JetStream subject of its own; the broadcasters' default channel and subject are
+namespaced under `ntfy.` so they do not collide with one.
 
 ## Choosing a transport
 
 | Transport | Endpoint | Frameworks |
 | --- | --- | --- |
-| Server-sent events | `GET /v1/notifications/stream` (`notify.NewHandler`) | net/http, Gin, Fiber |
+| Server-sent events | `GET /v1/notifications/stream` (`ntfy.NewHandler`) | net/http, Gin, Fiber |
 | WebSocket | `GET /v1/notifications/socket` (`websocket.NewHandler`) | net/http, Gin |
 
-Both authorize the subscription with the same policy (`notify.SelfOnly` by
+Both authorize the subscription with the same policy (`ntfy.SelfOnly` by
 default), refuse while the hub is not running, and count against the same
 per-recipient cap of 8 connections per instance. A WebSocket client can also
 mark notifications read over its connection:

@@ -1,6 +1,6 @@
 # The notification store schema
 
-`notify/sqlstore` stores notifications in two tables, on PostgreSQL, MySQL or
+`ntfy/sqlstore` stores notifications in two tables, on PostgreSQL, MySQL or
 SQLite, through any of the three sqlkit executors: `database/sql`
 (`sqlkit/stdsql`), pgx (`sqlkit/pgx`) or GORM (`sqlkit/gorm`). One store
 implementation serves all of them, proven identical by one conformance suite on
@@ -13,9 +13,9 @@ migration pipeline:
 
 | Dialect | Document |
 | --- | --- |
-| PostgreSQL | `notify/sqlstore/ddl/postgres.sql` |
-| MySQL 8.0+ | `notify/sqlstore/ddl/mysql.sql` |
-| SQLite 3.35+ | `notify/sqlstore/ddl/sqlite.sql` |
+| PostgreSQL | `ntfy/sqlstore/ddl/postgres.sql` |
+| MySQL 8.0+ | `ntfy/sqlstore/ddl/mysql.sql` |
+| SQLite 3.35+ | `ntfy/sqlstore/ddl/sqlite.sql` |
 
 The documents are the source of truth, and each explains its dialect's choices in
 comments. `Store.Schema()` returns the store's document with its table prefix
