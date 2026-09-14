@@ -20,28 +20,28 @@
 
 ## 4. Dependency boundary (D7, spec `ntfy-modules`), test-first
 
-- [ ] 4.1 Red: add a root-module test asserting that production imports are standard library or the root module only, then temporarily add a third-party import and watch it fail. Verify: it fails with the offending import named, then passes once the import is removed.
-- [ ] 4.2 Add `make split-check`, which fails on any `github.com/kartaladev/...` import outside ntfy and sqlkit, test graph included. Verify: it passes on the tree and fails when a scratch test in `sqlstore` imports a `github.com/kartaladev/hmntsk` package (scratch file removed afterwards).
+- [x] 4.1 Red: add a root-module test asserting that production imports are standard library or the root module only, then temporarily add a third-party import and watch it fail. Verify: it fails with the offending import named, then passes once the import is removed.
+- [x] 4.2 Add `make split-check`, which fails on any `github.com/kartaladev/...` import outside ntfy and sqlkit, test graph included. Verify: it passes on the tree and fails when a scratch test in `sqlstore` imports a `github.com/kartaladev/hmntsk` package (scratch file removed afterwards).
 
 ## 5. Tooling (D6, D8)
 
-- [ ] 5.1 Write the `Makefile` with `NTFY_MODULES`, `SQLKIT_COPY_MODULES` and the targets build, lint, fmt, test, test-race, test-integration, tidy, vuln, generate, split-check, sqlkit-copy-check and store-matrix. Verify: `make build test split-check` succeeds.
-- [ ] 5.2 Implement `sqlkit-copy-check`: fetch hmntsk at `SOURCE`, apply the path rewrite, diff against `pkg/sqlkit` excluding `go.sum`. Verify: it passes, and fails after a one-character edit to a copy file (edit reverted).
-- [ ] 5.3 Port `.golangci.yml` with the ntfy/sqlkit depguard rule and `pkg/sqlkit/**` excluded. Verify: `make lint` passes with no new `//nolint`.
+- [x] 5.1 Write the `Makefile` with `NTFY_MODULES`, `SQLKIT_COPY_MODULES` and the targets build, lint, fmt, test, test-race, test-integration, tidy, vuln, generate, split-check, sqlkit-copy-check and store-matrix. Verify: `make build test split-check` succeeds.
+- [x] 5.2 Implement `sqlkit-copy-check`: fetch hmntsk at `SOURCE`, apply the path rewrite, diff against `pkg/sqlkit` excluding `go.sum`. Verify: it passes, and fails after a one-character edit to a copy file (edit reverted).
+- [x] 5.3 Port `.golangci.yml` with the ntfy/sqlkit depguard rule and `pkg/sqlkit/**` excluded. Verify: `make lint` passes with no new `//nolint`.
 - [ ] 5.4 Add `.github/workflows/ci.yml` with jobs `lint` (lint, split-check, sqlkit-copy-check), `unit` and the seven-entry `store-matrix` on Go 1.26. Verify: the workflow runs green on a pushed branch.
-- [ ] 5.5 Run the full store conformance matrix locally or in CI (stdsql PostgreSQL, MySQL, SQLite; pgx PostgreSQL; GORM PostgreSQL, MySQL, SQLite). Verify: all seven entries pass.
+- [x] 5.5 Run the full store conformance matrix locally or in CI (stdsql PostgreSQL, MySQL, SQLite; pgx PostgreSQL; GORM PostgreSQL, MySQL, SQLite). Verify: all seven entries pass.
 
 ## 6. Documentation (D9)
 
-- [ ] 6.1 Move `notify/docs/*.md` to `docs/`, rewrite the task-engine references (`notifications.md` lines 5, 65, 89, 211; `realtime-operations.md` line 92), and apply the D4 names in the defaults tables. Verify: the root docs test passes, and `grep -rniE 'task|hmntsk' docs/` finds only generic uses.
-- [ ] 6.2 Add `docs/releasing.md` covering module tag order, and the rule that no tag is made while `pkg/sqlkit/` exists, plus the swap procedure. Verify: the document names every module in `NTFY_MODULES`.
-- [ ] 6.3 Expand `README.md` with an introduction, the module list with opt-in modules, install, and links to `docs/`. Verify: every import path in the README resolves in the workspace (`go list`).
+- [x] 6.1 Move `notify/docs/*.md` to `docs/`, rewrite the task-engine references (`notifications.md` lines 5, 65, 89, 211; `realtime-operations.md` line 92), and apply the D4 names in the defaults tables. Verify: the root docs test passes, and `grep -rniE 'task|hmntsk' docs/` finds only generic uses.
+- [x] 6.2 Add `docs/releasing.md` covering module tag order, and the rule that no tag is made while `pkg/sqlkit/` exists, plus the swap procedure. Verify: the document names every module in `NTFY_MODULES`.
+- [x] 6.3 Expand `README.md` with an introduction, the module list with opt-in modules, install, and links to `docs/`. Verify: every import path in the README resolves in the workspace (`go list`).
 
 ## 7. OpenSpec history (D10)
 
-- [ ] 7.1 Copy hmntsk's `openspec/changes/archive/2026-09-14-notify-{core,email,listen-readiness,realtime-adapters}` unchanged, and add `openspec/changes/archive/README.md` noting they come from hmntsk and keep its names. Verify: `openspec list --json` still lists only this change as active.
+- [x] 7.1 Copy hmntsk's `openspec/changes/archive/2026-09-14-notify-{core,email,listen-readiness,realtime-adapters}` unchanged, and add `openspec/changes/archive/README.md` noting they come from hmntsk and keep its names. Verify: `openspec list --json` still lists only this change as active.
 
 ## 8. Final verification
 
-- [ ] 8.1 Confirm no trace of the old identity remains. Verify: `grep -rnw notify . --exclude-dir=.git --exclude-dir=archive` shows only the English verb, and `grep -rn 'kartaladev/hmntsk' . --exclude-dir=.git --exclude-dir=archive` shows only `pkg/sqlkit/SOURCE`, the README provenance lines and this change's artifacts.
-- [ ] 8.2 Run `make lint split-check sqlkit-copy-check test test-race`. Verify: all targets pass, and `openspec validate spin-out-from-hmntsk --strict` passes.
+- [x] 8.1 Confirm no trace of the old identity remains. Verify: `grep -rnw notify . --exclude-dir=.git --exclude-dir=archive` shows only the English verb, and `grep -rn 'kartaladev/hmntsk' . --exclude-dir=.git --exclude-dir=archive` shows only `pkg/sqlkit/SOURCE`, the README provenance lines and this change's artifacts.
+- [x] 8.2 Run `make lint split-check sqlkit-copy-check test test-race`. Verify: all targets pass, and `openspec validate spin-out-from-hmntsk --strict` passes.
