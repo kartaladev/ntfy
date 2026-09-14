@@ -1,0 +1,4 @@
+repository: https://github.com/kartaladev/hmntsk
+commit: 32e7763297a4ac0107c0702da5a5b497c9029083
+path: sqlkit
+rewrite: github.com/kartaladev/hmntsk/sqlkit -> github.com/kartaladev/sqlkit

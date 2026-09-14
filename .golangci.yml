@@ -1,0 +1,113 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - depguard
+    - errorlint
+    - gocritic
+    - misspell
+    - nilerr
+    - predeclared
+    - revive
+    - testifylint
+    - unconvert
+    - usetesting
+    - wastedassign
+  settings:
+    depguard:
+      rules:
+        # ntfy may import only ntfy and sqlkit among github.com/kartaladev
+        # modules, plus the third-party libraries listed here. `make
+        # split-check` is authoritative; this is the earlier warning in an
+        # editor.
+        ntfy:
+          list-mode: strict
+          files:
+            - $all
+          allow:
+            - $gostd
+            - github.com/kartaladev/ntfy
+            - github.com/kartaladev/sqlkit
+            - github.com/stretchr/testify
+            - go.uber.org/goleak
+            - go.uber.org/mock
+            - github.com/jackc/pgx/v5
+            - gorm.io
+            - github.com/glebarez/sqlite
+            - github.com/go-sql-driver/mysql
+            - github.com/lib/pq
+            - modernc.org/sqlite
+            # The realtime adapters: each imports ntfy and its own client.
+            - github.com/coder/websocket
+            - github.com/redis/go-redis/v9
+            - github.com/nats-io/nats.go
+            - github.com/testcontainers/testcontainers-go
+    errcheck:
+      check-type-assertions: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+      disabled-checks:
+        - ifElseChain
+        - singleCaseSwitch
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
+        - name: indent-error-flow
+        - name: var-declaration
+        - name: error-strings
+        - name: error-return
+        - name: receiver-naming
+        - name: context-as-argument
+        - name: unexported-return
+    testifylint:
+      disable:
+        # The project's table-test style uses `assert` for independent checks so
+        # that every failing row reports, and `require` only for preconditions
+        # that must halt the case. require-error contradicts that deliberately.
+        - require-error
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    # The temporary sqlkit copy is linted in sqlkit's own repository.
+    paths:
+      - pkg/sqlkit
+    rules:
+      - path: _test\.go$
+        linters:
+          - revive
+      - path: _mock_test\.go$
+        linters:
+          - revive
+          - gocritic
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kartaladev/ntfy
+        - github.com/kartaladev/sqlkit
+  exclusions:
+    paths:
+      - pkg/sqlkit
