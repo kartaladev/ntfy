@@ -1,0 +1,17 @@
+go 1.26.0
+
+use (
+	.
+	./nats
+	./ntfytest
+	./redis
+	./sqlstore
+	./websocket
+
+	// Temporary copy of github.com/kartaladev/sqlkit; see pkg/sqlkit/README.md.
+	./pkg/sqlkit
+	./pkg/sqlkit/gorm
+	./pkg/sqlkit/pgx
+	./pkg/sqlkit/sqlkittest
+	./pkg/sqlkit/stdsql
+)
