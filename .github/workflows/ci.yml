@@ -1,0 +1,108 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+  # Every job runs the Go version above. actions/setup-go sets GOTOOLCHAIN=local
+  # once it is installed, so nothing here downloads a second toolchain; the
+  # Makefile's own pin defers to that.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+      - run: make lint
+      # ntfy may import only ntfy and sqlkit among github.com/kartaladev modules.
+      - run: make split-check
+      # pkg/sqlkit is an unedited copy of sqlkit; this fails if anyone edits it.
+      - run: make sqlkit-copy-check
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
+      - name: ntfy, ntfytest, websocket and the sqlkit copy's root
+        run: |
+          set -e
+          for module in . ntfytest websocket pkg/sqlkit; do
+            echo "==> $module"
+            (cd "$module" && go test -count=1 -race ./...)
+          done
+
+  # The modules whose tests start real services with testcontainers against the
+  # runner's own Docker daemon: the Redis and NATS brokers, and the databases
+  # sqlstore's schema checks run on. sqlstore's conformance entry points are
+  # skipped here because store-matrix runs each of them in its own job.
+  integration:
+    name: integration ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { module: redis, skip: "" }
+          - { module: nats, skip: "" }
+          - { module: sqlstore, skip: "^TestStoreOn" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
+      - name: Integration tests
+        working-directory: ${{ matrix.module }}
+        run: go test -count=1 -timeout 30m -skip "${{ matrix.skip }}" ./...
+
+  # The notification store conformance suite, once per valid driver-by-dialect
+  # combination: seven and not nine, because pgx is PostgreSQL-only. PostgreSQL
+  # and MySQL are started by testcontainers; SQLite runs in-process. The GORM
+  # entry points are a separate test package, because GORM's SQLite driver
+  # registers under the same name as the one database/sql uses.
+  store-matrix:
+    name: store ${{ matrix.driver }} / ${{ matrix.dialect }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dir: sqlstore, driver: stdsql, dialect: postgres, run: TestStoreOnStdSQLPostgres }
+          - { dir: sqlstore, driver: stdsql, dialect: mysql, run: TestStoreOnStdSQLMySQL }
+          - { dir: sqlstore, driver: stdsql, dialect: sqlite, run: TestStoreOnStdSQLSQLite }
+          - { dir: sqlstore, driver: pgx, dialect: postgres, run: TestStoreOnPgxPostgres }
+          - { dir: sqlstore/internal/gormtest, driver: gorm, dialect: postgres, run: TestStoreOnGormPostgres }
+          - { dir: sqlstore/internal/gormtest, driver: gorm, dialect: mysql, run: TestStoreOnGormMySQL }
+          - { dir: sqlstore/internal/gormtest, driver: gorm, dialect: sqlite, run: TestStoreOnGormSQLite }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
+      - name: Notification store conformance suite
+        working-directory: ${{ matrix.dir }}
+        run: go test -count=1 -timeout 30m -run "^${{ matrix.run }}$" ./...
