@@ -18,9 +18,9 @@
 
 ## 4. Make the ports say what they grant
 
-- [ ] 4.1 Update the godoc on `SubscriptionAuthorizer`, `SelfOnly` and `AllowAll` in `authorize.go` to state that a policy authorizes following only and grants no authority to change anything, with `AllowAll` naming the escalation it does not create. Verify with `go doc ./... | grep -A5 AllowAll` (or `gopls`) that the rendered documentation reads correctly.
-- [ ] 4.2 Correct the comment on `answer` in `websocket/handler.go`, which currently presents acting on the connection's recipient as a safety property, and verify the file has no remaining comment describing the old behaviour (`rg -n "connection's recipient" websocket/`).
-- [ ] 4.3 Update `docs/realtime-operations.md` where the transport comparison implies one policy covers both following and marking read, and add the migration note from `design.md` for hosts using `AllowAll` or a supervisor policy. Verify by re-reading the section: it must state that marking read always acts on the acting user.
+- [x] 4.1 Update the godoc on `SubscriptionAuthorizer`, `SelfOnly` and `AllowAll` in `authorize.go` to state that a policy authorizes following only and grants no authority to change anything, with `AllowAll` naming the escalation it does not create. Verify with `go doc ./... | grep -A5 AllowAll` (or `gopls`) that the rendered documentation reads correctly.
+- [x] 4.2 Correct the comment on `answer` in `websocket/handler.go`, which currently presents acting on the connection's recipient as a safety property, and verify the file has no remaining comment describing the old behaviour (`rg -n "connection's recipient" websocket/`).
+- [x] 4.3 Update `docs/realtime-operations.md` where the transport comparison implies one policy covers both following and marking read, and add the migration note from `design.md` for hosts using `AllowAll` or a supervisor policy. Verify by re-reading the section: it must state that marking read always acts on the acting user.
 
 ## 5. Verify the whole change
 

@@ -8,6 +8,10 @@ import (
 // SubscriptionAuthorizer decides whether an acting user may follow a
 // recipient's change signals.
 //
+// It authorizes following only. Permitting an acting user to follow a recipient
+// grants no authority to change anything of that recipient's: marking read acts
+// on the acting user's own notifications, on every transport.
+//
 // The default is [SelfOnly]. A host replaces it wholesale, for example with a
 // policy that lets a supervisor follow a team member; nothing is chained, so a
 // policy that extends the default calls SelfOnly itself.
@@ -31,11 +35,20 @@ func (f SubscriptionAuthorizerFunc) AuthorizeSubscription(ctx context.Context, a
 // own notifications. Every notification is addressed to one recipient, so this
 // is everything a user's own client needs. It refuses any subscription when no
 // acting user is established. Its refusals match [ErrUnauthorized].
+//
+// Under it a connection's recipient is always the acting user, so marking read
+// over a WebSocket connection behaves exactly as it does over the HTTP contract.
 var SelfOnly SubscriptionAuthorizer = SubscriptionAuthorizerFunc(selfOnly)
 
 // AllowAll permits every subscription. It is the explicit opt-out from
 // [SelfOnly], for a host that authorizes subscriptions somewhere else, and it is
 // named so that streaming anyone's signals to anyone is never an accident.
+//
+// It grants no authority to change anything. An acting user following another
+// recipient under this policy still cannot mark that recipient's notifications
+// read: such a request is refused as forbidden. A host that needs one user to
+// mark another's notifications read does that over the HTTP contract, behind its
+// own authorization.
 var AllowAll SubscriptionAuthorizer = SubscriptionAuthorizerFunc(func(context.Context, string, string) error {
 	return nil
 })

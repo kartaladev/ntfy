@@ -104,8 +104,9 @@ namespaced under `ntfy.` so they do not collide with one.
 
 Both authorize the subscription with the same policy (`ntfy.SelfOnly` by
 default), refuse while the hub is not running, and count against the same
-per-recipient cap of 8 connections per instance. A WebSocket client can also
-mark notifications read over its connection:
+per-recipient cap of 8 connections per instance. The policy grants following
+only: a WebSocket client can also mark notifications read over its connection,
+and that always acts on the acting user, never on a followed recipient:
 
 | Direction | Message |
 | --- | --- |
@@ -114,6 +115,15 @@ mark notifications read over its connection:
 | client to server | `{"type":"mark-all-read","ref":"r2","through":"..."}` (`through` optional) |
 | server to client | `{"type":"marked","ref":"r1","marked":1}` |
 | server to client | `{"type":"error","ref":"r1","code":"not_found","message":"..."}` |
+| server to client | `{"type":"error","ref":"r1","code":"forbidden","message":"..."}` |
+
+**Stated limit: a subscription policy grants following only.** Marking read over
+a WebSocket connection always acts on the acting user. A connection opened for
+someone else — under `ntfy.AllowAll`, or a policy that lets a supervisor follow a
+team member — keeps receiving that recipient's signals, and a mark request on it
+is answered `forbidden` and changes nothing. There is no option to widen this: a
+host that needs one user to mark another's notifications read does it over the
+HTTP contract, behind its own authorization.
 
 WebSocket defaults:
 

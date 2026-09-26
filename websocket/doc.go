@@ -7,7 +7,9 @@
 // happened, and every connection subscribes through the same
 // [github.com/kartaladev/ntfy.Hub], so one per-recipient cap counts
 // streams and WebSocket connections together. Beyond the stream, a client can
-// mark its notifications read over the connection.
+// mark the acting user's own notifications read over the connection: a policy
+// that permits following another recipient grants no authority to change
+// anything of theirs.
 //
 // Every refusal is answered as an HTTP status before the connection is
 // upgraded. Browser origins other than the request's own host are refused by
