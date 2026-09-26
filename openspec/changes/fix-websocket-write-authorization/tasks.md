@@ -24,7 +24,7 @@
 
 ## 5. Verify the whole change
 
-- [ ] 5.1 Run `make all` (lint, split-check, test) and verify it passes on every module.
-- [ ] 5.2 Run `go test -race -count=1 ./...` in the root and `websocket` modules and verify no data races and no goroutine leaks (`goleak` is already wired in `websocket/main_test.go`).
-- [ ] 5.3 Re-run the 1.1 test against a temporarily reverted fix and verify it fails again, confirming the test still proves the defect rather than passing vacuously.
-- [ ] 5.4 Run `openspec validate "fix-websocket-write-authorization" --strict` and verify the change is valid and every spec scenario has a corresponding test.
+- [x] 5.1 Run `make all` (lint, split-check, test) and verify it passes on every module.
+- [x] 5.2 Run `go test -race -count=1 ./...` in the root and `websocket` modules and verify no data races and no goroutine leaks (`goleak` is already wired in `websocket/main_test.go`).
+- [x] 5.3 Re-run the 1.1 test against a temporarily reverted fix and verify it fails again, confirming the test still proves the defect rather than passing vacuously.
+- [x] 5.4 Run `openspec validate "fix-websocket-write-authorization" --strict` and verify the change is valid and every spec scenario has a corresponding test.
