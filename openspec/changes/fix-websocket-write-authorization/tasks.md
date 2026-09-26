@@ -12,9 +12,9 @@
 
 ## 3. Guard against the transports drifting apart
 
-- [ ] 3.1 Add a cross-transport authority test in the `websocket` module that drives the SSE handler and the WebSocket handler with the same policy and the same request, asserting both permit or both refuse and neither changes a recipient other than the actor (spec scenario "Both transports grant the same authority"). Follow the `table-test` skill for the policy cases (`SelfOnly`, `AllowAll`, a supervisor policy). Verify the whole `websocket` module passes with `go test -race -count=1 ./...`.
-- [ ] 3.2 Name the test and comment it so a future transport is added to it rather than tested in isolation, and verify by reading it back: the comment must say what breaks if a new transport skips this test.
-- [ ] 3.3 Confirm the default path is unchanged: run the existing `websocket` suite and verify every `SelfOnly` mark-read test still passes untouched.
+- [x] 3.1 Add a cross-transport authority test in the `websocket` module that drives the SSE handler and the WebSocket handler with the same policy and the same request, asserting both permit or both refuse and neither changes a recipient other than the actor (spec scenario "Both transports grant the same authority"). Follow the `table-test` skill for the policy cases (`SelfOnly`, `AllowAll`, a supervisor policy). Verify the whole `websocket` module passes with `go test -race -count=1 ./...`.
+- [x] 3.2 Name the test and comment it so a future transport is added to it rather than tested in isolation, and verify by reading it back: the comment must say what breaks if a new transport skips this test.
+- [x] 3.3 Confirm the default path is unchanged: run the existing `websocket` suite and verify every `SelfOnly` mark-read test still passes untouched.
 
 ## 4. Make the ports say what they grant
 
