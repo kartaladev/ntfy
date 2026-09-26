@@ -1,14 +1,14 @@
 ## 1. Prove the defect (red)
 
-- [ ] 1.1 Add a failing test in the `websocket` module that reproduces the escalation: a handler wired with `ntfy.AllowAll`, an actor connecting with `?recipient=<victim>`, sending `{"type":"mark-all-read"}`, and asserting the victim's notifications keep the state they had. Verify with `go test -run 'TestMarkOnFollowedConnection' -count=1 ./...` inside `websocket/` and confirm it fails because the victim's notifications were marked read — not because of a wiring or compile error (see `.claude/rules/prove-errors-with-tests.md`).
-- [ ] 1.2 Extend the same test to the named form (`mark-read` naming one of the victim's notification identifiers) and verify it fails the same way, so both write paths are covered before either is fixed.
+- [x] 1.1 Add a failing test in the `websocket` module that reproduces the escalation: a handler wired with `ntfy.AllowAll`, an actor connecting with `?recipient=<victim>`, sending `{"type":"mark-all-read"}`, and asserting the victim's notifications keep the state they had. Verify with `go test -run 'TestMarkOnFollowedConnection' -count=1 ./...` inside `websocket/` and confirm it fails because the victim's notifications were marked read — not because of a wiring or compile error (see `.claude/rules/prove-errors-with-tests.md`).
+- [x] 1.2 Extend the same test to the named form (`mark-read` naming one of the victim's notification identifiers) and verify it fails the same way, so both write paths are covered before either is fixed.
 
 ## 2. Make writes act on the acting user (green)
 
-- [ ] 2.1 Thread the acting user from `ServeHTTP` through `serve`, `read` and `answer` in `websocket/handler.go`, keeping the connection's recipient for signal delivery only, and verify the package still compiles with `go build ./...`.
-- [ ] 2.2 Call `svc.MarkRead` and `svc.MarkAllRead` with the actor, and refuse a mark request with a forbidden reply echoing the request reference when the connection's recipient is not the actor, per `design.md` D2. Verify the tests from 1.1 and 1.2 now pass.
-- [ ] 2.3 Add the forbidden case to `errorReply` so the reply carries the contract's existing forbidden code and a message that does not name the followed recipient, and verify with a test asserting the reply's code, reference and message.
-- [ ] 2.4 Add a test asserting the connection stays open and still delivers the followed recipient's signals after a refused mark request, and verify it passes (spec scenario "Marking read on a followed connection is refused").
+- [x] 2.1 Thread the acting user from `ServeHTTP` through `serve`, `read` and `answer` in `websocket/handler.go`, keeping the connection's recipient for signal delivery only, and verify the package still compiles with `go build ./...`.
+- [x] 2.2 Call `svc.MarkRead` and `svc.MarkAllRead` with the actor, and refuse a mark request with a forbidden reply echoing the request reference when the connection's recipient is not the actor, per `design.md` D2. Verify the tests from 1.1 and 1.2 now pass.
+- [x] 2.3 Add the forbidden case to `errorReply` so the reply carries the contract's existing forbidden code and a message that does not name the followed recipient, and verify with a test asserting the reply's code, reference and message.
+- [x] 2.4 Add a test asserting the connection stays open and still delivers the followed recipient's signals after a refused mark request, and verify it passes (spec scenario "Marking read on a followed connection is refused").
 
 ## 3. Guard against the transports drifting apart
 

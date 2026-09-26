@@ -257,7 +257,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetReadLimit(h.readLimit)
 
-	h.serve(r.Context(), conn, subscription, recipient)
+	h.serve(r.Context(), conn, subscription, actor, recipient)
 }
 
 // replyBuffer is how many replies a connection holds for its write loop. When
@@ -283,7 +283,7 @@ type signalFrame struct {
 // down, the write loop still has to send the going-away close frame, and a read
 // on a cancelled context would close the connection first with a status of its
 // own.
-func (h *Handler) serve(requestCtx context.Context, conn *cws.Conn, subscription *ntfy.Subscription, recipient string) {
+func (h *Handler) serve(requestCtx context.Context, conn *cws.Conn, subscription *ntfy.Subscription, actor, recipient string) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 
 	replies := make(chan any, replyBuffer)
@@ -292,7 +292,7 @@ func (h *Handler) serve(requestCtx context.Context, conn *cws.Conn, subscription
 	go func() {
 		defer close(readerDone)
 
-		h.read(ctx, conn, recipient, replies)
+		h.read(ctx, conn, actor, recipient, replies)
 	}()
 
 	defer func() {
@@ -361,7 +361,7 @@ func (h *Handler) write(ctx context.Context, conn *cws.Conn, value any) error {
 // the write loop. Reading is also what answers the client's pings and completes
 // the server's. A message over the read limit ends the connection with status
 // 1009, which the library applies.
-func (h *Handler) read(ctx context.Context, conn *cws.Conn, recipient string, replies chan<- any) {
+func (h *Handler) read(ctx context.Context, conn *cws.Conn, actor, recipient string, replies chan<- any) {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -369,7 +369,7 @@ func (h *Handler) read(ctx context.Context, conn *cws.Conn, recipient string, re
 		}
 
 		select {
-		case replies <- h.answer(ctx, recipient, data):
+		case replies <- h.answer(ctx, actor, recipient, data):
 		case <-ctx.Done():
 			return
 		}
@@ -400,15 +400,31 @@ type errorFrame struct {
 	Message string `json:"message"`
 }
 
-// answer applies one request to the connection's recipient and returns the
-// reply. It acts on the connection's recipient only, so another recipient's
-// notification is not found exactly like one that does not exist.
-func (h *Handler) answer(ctx context.Context, recipient string, data []byte) any {
+// errFollowedConnection refuses a mark request on a connection that follows
+// another recipient. A subscription policy grants following only, so the write
+// is refused rather than silently retargeted at the acting user's own inbox.
+// Its message names the rule and never the followed recipient.
+var errFollowedConnection = fmt.Errorf(
+	"%w: a connection following another recipient may not mark notifications read",
+	ntfy.ErrUnauthorized,
+)
+
+// answer applies one request to the acting user's own notifications and returns
+// the reply. A connection may follow another recipient's signals, but the policy
+// that permitted that grants no authority to change anything of theirs: a mark
+// request on such a connection is refused, not retargeted. Another recipient's
+// notification named in a mark request is not found exactly like one that does
+// not exist.
+func (h *Handler) answer(ctx context.Context, actor, recipient string, data []byte) any {
 	var req request
 	if err := json.Unmarshal(data, &req); err != nil {
 		return errorReply("", &ntfy.ValidationError{Subject: "message", Issues: []ntfy.ValidationIssue{
 			{Detail: "must be a JSON object with a type of mark-read or mark-all-read"},
 		}})
+	}
+
+	if recipient != actor && (req.Type == "mark-read" || req.Type == "mark-all-read") {
+		return errorReply(req.Ref, errFollowedConnection)
 	}
 
 	var (
@@ -418,9 +434,9 @@ func (h *Handler) answer(ctx context.Context, recipient string, data []byte) any
 
 	switch req.Type {
 	case "mark-read":
-		result, err = h.svc.MarkRead(ctx, recipient, req.IDs...)
+		result, err = h.svc.MarkRead(ctx, actor, req.IDs...)
 	case "mark-all-read":
-		result, err = h.svc.MarkAllRead(ctx, recipient, req.Through)
+		result, err = h.svc.MarkAllRead(ctx, actor, req.Through)
 	default:
 		err = &ntfy.ValidationError{Subject: "message", Issues: []ntfy.ValidationIssue{
 			{Pointer: "/type", Detail: "must be mark-read or mark-all-read"},
@@ -436,7 +452,8 @@ func (h *Handler) answer(ctx context.Context, recipient string, data []byte) any
 
 // errorReply maps an error to a reply with the HTTP contract's codes. A
 // not-found reply carries a fixed message, so that it cannot tell one missing
-// identifier from another.
+// identifier from another, and a forbidden reply names the rule that refused
+// the request and never the recipient the connection follows.
 func errorReply(ref string, err error) errorFrame {
 	frame := errorFrame{Type: "error", Ref: ref, Code: "internal", Message: "the request could not be completed"}
 
@@ -445,6 +462,8 @@ func errorReply(ref string, err error) errorFrame {
 		frame.Code, frame.Message = "validation_failed", err.Error()
 	case errors.Is(err, ntfy.ErrNotFound):
 		frame.Code, frame.Message = "not_found", ntfy.ErrNotFound.Error()
+	case errors.Is(err, ntfy.ErrUnauthorized):
+		frame.Code, frame.Message = "forbidden", err.Error()
 	}
 
 	return frame
