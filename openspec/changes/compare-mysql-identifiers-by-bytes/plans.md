@@ -364,7 +364,7 @@ Record the pass/fail split for the commit message. If a case or trailing-space r
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestStoreOnStdSQL(Postgres|SQLite)/identity|TestStoreOnPgxPostgres/identity' -count=1 .`
 Expected: PASS on PostgreSQL and SQLite.
 
-- [ ] **Step 5: Write the verification red (tasks 2.1, 2.2)**
+- [x] **Step 5: Write the verification red (tasks 2.1, 2.2)**
 
 Append to `sqlstore/verify_test.go`. Its imports already include `sqlkit` and `sqlkittest`.
 
@@ -443,7 +443,7 @@ func TestSQLKitStillExpectsTheOldMySQLCollation(t *testing.T) {
 }
 ```
 
-- [ ] **Step 6: Watch verification fail for the stated reason**
+- [x] **Step 6: Watch verification fail for the stated reason**
 
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestVerifySchemaRequiresByteExactIdentifiersOnMySQL|TestSQLKitStillExpectsTheOldMySQLCollation' -count=1 .`
 
@@ -452,7 +452,7 @@ Expected:
 - The `utf8mb4_0900_bin` row fails with `... does not contain ".recipient: collation is \"utf8mb4_0900_bin\" but must be \"binary\""`, because the reported issue says `must be "utf8mb4_0900_as_cs"`.
 - The tripwire passes.
 
-- [ ] **Step 7: Add a delegating `verifyDialect` and its red test (tasks 3.4)**
+- [x] **Step 7: Add a delegating `verifyDialect` and its red test (tasks 3.4)**
 
 Add to `sqlstore/store.go`, just above `VerifySchema`:
 
@@ -516,7 +516,7 @@ func TestVerifyDialect(t *testing.T) {
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestVerifyDialect' -count=1 .`
 Expected: FAIL only on `MySQL expects binary identifier columns`, with `expected: "binary" actual: "utf8mb4_0900_as_cs"`.
 
-- [ ] **Step 8: Make `verifyDialect` expect binary columns on MySQL, and use it**
+- [x] **Step 8: Make `verifyDialect` expect binary columns on MySQL, and use it**
 
 Replace the method body in `sqlstore/store.go`:
 
@@ -553,7 +553,7 @@ Expected: PASS.
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestVerifySchemaOnMySQL|TestVerifyEmailSchemaOnMySQL' -count=1 .`
 Expected: FAIL, because the DDL still declares `VARCHAR ... COLLATE utf8mb4_0900_as_cs`. For example, the row "a freshly migrated schema, migrated twice, verifies" reports `...recipient: collation is "utf8mb4_0900_as_cs" but must be "binary"`. That is why Steps 9–10 belong in this commit.
 
-- [ ] **Step 9: Make the notification identifier columns binary (tasks 3.1)**
+- [x] **Step 9: Make the notification identifier columns binary (tasks 3.1)**
 
 In `sqlstore/ddl/mysql.sql`, replace the first line and the header paragraph that begins `-- Identifier columns are pinned to utf8mb4_0900_as_cs` (through `-- for 'alice' to 'Alice' on this one dialect out of three.`) with:
 
@@ -602,7 +602,7 @@ and in `ntfy_watermarks`:
 
 Check: `grep -c 'VARBINARY(' sqlstore/ddl/mysql.sql` prints `8`, and `grep -n 'COLLATE' sqlstore/ddl/mysql.sql` prints nothing.
 
-- [ ] **Step 10: Make the email identifier columns binary (tasks 3.2)**
+- [x] **Step 10: Make the email identifier columns binary (tasks 3.2)**
 
 In `sqlstore/ddl/email/mysql.sql`, replace the header paragraph that begins `-- Identifier columns are pinned to utf8mb4_0900_as_cs` with:
 
@@ -624,7 +624,7 @@ Replace the five identifier column lines:
 
 Check: `grep -c 'VARBINARY(' sqlstore/ddl/email/mysql.sql` prints `5`, and `grep -c 'COLLATE' sqlstore/ddl/email/mysql.sql` prints `0`.
 
-- [ ] **Step 11: Regenerate the golden schemas (tasks 3.3)**
+- [x] **Step 11: Regenerate the golden schemas (tasks 3.3)**
 
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestSchema$|TestEmailSchema' -update -count=1 .`
 Then: `git diff --stat sqlstore/testdata/schema`
@@ -633,7 +633,7 @@ Expected: exactly `mysql.sql`, `mysql_app_.sql`, `email_mysql.sql` and `email_my
 Run without `-update`: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestSchema|TestEmailSchema' -count=1 .`
 Expected: PASS.
 
-- [ ] **Step 12: Run everything from Task 1 green**
+- [x] **Step 12: Run everything from Task 1 green**
 
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestMySQLComparesIdentifiersByBytes|TestStoreOnStdSQLMySQL|TestVerifySchema|TestVerifyEmailSchema|TestVerifyDialect|TestSQLKitStillExpects|TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex' -count=1 .`
 Expected: PASS. That covers:
@@ -647,11 +647,11 @@ If a case fails with `sqlkit: cannot read ... as text`, a driver returned a type
 Run: `GOTOOLCHAIN=go1.26.8 go test -count=1 ./...` in the root, and `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -count=1 ./...`
 Expected: PASS. This includes `internal/gormtest`, whose GORM MySQL run migrates the new DDL and decodes through GORM.
 
-- [ ] **Step 13: Refactor pass**
+- [x] **Step 13: Refactor pass**
 
 Consider `/simplify` on the touched files (`.claude/rules/golang-tdd.md`), then re-run Step 12. Run `cd sqlstore && golangci-lint run ./...` and `cd ntfytest && golangci-lint run ./...`, expecting `0 issues.`
 
-- [ ] **Step 14: Commit**
+- [x] **Step 14: Commit**
 
 ```bash
 git add sqlstore/identity_test.go sqlstore/verify_test.go sqlstore/verify_internal_test.go \
@@ -685,7 +685,7 @@ The `<paste …>` marker is the one thing filled in at execution time: it is the
 - Consumes: `ntfytest.Run(t *testing.T, factory ntfytest.Factory)`, `ntfy.NewMemoryStore() *ntfy.MemoryStore`, and the `ntfy.Store` method set: `Insert`, `Close`, `Get`, `List`, `CountActive`, `MarkRead`, `MarkAllRead`, `Prune`. Also `ntfy.CloseRequest{Subject, Kinds, Except, SuccessorSkip, Successor *ntfy.Successor}`, with `ntfy.Successor{SourceID, Kind}` and `ntfy.ListQuery{Recipient, Kinds, Subject}`.
 - Produces: nothing other tasks use.
 
-- [ ] **Step 1: Write the proof**
+- [x] **Step 1: Write the proof**
 
 Create `ntfytest/identity_test.go`:
 
@@ -849,12 +849,12 @@ func TestIdentityRejectsFoldingStores(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `cd ntfytest && GOTOOLCHAIN=go1.26.8 go test -run 'TestIdentityRejectsFoldingStores' -count=1 .`
 Expected: PASS on all four rows. Task 1 already added the group, so this test proves the group rather than driving it.
 
-- [ ] **Step 3: Invert and watch it go red**
+- [x] **Step 3: Invert and watch it go red**
 
 Comment out the `t.Run("identity", ...)` line in `ntfytest/suite.go`. Re-run the command from Step 2.
 Expected:
@@ -863,7 +863,7 @@ Expected:
 
 Restore the line and re-run Step 2 to confirm PASS. Do not commit the inversion.
 
-- [ ] **Step 4: Lint and commit**
+- [x] **Step 4: Lint and commit**
 
 Run: `cd ntfytest && golangci-lint run ./...`, expecting `0 issues.`
 
@@ -887,7 +887,7 @@ Claude-Session: https://claude.ai/code/session_01RJafobH6gZay9kpSiSAS6A"
 - Consumes: `harness.NewEmailStore(t, executor) *sqlstore.Store`, `prefixOf(store) string`, `exec(t, executor, statement)`, `issues(t, err) string`, `(*sqlstore.Store).Insert/Get/VerifySchema/VerifyEmailSchema`, and `openSQL`, which returns the `*sql.DB` used for the pre-check query.
 - Produces: `func documentedBlock(t *testing.T, heading, prefix string) []string`. It returns the statements of the first fenced `sql` block under a heading line of `docs/schema.md`, with comment lines dropped and `app_` replaced by the prefix.
 
-- [ ] **Step 1: Write the failing upgrade test**
+- [x] **Step 1: Write the failing upgrade test**
 
 Append to `sqlstore/email_verify_test.go`:
 
@@ -991,12 +991,12 @@ func TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Watch it fail**
+- [x] **Step 2: Watch it fail**
 
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes' -count=1 .`
 Expected: FAIL with `docs/schema.md has the heading "### Rolling the upgrade back"`. The defect being fixed is that no documented upgrade exists, so the missing section is the right red.
 
-- [ ] **Step 3: Write the section (tasks 4.1)**
+- [x] **Step 3: Write the section (tasks 4.1)**
 
 Insert into `docs/schema.md`, directly before `## Rolling back`, so that it follows "Adding the email claim index to an existing host":
 
@@ -1100,14 +1100,14 @@ ALTER TABLE `app_ntfy_email_deliveries`
 ```
 ````
 
-- [ ] **Step 4: Watch it pass**
+- [x] **Step 4: Watch it pass**
 
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestTheDocumentedMySQLUpgrade' -count=1 .`
 Expected: PASS for both upgrade tests.
 
 The existing `TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex` finds its statement with `documentedStatement(t, "ALTER TABLE", …)`, which returns the **first** line of `docs/schema.md` starting with `ALTER TABLE`. The new section comes after the claim-index section, so that first line is still the claim-index statement. If that test fails with a MySQL syntax error on ``ALTER TABLE `…ntfy_notifications` `` (a multi-line statement cut at one line), the new section was placed too early. Move it after the claim-index section.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/schema.md sqlstore/email_verify_test.go
@@ -1128,7 +1128,7 @@ Claude-Session: https://claude.ai/code/session_01RJafobH6gZay9kpSiSAS6A"
 
 **Interfaces:** none. This task changes only documentation.
 
-- [ ] **Step 1: Update `docs/schema.md` (tasks 5.1)**
+- [x] **Step 1: Update `docs/schema.md` (tasks 5.1)**
 
 Leave `| MySQL 8.0+ | …` as it is: the minimum does not change.
 
@@ -1156,7 +1156,7 @@ Replace the bullet beginning `- **Identifiers compare case-sensitively and sort 
 
 Check: `grep -rn '0900_as_cs' docs sqlstore/ddl` prints only three kinds of line: the "Rolling the upgrade back" block, the upgrade section's opening sentence, and the explanatory mentions in the bullet and in `sqlstore/ddl/mysql.sql`'s header. None presents it as the current column definition.
 
-- [ ] **Step 2: Update the godoc (tasks 5.2)**
+- [x] **Step 2: Update the godoc (tasks 5.2)**
 
 In `store.go`, insert this paragraph into the `Store` godoc directly after the paragraph ending "…already stamped.":
 
@@ -1178,7 +1178,7 @@ In `ntfytest/doc.go`, append a paragraph after the isolation paragraph, keeping 
 // an ignorable code point or their Unicode normalisation are different.
 ```
 
-- [ ] **Step 3: Verify the docs and commit**
+- [x] **Step 3: Verify the docs and commit**
 
 Run `GOTOOLCHAIN=go1.26.8 go doc github.com/kartaladev/ntfy.Store | head -30`. The byte-identity paragraph should show.
 Run `cd ntfytest && GOTOOLCHAIN=go1.26.8 go doc .`. The identity paragraph should show.
@@ -1202,7 +1202,7 @@ Claude-Session: https://claude.ai/code/session_01RJafobH6gZay9kpSiSAS6A"
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Run the gates (tasks 6.1)**
+- [x] **Step 1: Run the gates (tasks 6.1)**
 
 Run: `make all`
 Expected: every module lints with `0 issues.`, split-check passes, and every module's tests pass.
@@ -1215,7 +1215,7 @@ Expected: no diff. `pkg/sqlkit` is untouched.
 
 If `redis` `TestListen/cancelling_stops_listening_and_unsubscribes` fails, it is the known timing race from the 2026-09-28 audit and is unrelated to this change. Re-run the module once. If it fails again, record that here and do not fix it in this change.
 
-- [ ] **Step 2: Record the sqlkit follow-up (tasks 6.2)**
+- [x] **Step 2: Record the sqlkit follow-up (tasks 6.2)**
 
 Fill the execution record below with the actual outputs, and leave this issue text there for the maintainer to file in sqlkit's repository:
 
@@ -1246,7 +1246,7 @@ Once released and copied into ntfy's `pkg/sqlkit`, ntfy deletes
 fails first.
 ```
 
-- [ ] **Step 3: Tick `tasks.md` and commit**
+- [x] **Step 3: Tick `tasks.md` and commit**
 
 Tick every box in `tasks.md` that the steps above completed. Add anything that turned out differently from this plan to the `> **Revised …**` block at the top.
 
@@ -1262,7 +1262,37 @@ Then continue with `.claude/rules/development-workflow.md` step 5: `/code-review
 
 ## Execution record
 
-Filled in during Task 5. It holds:
-- the Task 1 Step 2 and Step 4 red outputs;
-- the `make all`, `make store-matrix` and `make sqlkit-copy-check` results;
-- the sqlkit issue text above, and whether and where it was filed.
+Executed 2026-09-28 in the worktree `.claude/worktrees/compare-mysql-identifiers-by-bytes`, branch `compare-mysql-identifiers-by-bytes`, against MySQL 8.4.6 (`sqlkittest.MySQLImage`), Go 1.26.8.
+
+**What changed from the first plan.** Midway through Task 1, the maintainer rejected `utf8mb4_0900_bin` because it needs MySQL 8.0.17: a library cannot make its hosts upgrade their database. The design moved to `VARBINARY` (`design.md` D1). Steps 1–4 were already done and needed no change. A throwaway probe confirmed the facts D2 rests on, then was deleted:
+- MySQL reports a NULL collation for `VARBINARY` columns, which sqlkit accepts;
+- `CAST('alice' AS BINARY) = 'alice '` is 0, so binary strings do not pad.
+
+**Task 1 Step 2 (red):** all five cases failed for the stated reason.
+- The three recipient cases failed with `Get as "alice\u200b" returned "alice"'s notification`, `... "alice\x00" ...` and `Get as "jose\u0301" returned "jos\u00e9"'s notification`, each also listing and counting the other recipient's notification.
+- The two source cases failed with `"event-1\u200b" is a source of its own, not a redelivery of "event-1"`, and likewise for `\x00`. In each, `Created` was empty and `Duplicates` was 1.
+
+This settled the proposal's claim that the collation also merges sources, which had been labelled unverified.
+
+**Task 1 Step 4 (red on MySQL):**
+- 8 of 16 identity rows failed: the U+200B and NFC/NFD rows for alice, event-1, task-1 and offer. The failures read `closing "task-1" closed "task-1\u200b"`, `closing "task-1" suppressed a publish on "task-1\u200b"` and `a filter on "offer" returned "offer\u200b" too`.
+- The case and trailing-space rows passed, as `design.md` D1 predicted.
+- Memory passed 16 of 16. PostgreSQL (database/sql and pgx) and SQLite passed 48 of 48.
+
+**Task 1 Steps 6–8:**
+- Before the wrapper, the `utf8mb4_0900_as_cs` row failed with `An error is expected but got nil`, and the `utf8mb4_0900_bin` row failed with `... but must be "utf8mb4_0900_as_cs" ... does not contain ... but must be "binary"`.
+- `TestVerifyDialect` failed only on MySQL, with `expected: "binary" actual: "utf8mb4_0900_as_cs"`.
+- With the wrapper but the old DDL, verification named all eight notification/watermark columns and all five email columns, as expected.
+
+**Task 2:** as planned, plus one strengthening. The `sound` control could have passed with a child that ran no tests at all. So the child now runs with `-test.v`, and the control requires `--- PASS: TestIdentityChild/identity/alice_differing_in_case`. With the `identity` line removed from `Run`, all four rows failed, the control included; restored, all passed. Lint also asked for named results on `runIdentityChild` (`unnamedResult`), and for `\u200b` escapes instead of literal U+200B (ST1018).
+
+**Task 3:** red, with `docs/schema.md has the heading "### Rolling the upgrade back"`. Once the section was written, `TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes` and the existing `TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex` both passed.
+
+**Gates (Task 5 Step 1):**
+- `make all`: lint gave `0 issues.` in all six modules, and split-check passed. Tests passed in `ntfy`, `ntfytest`, `sqlstore`, `sqlstore/internal/gormtest` and `websocket`.
+  - `redis` failed on `TestListen/cancelling_stops_listening_and_unsubscribes` (`listen_test.go:162`, "the channel has no subscriber left"). This is the timing race from the 2026-09-28 audit and is unrelated to this change. A re-run of `redis` passed.
+  - The loop stops at the first failing module, so `nats` and the `pkg/sqlkit` modules were run separately. All passed.
+- `make store-matrix`: exit 0 on all seven driver-and-dialect combinations.
+- `make sqlkit-copy-check`: exit 0 against `32e7763297a4ac0107c0702da5a5b497c9029083`. `pkg/sqlkit` is untouched.
+
+**sqlkit follow-up (Task 5 Step 2):** the issue text under Task 5 Step 2 is ready to file in sqlkit's repository. Filing it is left to the maintainer; it has not been filed.

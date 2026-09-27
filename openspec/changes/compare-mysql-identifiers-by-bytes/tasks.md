@@ -1,6 +1,7 @@
 > **Revised 2026-09-28, during apply:**
 > - The fix moved from `utf8mb4_0900_bin`, which needs MySQL 8.0.17, to `VARBINARY` columns. The maintainer ruled that a library cannot make its hosts upgrade their database. See `design.md` D1.
 > - 1.1 and 1.2 were done before the revision, and hold unchanged.
+> - 1.3: the control child runs verbosely and must show an identity row passing, so that a child running no tests cannot pass it (see `plans.md`, Execution record).
 
 ## 1. Prove the defect (red)
 
@@ -71,8 +72,8 @@
 
 ## 6. Verify and hand off
 
-- [ ] 6.1 Run `make all` and `make store-matrix`. Both must pass, the matrix on all seven driver-and-dialect combinations. Run `make sqlkit-copy-check` and confirm `pkg/sqlkit` is untouched.
-- [ ] 6.2 Record the sqlkit follow-up in `plans.md`'s execution record, and give the maintainer a ready-to-file issue text for sqlkit's own repository. The issue asks for three changes:
+- [x] 6.1 Run `make all` and `make store-matrix`. Both must pass, the matrix on all seven driver-and-dialect combinations. Run `make sqlkit-copy-check` and confirm `pkg/sqlkit` is untouched.
+- [x] 6.2 Record the sqlkit follow-up in `plans.md`'s execution record, and give the maintainer a ready-to-file issue text for sqlkit's own repository. The issue asks for three changes:
   - sqlkit's MySQL dialect expects binary identifier columns;
   - `columnIssues` words the issue as byte comparison;
   - the `sqlkittest` MySQL fixtures move to `VARBINARY`.
