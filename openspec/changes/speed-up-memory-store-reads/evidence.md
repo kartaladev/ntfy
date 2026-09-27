@@ -69,7 +69,7 @@ held across the scan is the bottleneck. The audit measured 222.
 
 ### The gate fails
 
-Command: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 -v .`
+Command: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 -v .` (as recorded; since review the gate needs `NTFY_MEASURE_MEMORY=1`, see "Where the gates run")
 
 ```
 === RUN   TestMemoryStoreReadsDoNotScaleWithStoreSize/CountActive
@@ -119,38 +119,90 @@ With the index read restored, it passes in 0.41 s.
 
 ## D2 verification
 
-Command: `rg -n 's\.notifications\[' memory.go memory_email.go`. It was run after
-the index was added to `put` and `remove`, so the line numbers are post-change.
+This check was re-run against the code as finally committed, after the review
+fixes, so the line numbers match the tree.
+
+Command: `rg -n 's\.notifications\[' memory.go memory_email.go`
 
 ```
 memory_email.go:157:		if _, exists := s.notifications[id]; !exists {
-memory.go:122:	s.notifications[n.ID] = n
-memory.go:181:		if n := s.notifications[id]; n.Recipient == recipient && n.Kind == kind && n.State != StateClosed {
-memory.go:229:		n := s.notifications[id]
-memory.go:248:		s.notifications[id] = n
-memory.go:274:	n, ok := s.notifications[id]
-memory.go:383:		if n, ok := s.notifications[id]; !ok || n.Recipient != recipient {
-memory.go:393:		n := s.notifications[id]
-memory.go:408:		s.notifications[id] = n
-memory.go:431:		s.notifications[id] = n
+memory.go:135:	if old, ok := s.notifications[n.ID]; ok {
+memory.go:139:	s.notifications[n.ID] = n
+memory.go:194:		if n := s.notifications[id]; n.Recipient == recipient && n.Kind == kind && n.State != StateClosed {
+memory.go:242:		n := s.notifications[id]
+memory.go:261:		s.notifications[id] = n
+memory.go:287:	n, ok := s.notifications[id]
+memory.go:308:		n := s.notifications[id]
+memory.go:384:		if s.notifications[id].State == StateActive {
+memory.go:398:		if n, ok := s.notifications[id]; !ok || n.Recipient != recipient {
+memory.go:408:		n := s.notifications[id]
+memory.go:423:		s.notifications[id] = n
+memory.go:439:		n := s.notifications[id]
+memory.go:448:		s.notifications[id] = n
+memory.go:507:			held = append(held, s.notifications[id])
 ```
 
-That pattern does not match `delete(...)` or a reassignment of the whole map.
-So the check also ran
-`rg -n 'delete\(s\.notifications|s\.notifications =|\.Recipient =' --glob '!*_test.go' .`.
-It found one delete, at `memory.go:145` in `remove`. It found no reassignment of
-the map, and no code in the library that assigns `Recipient`.
+That pattern does not match `delete(...)`, a reassignment of the whole map, or
+an assignment to `Recipient`. A second command covers those:
+
+```
+$ rg -n 'delete\(s\.notifications|s\.notifications =|\.Recipient =' --glob '!*_test.go' --glob '!openspec/**' .
+./memory.go:148:	delete(s.notifications, n.ID)
+./memory.go:194:		if n := s.notifications[id]; n.Recipient == recipient && n.Kind == kind && n.State != StateClosed {
+./memory.go:249:		case req.Except != "" && n.Recipient == req.Except:
+./ntfytest/broadcaster.go:184:		if signal.Recipient == recipient {
+```
+
+Those hits are the one delete, in `remove` (:148), and three `==` comparisons.
+Nothing reassigns the map, and nothing in the library assigns `Recipient`.
 
 The writes are:
 
-- `put` (:122);
-- `remove` (:145);
-- in-place replacements in `Close` (:248), `MarkRead` (:408) and `MarkAllRead`
-  (:431).
+- `put` (:139), which first removes any notification already stored under the
+  identifier (:135);
+- `remove` (:148);
+- in-place replacements in `Close` (:261), `MarkRead` (:423) and `MarkAllRead`
+  (:448).
 
 The three replacements change only state, timestamps and `ClosedReason`, never
 `Recipient`. `memory_email.go` only reads the map. D2 holds, and the index needs
 maintaining in `put` and `remove` only.
+
+### The identifier-reuse gap, found in review
+
+D2 as first written missed a case. When `put` stored an identifier that was
+already held, it overwrote the map entry and left the earlier notification's
+index entries in place. `IDGenerator` is the consumer's to replace, and the
+memory store has no primary key to reject a repeat, unlike the SQL store.
+
+After such a reuse, `recipients` pointed the earlier recipient at the
+replacement, so `CountActive` and `MarkAllRead` reached another recipient's
+notification. `subjects` and `sources` went stale too; that part already
+happened on `main`.
+
+The case "after an identifier is reused for another recipient" in
+`TestMemoryStoreRecipientIndexMirrorsTheStore` failed before the fix:
+
+```
+            	Messages:   	index holds id-a under "alice", stored under "carol"
+            	Messages:   	index holds 4 identifiers, the store holds 3 notifications
+            	Messages:   	alice keeps no entry for carol's notification
+            	Messages:   	task-1 keeps no entry for carol's notification
+            	Messages:   	alice counts only her own notification
+            	Messages:   	alice marks only her own notification
+            	Messages:   	carol's notification is untouched by alice
+FAIL
+```
+
+`put` now removes the stored notification with all its index entries before
+storing the replacement. The replacement still wins, as it always did, and
+every index follows it. The case passes, and so does the conformance suite.
+
+The security review traced every path that assigns an identifier. Publish and
+Close successors both mint identifiers through the host's `IDGenerator`. No
+HTTP route accepts an identifier to store. A reuse therefore needs host code
+that breaks the `IDGenerator` contract. That makes this a correctness fix, not
+an exploitable vulnerability.
 
 ## Prune count bound
 
@@ -163,7 +215,7 @@ Nothing is removed, so one seeded store serves every call.
 
 **Threshold, stated before measuring:** a within-bound pass at 200k/2000 makes
 at most 2× the allocations it makes at 20k/200. This is
-`TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize`, which uses
+`TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize` (since replaced, see below), which uses
 `testing.AllocsPerRun`. Allocation counts are deterministic, so this gate does
 not depend on load.
 
@@ -205,6 +257,61 @@ lock for about 0.23 ms instead of 34–54 ms. The 100 KB that remains is the
 sorted list of recipient keys. It is proportional to recipients, not to
 notifications, and it is kept because `PruneResult.Recipients` is reported in
 sorted order.
+
+### Tightened in review: a within-bound pass allocates nothing
+
+Review raised two gaps in that gate:
+
+- It counted allocations, not bytes. A regression that added a single
+  allocation sized to the whole store would have passed: 12→13 allocations at
+  20k, and 16→17 at 200k.
+- The 100 KB of sorted keys still grew with the recipient count.
+
+**Threshold, stated before measuring:** a pass that finds every recipient within
+the bound makes **zero** allocations, at both sizes. Zero allocations is zero
+bytes, so this catches the single large allocation too. The test is
+`TestMemoryStorePruneCountWithinBoundAllocatesNothing`. It failed against the
+code above:
+
+```
+        	Messages:   	a within-bound count pass allocated 12 times at 20k
+        	Messages:   	a within-bound count pass allocated 16 times at 200k
+--- FAIL: TestMemoryStorePruneCountWithinBoundAllocatesNothing (0.17s)
+```
+
+`pruneCount` now collects and sorts only the recipients over the bound. In the
+steady state there are none, so it allocates nothing. The test passes:
+
+```
+BenchmarkMemoryStorePruneCount/20k-14         	      20	      2042 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStorePruneCount/20k-14         	      20	      1294 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStorePruneCount/20k-14         	      20	      1140 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	     14581 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	     14412 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	     17169 ns/op	       0 B/op	       0 allocs/op
+```
+
+At 200k, the within-bound pass went from 130 MB and 34–54 ms at the start of
+this change to 0 B and about 15 µs. What remains is one walk over the recipient
+keys, which the doc comment states.
+
+## Where the gates run
+
+Review found that CI's only unit job runs the root module with `-race`. That
+build excludes `memory_bench_test.go`, so the gates never ran on a pull request.
+Two changes fix this:
+
+- Both gate tests are now opt-in through `NTFY_MEASURE_MEMORY`, following
+  `NTFY_MEASURE_ROWS` in sqlstore. They seed 220,000 notifications each and time
+  microsecond operations, so they stay out of the default local run.
+- CI's unit job has a step of its own, without `-race`, that sets the variable.
+  The gates are the only tests running there:
+
+```
+NTFY_MEASURE_MEMORY=1 go test -count=1 -run 'TestMemoryStore(ReadsDoNotScale|PruneCountWithinBound)' -v .
+```
+
+That run passes locally. With the variable unset, both tests report SKIP.
 
 ## After
 

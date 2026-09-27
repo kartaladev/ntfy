@@ -43,6 +43,8 @@ Add `recipients map[string]map[string]struct{}`, mirroring `subjects` exactly: r
 
 This is the load-bearing claim of the change, so the implementer verifies it rather than trusting it: every write to `s.notifications` must be either `put`, `remove`, or an in-place replacement that preserves `Recipient`. The check is mechanical (`rg 's\.notifications\[' memory.go memory_email.go`) and belongs in the task list.
 
+*Found in review:* `put` is also where one notification can replace another, when an identifier is reused. The `IDGenerator` is the consumer's to replace, and the memory store has no primary key to reject a repeat. A plain overwrite would leave the earlier notification's entries in `recipients` pointing at the replacement, and `CountActive` and `MarkAllRead` would then reach another recipient's notification. So `put` removes any notification already stored under the identifier, with all its index entries, before it stores the new one. The replacement still wins, as it always did, and every index follows it. `TestMemoryStoreRecipientIndexMirrorsTheStore` covers the case.
+
 ### D3. `List` keeps its sort; no per-recipient ordered structure
 
 `List` (:262-301) filters, then sorts with `slices.SortFunc(matched, newestFirst)` (:285), then pages. With the index it filters over the recipient's identifiers instead of the whole map, and keeps the sort.
