@@ -20,6 +20,7 @@ type Service struct {
 	ids           IDGenerator
 	broadcaster   Broadcaster
 	onSignalError func(ctx context.Context, err error)
+	limits        Limits
 }
 
 // Option configures a [Service] at construction.
@@ -68,6 +69,13 @@ func WithSignalErrorHandler(handler func(ctx context.Context, err error)) Option
 	}
 }
 
+// WithLimits replaces the validation limits, [DefaultLimits]. A field the host
+// leaves unset keeps its default. A limit that is not positive, or naming link
+// schemes while also accepting any scheme, is a [ConfigurationError].
+func WithLimits(limits Limits) Option {
+	return func(s *Service) { s.limits = limits }
+}
+
 // New builds a service over a store. With no options it reads the system clock,
 // mints UUIDv7 identifiers and broadcasts in process. A nil store is a
 // [ConfigurationError].
@@ -88,6 +96,10 @@ func New(store Store, opts ...Option) (*Service, error) {
 		if opt != nil {
 			opt(svc)
 		}
+	}
+
+	if err := svc.limits.validate(); err != nil {
+		return nil, err
 	}
 
 	return svc, nil
