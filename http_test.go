@@ -341,6 +341,36 @@ func TestHandlerListAndCount(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "a query the server cannot parse is refused, not served unfiltered",
+			assert: func(t *testing.T, env *httpEnv) {
+				env.publish(t, offer("alice", "a1"), offer("alice", "a2"))
+
+				// One more parameter than net/url will parse. Today
+				// r.URL.Query() returns nothing for such a request and the
+				// listing is served with every filter dropped, returning 200
+				// and both notifications. That is the defect this proves.
+				target := "/v1/notifications?" + strings.Repeat("kind=nomatch&", 10001)
+
+				rec := env.do(t, http.MethodGet, target, "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				assert.Equal(t, "validation_failed", decodeError(t, rec).Error.Code)
+			},
+		},
+		{
+			name: "a filter carrying more values than the bound is a bad request",
+			assert: func(t *testing.T, env *httpEnv) {
+				target := "/v1/notifications?" + strings.Repeat("kind=x&", ntfy.DefaultMaxFilterValues+1)
+
+				rec := env.do(t, http.MethodGet, target, "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+
+				body := decodeError(t, rec)
+				assert.Equal(t, "validation_failed", body.Error.Code)
+				require.NotEmpty(t, body.Error.Issues)
+				assert.Equal(t, "/kinds", body.Error.Issues[0].Pointer)
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -663,6 +693,23 @@ func TestHandlerStream(t *testing.T) {
 			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
 				s := openStream(t, server, "", "")
 				assert.Equal(t, http.StatusForbidden, s.resp.StatusCode)
+			},
+		},
+		{
+			name: "a stream whose query cannot be parsed follows the acting user, never someone else",
+			run:  true,
+			assert: func(t *testing.T, env *httpEnv, server *httptest.Server) {
+				// The recipient parameter is unreachable in a query the server
+				// cannot parse, so the stream falls back to the acting user.
+				query := "?recipient=bob&" + strings.Repeat("x=1&", 10001)
+
+				s := openStream(t, server, "alice", query)
+				require.Equal(t, http.StatusOK, s.resp.StatusCode)
+
+				s.expect(t, "the connected comment", equals(": connected"))
+
+				env.publish(t, offer("alice", "a1"))
+				s.expect(t, "an unread-changed event", equals("event: unread-changed"))
 			},
 		},
 		{

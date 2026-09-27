@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -177,7 +178,17 @@ type listResponse struct {
 // list answers GET /notifications. It lists the acting user's notifications;
 // no parameter names another recipient.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request, actor string) {
-	values := r.URL.Query()
+	// Parsed here rather than through r.URL.Query(), which discards every value
+	// and the error when the query cannot be parsed, leaving the listing to be
+	// served with its filters silently dropped.
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		WriteError(w, &ValidationError{Subject: "request", Issues: []ValidationIssue{
+			{Pointer: "/query", Detail: "could not be parsed"},
+		}})
+
+		return
+	}
 
 	q := ListQuery{
 		Recipient: actor,
