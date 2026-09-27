@@ -103,15 +103,22 @@ nor fails startup over it.
 
 | | PostgreSQL | MySQL | SQLite |
 | --- | --- | --- | --- |
-| Identifier columns | `text COLLATE "C"` | `VARCHAR COLLATE utf8mb4_0900_as_cs` | `TEXT COLLATE BINARY` |
+| Identifier columns | `text COLLATE "C"` | `VARBINARY` | `TEXT COLLATE BINARY` |
 | Timestamps | `timestamptz(6)` | `DATETIME(6)` | `TEXT`, RFC 3339, six fractional digits |
 | `links`, `data` | `text` | `LONGTEXT` | `TEXT` |
 | Indexes declared | `CREATE INDEX IF NOT EXISTS` | inside `CREATE TABLE` | `CREATE INDEX IF NOT EXISTS` |
 
-- **Identifiers compare case-sensitively and sort in byte order** on every
-  dialect. MySQL's default collation is case-insensitive, which would deliver
-  `alice`'s notifications to `Alice`, and a locale-aware collation can sort
-  identifiers so that keyset paging skips or repeats rows.
+- **Identifiers compare byte for byte and sort in byte order** on every
+  dialect: case, trailing spaces, code points such as U+200B, and the Unicode
+  normalisation form all count. On MySQL they are binary strings rather than
+  text under a collation. The server default collation folds case,
+  `utf8mb4_0900_as_cs` ignores U+200B and equates `é` with `e` and a combining
+  accent, and `utf8mb4_bin` ignores trailing spaces; any of them would deliver
+  one recipient's notifications to another. `utf8mb4_0900_bin` would not, but
+  it needs MySQL 8.0.17, and binary strings need nothing newer than the store
+  already does. Their lengths are bytes, as the library's limits are. A
+  locale-aware collation can also sort identifiers so that keyset paging skips
+  or repeats rows.
 - **Payloads are text, never a native JSON type.** PostgreSQL's `jsonb` and
   MySQL's `JSON` reorder keys and rewrite number literals, and the store returns a
   payload exactly as it was published.

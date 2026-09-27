@@ -61,13 +61,13 @@
 
 ## 5. Document
 
-- [ ] 5.1 Update `docs/schema.md` so it matches the change:
+- [x] 5.1 Update `docs/schema.md` so it matches the change:
   - the dialect table's MySQL identifier cell becomes `VARBINARY`;
   - the "Identifiers compare…" bullet says byte for byte on every dialect, with no padding, ignorables or normalisation, and says why MySQL uses binary strings rather than a collation;
   - the minimum MySQL version stays 8.0.
 
   Verify that `go test -run 'TestTheDocumentMatchesTheImplementation' -count=1 .` in the root passes, and that `grep -rn '0900_as_cs' docs sqlstore/ddl` prints only the rollback block and the DDL header's explanation.
-- [ ] 5.2 State the byte-identity guarantee in two places: `ntfytest/doc.go`, beside the isolation paragraph, and the `ntfy.Store` godoc in `store.go`. Verify with `go doc github.com/kartaladev/ntfy.Store` and `go doc github.com/kartaladev/ntfy/ntfytest`.
+- [x] 5.2 State the byte-identity guarantee in two places: `ntfytest/doc.go`, beside the isolation paragraph, and the `ntfy.Store` godoc in `store.go`. Verify with `go doc github.com/kartaladev/ntfy.Store` and `go doc github.com/kartaladev/ntfy/ntfytest`.
 
 ## 6. Verify and hand off
 

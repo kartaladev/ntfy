@@ -25,6 +25,12 @@ import (
 // reach a store already validated, and notifications reach Insert already
 // stamped.
 //
+// A store compares identifiers byte for byte. Two recipients, sources,
+// subjects or kinds are the same only when their bytes are: a store does not
+// fold case, ignore trailing spaces or ignorable code points, or normalise, and
+// it returns every identifier exactly as it was given. ntfytest asserts this on
+// every store.
+//
 // A store shares no memory with its caller. It copies what it retains, so that
 // a caller mutating a link map or payload afterwards cannot change what is
 // stored, and what it returns shares nothing with its own state, with the
