@@ -1,13 +1,13 @@
 ## 1. Prove the defect (red)
 
-- [ ] 1.1 Add an aliasing case to `ntfytest` (a new `runIsolation` group registered from `Run`) that closes a subject with a successor carrying `Links` and `Data`, mutates the caller's `req.Successor.Links` and `Data` after `Close` returns, then asserts `CloseResult.Successors` and the notifications read back are unchanged. Verify with `go test -run 'TestStore/isolation' -count=1 ./...` in `sqlstore/` that it fails on the SQL store because the returned successor changed, and confirm the same case passes on `MemoryStore` — that divergence is the finding (see `.claude/rules/prove-errors-with-tests.md`).
-- [ ] 1.2 Add the sibling case for successors to two recipients: mutate the link map of the successor reported for alice and assert bob's is unchanged. Verify it fails on both stores today, since `SuccessorInsertions` gives every insertion the same map (`store.go:178-182`).
+- [x] 1.1 Add an aliasing case to `ntfytest` (a new `runIsolation` group registered from `Run`) that closes a subject with a successor carrying `Links` and `Data`, mutates the caller's `req.Successor.Links` and `Data` after `Close` returns, then asserts `CloseResult.Successors` and the notifications read back are unchanged. Verify with `go test -run 'TestStore/isolation' -count=1 ./...` in `sqlstore/` that it fails on the SQL store because the returned successor changed, and confirm the same case passes on `MemoryStore` — that divergence is the finding (see `.claude/rules/prove-errors-with-tests.md`).
+- [x] 1.2 Add the sibling case for successors to two recipients: mutate the link map of the successor reported for alice and assert bob's is unchanged. Verify it fails on both stores today, since `SuccessorInsertions` gives every insertion the same map (`store.go:178-182`).
 - [ ] 1.3 Add a case that mutates a caller's draft `Links`/`Data` after `Publish` and asserts the stored notification is unchanged, and verify it passes on both stores today — it pins the behaviour `service.go:143-150` already provides so a later refactor cannot silently drop it.
 
 ## 2. Stop handing stores aliased values (green)
 
-- [ ] 2.1 Clone each insertion in `CloseRequest.SuccessorInsertions` (`store.go:178-182`), matching what `Service.Publish` does at `service.go:150`. Verify the 1.2 case now passes on both stores.
-- [ ] 2.2 State the guarantee in `SuccessorInsertions`' godoc: the insertions it returns share nothing with the request or with each other. Verify with `go doc ntfy.CloseRequest.SuccessorInsertions` that the rendered text says so.
+- [x] 2.1 Clone each insertion in `CloseRequest.SuccessorInsertions` (`store.go:178-182`), matching what `Service.Publish` does at `service.go:150`. Verify the 1.2 case now passes on both stores.
+- [x] 2.2 State the guarantee in `SuccessorInsertions`' godoc: the insertions it returns share nothing with the request or with each other. Verify with `go doc ntfy.CloseRequest.SuccessorInsertions` that the rendered text says so.
 
 ## 3. Make the stores keep the invariant (green)
 

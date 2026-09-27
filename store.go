@@ -157,6 +157,10 @@ func (r CloseRequest) Validate() error {
 // calls it inside its close transaction, once the recipients are known, and
 // inserts the result through its ordinary insert path. It returns nothing when
 // the request names no successor.
+//
+// Every insertion it returns shares no links or payload with the request or
+// with the other insertions, so a store may keep what it is given. A store must
+// not rely on that: see [Store].
 func (r CloseRequest) SuccessorInsertions(recipients []string, at time.Time, ids IDGenerator) ([]Insertion, error) {
 	if r.Successor == nil {
 		return nil, nil
@@ -175,11 +179,15 @@ func (r CloseRequest) SuccessorInsertions(recipients []string, at time.Time, ids
 			return nil, err
 		}
 
-		out = append(out, Insertion{Notification: Notification{
-			ID: id, Recipient: recipient, SourceID: successor.SourceID, Subject: r.Subject,
-			SubjectVersion: successor.SubjectVersion, Kind: successor.Kind, State: StateActive,
-			Title: successor.Title, Links: successor.Links, Data: successor.Data, CreatedAt: at,
-		}})
+		out = append(out, Insertion{
+			// Cloned, so that the insertions share nothing with the request or
+			// with each other: a store may keep what it is given.
+			Notification: Notification{
+				ID: id, Recipient: recipient, SourceID: successor.SourceID, Subject: r.Subject,
+				SubjectVersion: successor.SubjectVersion, Kind: successor.Kind, State: StateActive,
+				Title: successor.Title, Links: successor.Links, Data: successor.Data, CreatedAt: at,
+			}.Clone(),
+		})
 	}
 
 	return out, nil
