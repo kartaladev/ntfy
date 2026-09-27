@@ -208,4 +208,65 @@ sorted order.
 
 ## After
 
-<filled in by Task 6>
+Absolute figures are indicative of one machine. The gate is
+`TestMemoryStoreReadsDoNotScaleWithStoreSize`, which asserts the ratio only.
+
+Command: `GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStore(CountActive|List|MarkAllRead)' -benchmem -benchtime 20x -count 3 .`
+
+```
+goos: darwin
+goarch: arm64
+pkg: github.com/kartaladev/ntfy
+cpu: Apple M4 Pro
+BenchmarkMemoryStoreCountActive/20k-14        	      20	      5042 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActive/20k-14        	      20	      5183 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActive/20k-14        	      20	      5456 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActive/200k-14       	      20	      5669 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActive/200k-14       	      20	      5819 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActive/200k-14       	      20	      5938 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActiveParallel-14    	      20	     15917 ns/op	     62934 ops/s	    1292 B/op	       7 allocs/op
+BenchmarkMemoryStoreCountActiveParallel-14    	      20	      8038 ns/op	    125065 ops/s	    1312 B/op	       6 allocs/op
+BenchmarkMemoryStoreCountActiveParallel-14    	      20	      6700 ns/op	    154640 ops/s	     172 B/op	       4 allocs/op
+BenchmarkMemoryStoreList/20k-14               	      20	     33800 ns/op	   97589 B/op	      24 allocs/op
+BenchmarkMemoryStoreList/20k-14               	      20	     41479 ns/op	   97578 B/op	      22 allocs/op
+BenchmarkMemoryStoreList/20k-14               	      20	     26121 ns/op	   97457 B/op	      22 allocs/op
+BenchmarkMemoryStoreList/200k-14              	      20	     25594 ns/op	   97457 B/op	      22 allocs/op
+BenchmarkMemoryStoreList/200k-14              	      20	     25919 ns/op	   97457 B/op	      22 allocs/op
+BenchmarkMemoryStoreList/200k-14              	      20	     25304 ns/op	   97457 B/op	      22 allocs/op
+BenchmarkMemoryStoreMarkAllRead/20k-14        	      20	      2123 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreMarkAllRead/20k-14        	      20	      2075 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreMarkAllRead/20k-14        	      20	      2073 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreMarkAllRead/200k-14       	      20	      2521 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreMarkAllRead/200k-14       	      20	      2179 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryStoreMarkAllRead/200k-14       	      20	      2158 ns/op	       0 B/op	       0 allocs/op
+```
+
+The parallel benchmark ran with 20,000 iterations: at 20, the setup of 32
+goroutines dominates a 5 µs operation.
+
+Command: `GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStoreCountActiveParallel' -benchmem -benchtime 20000x -count 3 .`
+
+```
+BenchmarkMemoryStoreCountActiveParallel-14    	   20000	      5236 ns/op	    190970 ops/s	       3 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActiveParallel-14    	   20000	      5385 ns/op	    185695 ops/s	       1 B/op	       0 allocs/op
+BenchmarkMemoryStoreCountActiveParallel-14    	   20000	      5420 ns/op	    184492 ops/s	       0 B/op	       0 allocs/op
+```
+
+Each figure below is the median of three runs:
+
+| Operation | 20k/200 | 200k/2000 | Ratio | Before, at 200k |
+| --- | --- | --- | --- | --- |
+| CountActive | 5.18 µs | 5.82 µs | 1.1× | 5.48 ms |
+| List | 33.8 µs | 25.6 µs | 0.8× | 9.77 ms |
+| MarkAllRead | 2.08 µs | 2.18 µs | 1.0× | 5.78 ms |
+
+Concurrent `CountActive` at 200k/2000, with 32 goroutines, reached about
+185,000 ops/s. Before the index it reached 170–191 ops/s.
+
+design.md D6's indicative targets were `CountActive` under 50 µs, `List` under
+200 µs, `MarkAllRead` under 100 µs, and more than 20,000 concurrent ops/s. All
+four are met on this machine.
+
+`TestMemoryStoreReadsDoNotScaleWithStoreSize` passes. The gate was met, so
+`design.md` D5 stands: `sync.Mutex` is kept, and plans.md Task 7 (`RWMutex`) does
+not run.

@@ -17,18 +17,18 @@
 
 ## 3. Meet the gate
 
-- [ ] 3.1 Re-run the scaling test from 1.4 and verify it now passes: per-operation cost at 200k within 2× of 20k for `CountActive`, `List` and `MarkAllRead`.
-- [ ] 3.2 Re-run the benchmarks from 1.2 and 1.3 and record the new figures beside the old ones in the benchmark's comment, marked as indicative of one machine rather than as thresholds, per `design.md` D6.
-- [ ] 3.3 If the gate is missed with the index in place, stop and revisit `design.md` D5 (`RWMutex`) with the benchmark output as the evidence, rather than tuning the threshold to pass.
+- [x] 3.1 Re-run the scaling test from 1.4 and verify it now passes: per-operation cost at 200k within 2× of 20k for `CountActive`, `List` and `MarkAllRead`.
+- [x] 3.2 Re-run the benchmarks from 1.2 and 1.3 and record the new figures beside the old ones in the benchmark's comment, marked as indicative of one machine rather than as thresholds, per `design.md` D6.
+- [x] 3.3 If the gate is missed with the index in place, stop and revisit `design.md` D5 (`RWMutex`) with the benchmark output as the evidence, rather than tuning the threshold to pass.
 
 ## 4. Prove nothing else changed
 
-- [ ] 4.1 Run the full conformance suite against the memory store — `ntfytest.Run` and `ntfytest.RunEmail` — and verify every case passes unchanged, with no edits to any suite case. Any suite edit means the index changed behaviour and the change is wrong.
-- [ ] 4.2 Run `go test -race -count=1 ./...` in the root module and verify no data races and no goroutine leaks (`goleak` is wired in `main_test.go`).
-- [ ] 4.3 Run `make all` and verify lint, split-check and tests pass across every module.
+- [x] 4.1 Run the full conformance suite against the memory store — `ntfytest.Run` and `ntfytest.RunEmail` — and verify every case passes unchanged, with no edits to any suite case. Any suite edit means the index changed behaviour and the change is wrong.
+- [x] 4.2 Run `go test -race -count=1 ./...` in the root module and verify no data races and no goroutine leaks (`goleak` is wired in `main_test.go`).
+- [x] 4.3 Run `make all` and verify lint, split-check and tests pass across every module.
 
 ## 5. State what remains
 
-- [ ] 5.1 Update the `MemoryStore` doc comment (memory.go:15-21) to state the limits that survive this change: single process, everything lost on restart, and pruning and email claims proportional to the whole store rather than to one recipient. Verify with `go doc ./... | grep -A12 'type MemoryStore'` that the rendered documentation reads correctly and no longer implies unqualified parity with the SQL store.
-- [ ] 5.2 Verify the claim in that comment is now true of what the code does: read it against `Prune` (:418-444) and `ClaimEmails` (memory_email.go:25-66), and confirm it neither overstates the fix nor repeats the removed cliff.
-- [ ] 5.3 Run `openspec validate "speed-up-memory-store-reads" --strict` and verify the change is valid.
+- [x] 5.1 Update the `MemoryStore` doc comment (memory.go:15-21) to state the limits that survive this change: single process, everything lost on restart, and pruning and email claims proportional to the whole store rather than to one recipient. Verify with `go doc ./... | grep -A12 'type MemoryStore'` that the rendered documentation reads correctly and no longer implies unqualified parity with the SQL store.
+- [x] 5.2 Verify the claim in that comment is now true of what the code does: read it against `Prune` (:418-444) and `ClaimEmails` (memory_email.go:25-66), and confirm it neither overstates the fix nor repeats the removed cliff.
+- [x] 5.3 Run `openspec validate "speed-up-memory-store-reads" --strict` and verify the change is valid.

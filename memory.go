@@ -19,6 +19,16 @@ const allKinds = "*"
 // passes the same conformance suite as the SQL store. A MemoryStore is safe for
 // concurrent use; every method runs under one lock, which is the whole of its
 // serialisation.
+//
+// Listing a recipient's notifications, counting them and marking them all read
+// cost what that recipient holds, because notifications are indexed by
+// recipient. The periodic passes are not scoped to a recipient: pruning by age
+// and claiming emails visit every notification in the store, and the count
+// bound visits every recipient. The host drives them on an interval, and each
+// holds the lock while it runs, so their cost grows with the whole store.
+//
+// Nothing here survives a restart, and nothing is shared between processes. A
+// host that needs either uses ntfy/sqlstore.
 type MemoryStore struct {
 	mu            sync.Mutex
 	notifications map[string]Notification

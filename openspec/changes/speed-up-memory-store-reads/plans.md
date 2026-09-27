@@ -47,6 +47,46 @@ The change `scale-email-claim-query` also adds measurement. This plan assumes th
 
 ---
 
+## As built: where the code departs from the steps below
+
+The change was implemented on 2026-09-27. Where a step's code block and
+the repository disagree, **the repository is authoritative**, for the reasons
+given here. `evidence.md` records each measurement.
+
+1. **The order follows `tasks.md`.** The scaling gate (Task 3 Steps 1-3) was
+   written and seen to fail in section 1, as `tasks.md` 1.4 orders. Tasks 1-3
+   landed in one commit, so that no commit carries a failing gate.
+2. **The parallel benchmark** calls `b.SetParallelism` so that it runs at least 32
+   goroutines whatever GOMAXPROCS is. It reports `ops/s`. Inside `RunParallel`
+   it reports errors with `b.Error` and returns: `b.Fatal` may not be called
+   from a `RunParallel` goroutine. The `b.ResetTimer` calls before `b.Loop` were
+   dropped, because `b.Loop` resets the timer itself.
+3. **The scaling gate** does not call `t.Parallel()`. Each cost is the least of 5
+   rounds of 200 calls, interleaved between the two sizes. The one-mean version
+   flaked under full CPU load, with `List` at ratios 4.5 and 2.6. The 2×
+   threshold is unchanged, and the hardened gate was re-proved red against the
+   old scanning reads (24-36×).
+4. **`seedMemoryStore` names its results** (`store`, `read`), which gocritic's
+   `unnamedResult` requires.
+5. **The index invariant test has a fifth case**: the count bound evicting part
+   of a recipient's notifications. It covers the `pruneCount` rewrite.
+6. **The prune measurement uses the within-bound steady state.** The prune
+   benchmark in Task 4 uses a bound of 50 against 100 per recipient. That
+   materialises every recipient in the old code and the new alike, so it
+   cannot show design.md D4's claim. As built, the benchmark instead runs
+   `DefaultMaxPerRecipient` (500) at both fixture sizes. It has a threshold
+   test, `TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize`:
+   allocations at 200k are within 2× of those at 20k. That test failed at 9.9×
+   before the rewrite.
+7. **The doc comment** names only the reads the index serves: listing,
+   counting and marking all read. `Get` and `MarkRead` take identifiers and
+   were already cheap. The comment also names the count bound's pass, which
+   visits every recipient.
+8. **Task 7 did not run.** The gate passed with the index, so `design.md` D5
+   stands.
+
+---
+
 ## Task 1: Benchmark harness and recorded evidence of the cliff
 
 **Files:**

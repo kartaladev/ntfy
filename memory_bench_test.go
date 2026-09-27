@@ -22,6 +22,18 @@ import (
 // The fixture sizes design.md D6 names: the recipient read holds 100
 // notifications at both, well inside DefaultMaxPerRecipient = 500, so only the
 // store's total size differs.
+//
+// Indicative figures, one machine only (Apple M4 Pro, go1.26.8, 2026-09-27),
+// never thresholds; the gates below assert ratios. Per operation at 200k,
+// before the recipient index and after it:
+//
+//	CountActive               5.48 ms  ->  5.8 µs
+//	List (50 rows)            9.77 ms  ->   25 µs
+//	MarkAllRead               5.78 ms  ->  2.2 µs
+//	CountActive, 32 callers   ~180 ops/s  ->  ~185,000 ops/s
+//	Prune, within the bound   130 MB, 34-54 ms  ->  100 KB, 0.23 ms
+//
+// openspec/changes/speed-up-memory-store-reads/evidence.md has the runs.
 const (
 	smallNotifications, smallRecipients = 20_000, 200
 	largeNotifications, largeRecipients = 200_000, 2_000
