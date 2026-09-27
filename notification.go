@@ -3,8 +3,10 @@ package ntfy
 import (
 	"encoding/json"
 	"maps"
+	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,9 +36,10 @@ func (s State) Valid() bool {
 	}
 }
 
-// The limits a draft is validated against. They are the widths of the SQL
-// store's columns, applied to every store so that a draft accepted in memory is
-// accepted everywhere.
+// The identifier limits every store enforces. They are the widths of the SQL
+// store's columns, applied everywhere so that a draft accepted in memory is
+// accepted in SQL too. A draft's title, links and payload are bounded
+// separately, by [Limits], because their columns are unbounded text.
 const (
 	// MaxKindBytes is the longest kind.
 	MaxKindBytes = 100
@@ -134,11 +137,19 @@ type Draft struct {
 }
 
 // Validate reports every problem with the draft as a [ValidationError], or nil.
-func (d Draft) Validate() error {
+// It validates content against [DefaultLimits]; [Draft.ValidateWithin]
+// validates against a service's configured limits.
+func (d Draft) Validate() error { return d.ValidateWithin(Limits{}) }
+
+// ValidateWithin reports every problem with the draft, bounding its content by
+// limits. An unset limit keeps its default. It expects limits [New] would
+// accept; behaviour is unspecified for one [New] would refuse to construct
+// with.
+func (d Draft) ValidateWithin(limits Limits) error {
 	issues := validateContent(content{
 		sourceID: d.SourceID, subject: d.Subject, kind: d.Kind,
-		subjectVersion: d.SubjectVersion, data: d.Data,
-	}, true)
+		subjectVersion: d.SubjectVersion, title: d.Title, links: d.Links, data: d.Data,
+	}, true, limits)
 
 	issues = append(issues, validateIdentifier("/recipient", d.Recipient)...)
 
@@ -151,12 +162,14 @@ type content struct {
 	subject        string
 	kind           string
 	subjectVersion int64
+	title          string
+	links          map[string]string
 	data           json.RawMessage
 }
 
 // validateContent checks the fields a draft and a successor share. withSubject
 // is false for a successor, whose subject comes from the close.
-func validateContent(c content, withSubject bool) []ValidationIssue {
+func validateContent(c content, withSubject bool, limits Limits) []ValidationIssue {
 	var issues []ValidationIssue
 
 	issues = append(issues, validateIdentifier("/sourceId", c.sourceID)...)
@@ -178,11 +191,101 @@ func validateContent(c content, withSubject bool) []ValidationIssue {
 		issues = append(issues, ValidationIssue{Pointer: "/subjectVersion", Detail: "must not be negative"})
 	}
 
-	if len(c.data) > 0 && !json.Valid(c.data) {
+	if limit := limits.maxTitleBytes(); len(c.title) > limit {
+		issues = append(issues, ValidationIssue{
+			Pointer: "/title", Detail: "is longer than " + strconv.Itoa(limit) + " bytes",
+		})
+	}
+
+	issues = append(issues, validateLinks(c.links, limits)...)
+
+	// The size is checked first, so that an oversized payload is refused
+	// without scanning it for well-formed JSON.
+	switch limit := limits.maxDataBytes(); {
+	case len(c.data) > limit:
+		issues = append(issues, ValidationIssue{
+			Pointer: "/data", Detail: "is longer than " + strconv.Itoa(limit) + " bytes",
+		})
+	case len(c.data) > 0 && !json.Valid(c.data):
 		issues = append(issues, ValidationIssue{Pointer: "/data", Detail: "is not valid JSON"})
 	}
 
 	return issues
+}
+
+// validateLinks checks how many links a draft carries and the form of each, in
+// relation order so that the same draft always reports the same issues.
+func validateLinks(links map[string]string, limits Limits) []ValidationIssue {
+	if len(links) == 0 {
+		return nil
+	}
+
+	// An over-count map is reported once, and never scanned link by link: a
+	// count issue on top of one per link would report thousands of issues for
+	// one oversized publish.
+	if limit := limits.maxLinks(); len(links) > limit {
+		return []ValidationIssue{{
+			Pointer: "/links", Detail: "carries more than " + strconv.Itoa(limit) + " links",
+		}}
+	}
+
+	var issues []ValidationIssue
+
+	for _, relation := range slices.Sorted(maps.Keys(links)) {
+		pointer := "/links/" + escapePointer(relation)
+
+		if limit := limits.maxLinkRelationBytes(); len(relation) > limit {
+			issues = append(issues, ValidationIssue{
+				Pointer: pointer, Detail: "has a relation name longer than " + strconv.Itoa(limit) + " bytes",
+			})
+		}
+
+		if limit := limits.maxLinkHrefBytes(); len(links[relation]) > limit {
+			issues = append(issues, ValidationIssue{
+				Pointer: pointer, Detail: "has an href longer than " + strconv.Itoa(limit) + " bytes",
+			})
+
+			continue
+		}
+
+		if detail := checkScheme(links[relation], limits); detail != "" {
+			issues = append(issues, ValidationIssue{Pointer: pointer, Detail: detail})
+		}
+	}
+
+	return issues
+}
+
+// checkScheme reports why an href is refused, or an empty string when it is
+// permitted. It checks form only: it never resolves an href, never asks where
+// it points, and never rewrites one it accepts.
+func checkScheme(href string, limits Limits) string {
+	if limits.AnyLinkScheme {
+		return ""
+	}
+
+	parsed, err := url.Parse(href)
+	if err != nil {
+		return "has an href that is not a URL reference"
+	}
+
+	// A relative reference carries no scheme and is always permitted.
+	if parsed.Scheme == "" {
+		return ""
+	}
+
+	if slices.ContainsFunc(limits.linkSchemes(), func(scheme string) bool {
+		return strings.EqualFold(scheme, parsed.Scheme)
+	}) {
+		return ""
+	}
+
+	return "has an href using the " + strings.ToLower(parsed.Scheme) + " scheme, which is not permitted"
+}
+
+// escapePointer escapes a relation name for an RFC 6901 JSON Pointer.
+func escapePointer(token string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1")
 }
 
 // validateIdentifier checks a required identifier and its length.

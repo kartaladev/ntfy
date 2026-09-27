@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -294,4 +295,110 @@ func TestServicePublish(t *testing.T) {
 			tc.assert(t, result, err, handler.all())
 		})
 	}
+}
+
+func TestServicePublishRefusesTooManyDrafts(t *testing.T) {
+	t.Parallel()
+
+	// No Insert is expected: the refusal happens before any transaction opens.
+	svc, _, _, _ := mocked(t)
+
+	drafts := make([]ntfy.Draft, 0, ntfy.DefaultMaxDraftsPerPublish+1)
+	for i := range ntfy.DefaultMaxDraftsPerPublish + 1 {
+		drafts = append(drafts, ntfy.Draft{
+			Recipient: "alice", SourceID: "event-" + strconv.Itoa(i), Subject: "task-1", Kind: "offer",
+		})
+	}
+
+	result, err := svc.Publish(t.Context(), drafts...)
+
+	require.ErrorIs(t, err, ntfy.ErrValidation)
+	assert.Empty(t, result.Created)
+
+	var validation *ntfy.ValidationError
+	require.ErrorAs(t, err, &validation)
+	require.Len(t, validation.Issues, 1)
+	assert.Equal(t, "/drafts", validation.Issues[0].Pointer)
+}
+
+func TestServicePublishHonoursConfiguredLimits(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`{"padding":"` + strings.Repeat("p", ntfy.DefaultMaxDataBytes) + `"}`)
+
+	draft := ntfy.Draft{
+		Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer", Data: payload,
+	}
+
+	t.Run("the default payload limit refuses an oversized draft", func(t *testing.T) {
+		t.Parallel()
+
+		svc, err := ntfy.New(ntfy.NewMemoryStore())
+		require.NoError(t, err)
+
+		_, err = svc.Publish(t.Context(), draft)
+		assert.ErrorIs(t, err, ntfy.ErrValidation)
+	})
+
+	t.Run("a raised payload limit accepts it and returns it byte for byte", func(t *testing.T) {
+		t.Parallel()
+
+		svc, err := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithLimits(ntfy.Limits{
+			MaxDataBytes: ntfy.Limit(1 << 20),
+		}))
+		require.NoError(t, err)
+
+		result, err := svc.Publish(t.Context(), draft)
+		require.NoError(t, err)
+		require.Len(t, result.Created, 1)
+
+		stored, err := svc.Get(t.Context(), "alice", result.Created[0].ID)
+		require.NoError(t, err)
+		assert.Equal(t, []byte(payload), []byte(stored.Data))
+	})
+
+	t.Run("a lowered draft cap refuses a publish the default would accept", func(t *testing.T) {
+		t.Parallel()
+
+		svc, err := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithLimits(ntfy.Limits{
+			MaxDraftsPerPublish: ntfy.Limit(1),
+		}))
+		require.NoError(t, err)
+
+		second := draft
+		second.Data = nil
+		second.SourceID = "event-2"
+
+		first := draft
+		first.Data = nil
+
+		_, err = svc.Publish(t.Context(), first, second)
+		assert.ErrorIs(t, err, ntfy.ErrValidation)
+	})
+
+	t.Run("a raised draft cap accepts a publish the default would refuse", func(t *testing.T) {
+		t.Parallel()
+
+		drafts := make([]ntfy.Draft, 0, ntfy.DefaultMaxDraftsPerPublish+1)
+		for i := range ntfy.DefaultMaxDraftsPerPublish + 1 {
+			drafts = append(drafts, ntfy.Draft{
+				Recipient: "alice", SourceID: "event-" + strconv.Itoa(i), Subject: "task-1", Kind: "offer",
+			})
+		}
+
+		defaultSvc, err := ntfy.New(ntfy.NewMemoryStore())
+		require.NoError(t, err)
+
+		_, err = defaultSvc.Publish(t.Context(), drafts...)
+		require.ErrorIs(t, err, ntfy.ErrValidation, "the default cap refuses it")
+
+		raisedSvc, err := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithLimits(ntfy.Limits{
+			MaxDraftsPerPublish: ntfy.Limit(ntfy.DefaultMaxDraftsPerPublish + 1),
+		}))
+		require.NoError(t, err)
+
+		result, err := raisedSvc.Publish(t.Context(), drafts...)
+		require.NoError(t, err)
+		assert.Len(t, result.Created, ntfy.DefaultMaxDraftsPerPublish+1)
+	})
 }

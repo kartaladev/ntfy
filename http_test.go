@@ -341,6 +341,56 @@ func TestHandlerListAndCount(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "a query the server cannot parse is refused, not served unfiltered",
+			assert: func(t *testing.T, env *httpEnv) {
+				env.publish(t, offer("alice", "a1"), offer("alice", "a2"))
+
+				// One more parameter than net/url will parse. Today
+				// r.URL.Query() returns nothing for such a request and the
+				// listing is served with every filter dropped, returning 200
+				// and both notifications. That is the defect this proves.
+				target := "/v1/notifications?" + strings.Repeat("kind=nomatch&", 10001)
+
+				rec := env.do(t, http.MethodGet, target, "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				assert.Equal(t, "validation_failed", decodeError(t, rec).Error.Code)
+			},
+		},
+		{
+			name: "a query with an escape net/url cannot decode is refused, not served on the part that parsed",
+			assert: func(t *testing.T, env *httpEnv) {
+				env.publish(t, offer("alice", "a1"))
+
+				rec := env.do(t, http.MethodGet, "/v1/notifications?kind=a&x=%zz", "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				assert.Equal(t, "validation_failed", decodeError(t, rec).Error.Code)
+			},
+		},
+		{
+			name: "a query using the semicolon separator is refused, not served on the part that parsed",
+			assert: func(t *testing.T, env *httpEnv) {
+				env.publish(t, offer("alice", "a1"))
+
+				rec := env.do(t, http.MethodGet, "/v1/notifications?x=1;y=2&kind=a", "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				assert.Equal(t, "validation_failed", decodeError(t, rec).Error.Code)
+			},
+		},
+		{
+			name: "a filter carrying more values than the bound is a bad request",
+			assert: func(t *testing.T, env *httpEnv) {
+				target := "/v1/notifications?" + strings.Repeat("kind=x&", ntfy.DefaultMaxFilterValues+1)
+
+				rec := env.do(t, http.MethodGet, target, "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+
+				body := decodeError(t, rec)
+				assert.Equal(t, "validation_failed", body.Error.Code)
+				require.NotEmpty(t, body.Error.Issues)
+				assert.Equal(t, "/kinds", body.Error.Issues[0].Pointer)
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -663,6 +713,39 @@ func TestHandlerStream(t *testing.T) {
 			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
 				s := openStream(t, server, "", "")
 				assert.Equal(t, http.StatusForbidden, s.resp.StatusCode)
+			},
+		},
+		{
+			name: "a stream whose query overflows net/url's parameter cap is refused, not served for the acting user",
+			run:  true,
+			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
+				// Over net/url's parameter cap, ParseQuery refuses the whole
+				// request rather than falling back to the acting user, which
+				// would silently serve a request the server could not parse.
+				query := "?recipient=bob&" + strings.Repeat("x=1&", 10001)
+
+				s := openStream(t, server, "alice", query)
+				require.Equal(t, http.StatusBadRequest, s.resp.StatusCode)
+			},
+		},
+		{
+			name: "a stream whose query carries an escape net/url cannot decode is refused, not served on the part that parsed",
+			run:  true,
+			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
+				// net/url.ParseQuery keeps "recipient=bob" and only skips the
+				// "x=%zz" pair, returning an error. Acting on the part that
+				// parsed would mean following bob without ever having parsed a
+				// request that named him.
+				s := openStream(t, server, "alice", "?recipient=bob&x=%zz")
+				require.Equal(t, http.StatusBadRequest, s.resp.StatusCode)
+			},
+		},
+		{
+			name: "a stream whose query uses the semicolon separator is refused, not served on the part that parsed",
+			run:  true,
+			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
+				s := openStream(t, server, "alice", "?x=1;y=2&recipient=bob")
+				require.Equal(t, http.StatusBadRequest, s.resp.StatusCode)
 			},
 		},
 		{

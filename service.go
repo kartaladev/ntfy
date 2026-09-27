@@ -20,6 +20,7 @@ type Service struct {
 	ids           IDGenerator
 	broadcaster   Broadcaster
 	onSignalError func(ctx context.Context, err error)
+	limits        Limits
 }
 
 // Option configures a [Service] at construction.
@@ -68,6 +69,17 @@ func WithSignalErrorHandler(handler func(ctx context.Context, err error)) Option
 	}
 }
 
+// WithLimits replaces the validation limits, [DefaultLimits]. A field the host
+// leaves unset keeps its default. [New] refuses, with a [ConfigurationError]:
+// a limit that is not positive; an empty LinkSchemes, naming no scheme; a
+// LinkSchemes containing an empty scheme name; and naming link schemes while
+// also setting AnyLinkScheme. The limits are snapshotted at this call: a host
+// mutating the value or slice it passed afterwards does not change the
+// service's policy.
+func WithLimits(limits Limits) Option {
+	return func(s *Service) { s.limits = limits.snapshot() }
+}
+
 // New builds a service over a store. With no options it reads the system clock,
 // mints UUIDv7 identifiers and broadcasts in process. A nil store is a
 // [ConfigurationError].
@@ -88,6 +100,10 @@ func New(store Store, opts ...Option) (*Service, error) {
 		if opt != nil {
 			opt(svc)
 		}
+	}
+
+	if err := svc.limits.validate(); err != nil {
+		return nil, err
 	}
 
 	return svc, nil
@@ -117,10 +133,16 @@ type PublishResult struct {
 // subjects in the same order. When a subject fails, the subjects already
 // written stay written, are reported and signalled, and the error is returned.
 func (s *Service) Publish(ctx context.Context, drafts ...Draft) (PublishResult, error) {
+	if limit := s.limits.maxDraftsPerPublish(); len(drafts) > limit {
+		return PublishResult{}, &ValidationError{Subject: "publish", Issues: []ValidationIssue{{
+			Pointer: "/drafts", Detail: "carries more than " + strconv.Itoa(limit) + " drafts",
+		}}}
+	}
+
 	var issues []ValidationIssue
 
 	for i, draft := range drafts {
-		issues = append(issues, prefixed("/drafts/"+strconv.Itoa(i), draft.Validate())...)
+		issues = append(issues, prefixed("/drafts/"+strconv.Itoa(i), draft.ValidateWithin(s.limits))...)
 	}
 
 	if len(issues) > 0 {
@@ -178,7 +200,7 @@ func (s *Service) Publish(ctx context.Context, drafts ...Draft) (PublishResult, 
 // in one store transaction. It signals a close to every recipient closed and a
 // creation to every recipient given a successor.
 func (s *Service) Close(ctx context.Context, req CloseRequest) (CloseResult, error) {
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateWithin(s.limits); err != nil {
 		return CloseResult{}, err
 	}
 
@@ -213,7 +235,7 @@ func (s *Service) Get(ctx context.Context, recipient, id string) (Notification, 
 
 // List returns a page of a recipient's notifications, newest first.
 func (s *Service) List(ctx context.Context, q ListQuery) (Page, error) {
-	if err := q.Validate(); err != nil {
+	if err := q.ValidateWithin(s.limits); err != nil {
 		return Page{}, err
 	}
 

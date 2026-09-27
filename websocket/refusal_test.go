@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,21 @@ func TestHandshakeRefusals(t *testing.T) {
 				}
 			},
 			assert: refused(http.StatusTooManyRequests, "too_many_streams"),
+		},
+		{
+			name:    "a handshake whose query overflows net/url's parameter cap is refused, not upgraded for the acting user",
+			request: dialRequest{actor: "alice", rawQuery: "recipient=bob&" + strings.Repeat("x=1&", 10001)},
+			assert:  refused(http.StatusBadRequest, "validation_failed"),
+		},
+		{
+			name:    "a handshake whose query carries an escape net/url cannot decode is refused, not served on the part that parsed",
+			request: dialRequest{actor: "alice", rawQuery: "recipient=bob&x=%zz"},
+			assert:  refused(http.StatusBadRequest, "validation_failed"),
+		},
+		{
+			name:    "a handshake whose query uses the semicolon separator is refused, not served on the part that parsed",
+			request: dialRequest{actor: "alice", rawQuery: "x=1;y=2&recipient=bob"},
+			assert:  refused(http.StatusBadRequest, "validation_failed"),
 		},
 		{
 			name:    "a foreign browser origin is forbidden",

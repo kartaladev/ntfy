@@ -125,8 +125,16 @@ type CloseRequest struct {
 }
 
 // Validate reports every problem with the request as a [ValidationError], or
-// nil.
-func (r CloseRequest) Validate() error {
+// nil. It validates the successor's content against [DefaultLimits];
+// [CloseRequest.ValidateWithin] validates against a service's configured
+// limits.
+func (r CloseRequest) Validate() error { return r.ValidateWithin(Limits{}) }
+
+// ValidateWithin reports every problem with the request, bounding its
+// successor's content by limits. An unset limit keeps its default. It expects
+// limits [New] would accept; behaviour is unspecified for one [New] would
+// refuse to construct with.
+func (r CloseRequest) ValidateWithin(limits Limits) error {
 	issues := validateIdentifier("/subject", r.Subject)
 
 	if r.Version < 0 {
@@ -150,8 +158,9 @@ func (r CloseRequest) Validate() error {
 
 	if s := r.Successor; s != nil {
 		for _, issue := range validateContent(content{
-			sourceID: s.SourceID, kind: s.Kind, subjectVersion: s.SubjectVersion, data: s.Data,
-		}, false) {
+			sourceID: s.SourceID, kind: s.Kind, subjectVersion: s.SubjectVersion,
+			title: s.Title, links: s.Links, data: s.Data,
+		}, false, limits) {
 			issue.Pointer = "/successor" + issue.Pointer
 			issues = append(issues, issue)
 		}
@@ -246,7 +255,15 @@ type ListQuery struct {
 }
 
 // Validate reports every problem with the query as a [ValidationError], or nil.
-func (q ListQuery) Validate() error {
+// It bounds filters by [DefaultLimits]; [ListQuery.ValidateWithin] bounds them
+// by a service's configured limits.
+func (q ListQuery) Validate() error { return q.ValidateWithin(Limits{}) }
+
+// ValidateWithin reports every problem with the query, bounding how many values
+// each filter carries by limits. An unset limit keeps its default. It expects
+// limits [New] would accept; behaviour is unspecified for one [New] would
+// refuse to construct with.
+func (q ListQuery) ValidateWithin(limits Limits) error {
 	issues := validateIdentifier("/recipient", q.Recipient)
 
 	if q.Limit < 0 || q.Limit > MaxListLimit {
@@ -255,11 +272,31 @@ func (q ListQuery) Validate() error {
 		})
 	}
 
-	for i, state := range q.States {
-		if !state.Valid() {
+	limit := limits.maxFilterValues()
+
+	for _, filter := range []struct {
+		pointer string
+		values  int
+	}{
+		{"/kinds", len(q.Kinds)},
+		{"/states", len(q.States)},
+	} {
+		if filter.values > limit {
 			issues = append(issues, ValidationIssue{
-				Pointer: "/states/" + strconv.Itoa(i), Detail: "is not ACTIVE, READ or CLOSED",
+				Pointer: filter.pointer, Detail: "carries more than " + strconv.Itoa(limit) + " values",
 			})
+		}
+	}
+
+	// Each state is checked only within the bound, so that an oversized filter
+	// reports one issue rather than one per value.
+	if len(q.States) <= limit {
+		for i, state := range q.States {
+			if !state.Valid() {
+				issues = append(issues, ValidationIssue{
+					Pointer: "/states/" + strconv.Itoa(i), Detail: "is not ACTIVE, READ or CLOSED",
+				})
+			}
 		}
 	}
 

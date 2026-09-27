@@ -1,6 +1,7 @@
 package ntfy_test
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -201,6 +202,85 @@ func TestListQueryValidate(t *testing.T) {
 			t.Parallel()
 
 			tc.assert(t, tc.query.Validate())
+		})
+	}
+}
+
+func TestListQueryValidateFilterLimits(t *testing.T) {
+	t.Parallel()
+
+	kinds := func(n int) []string {
+		out := make([]string, 0, n)
+		for i := range n {
+			out = append(out, "kind-"+strconv.Itoa(i))
+		}
+
+		return out
+	}
+
+	states := func(n int) []ntfy.State {
+		out := make([]ntfy.State, 0, n)
+		for range n {
+			out = append(out, ntfy.StateActive)
+		}
+
+		return out
+	}
+
+	type testCase struct {
+		name   string
+		query  ntfy.ListQuery
+		limits ntfy.Limits
+		assert func(t *testing.T, err error)
+	}
+
+	cases := []testCase{
+		{
+			name:  "kinds at the bound are accepted",
+			query: ntfy.ListQuery{Recipient: "alice", Kinds: kinds(ntfy.DefaultMaxFilterValues)},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name:  "more kinds than the bound are refused",
+			query: ntfy.ListQuery{Recipient: "alice", Kinds: kinds(ntfy.DefaultMaxFilterValues + 1)},
+			assert: func(t *testing.T, err error) {
+				require.ErrorIs(t, err, ntfy.ErrValidation)
+
+				var validation *ntfy.ValidationError
+				require.ErrorAs(t, err, &validation)
+				require.Len(t, validation.Issues, 1, "one issue names the filter, not one per value")
+				assert.Equal(t, "/kinds", validation.Issues[0].Pointer)
+			},
+		},
+		{
+			name:  "more states than the bound are refused",
+			query: ntfy.ListQuery{Recipient: "alice", States: states(ntfy.DefaultMaxFilterValues + 1)},
+			assert: func(t *testing.T, err error) {
+				require.ErrorIs(t, err, ntfy.ErrValidation)
+
+				var validation *ntfy.ValidationError
+				require.ErrorAs(t, err, &validation)
+				require.Len(t, validation.Issues, 1)
+				assert.Equal(t, "/states", validation.Issues[0].Pointer)
+			},
+		},
+		{
+			name:   "a host raises the bound",
+			query:  ntfy.ListQuery{Recipient: "alice", Kinds: kinds(ntfy.DefaultMaxFilterValues + 1)},
+			limits: ntfy.Limits{MaxFilterValues: ntfy.Limit(ntfy.DefaultMaxFilterValues + 10)},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tc.assert(t, tc.query.ValidateWithin(tc.limits))
 		})
 	}
 }

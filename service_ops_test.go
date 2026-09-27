@@ -2,6 +2,8 @@ package ntfy_test
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,81 @@ import (
 
 	"github.com/kartaladev/ntfy"
 )
+
+func TestCloseRequestValidateBoundsItsSuccessor(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`{"padding":"` + strings.Repeat("p", ntfy.DefaultMaxDataBytes) + `"}`)
+
+	req := ntfy.CloseRequest{
+		Subject: "task-1", Version: 5,
+		Successor: &ntfy.Successor{SourceID: "event-5", Kind: "taken", Data: payload},
+	}
+
+	err := req.Validate()
+	require.ErrorIs(t, err, ntfy.ErrValidation)
+
+	var validation *ntfy.ValidationError
+	require.ErrorAs(t, err, &validation)
+
+	pointers := make([]string, 0, len(validation.Issues))
+	for _, issue := range validation.Issues {
+		pointers = append(pointers, issue.Pointer)
+	}
+
+	assert.Contains(t, pointers, "/successor/data")
+}
+
+// TestServiceCloseHonoursConfiguredLimits proves the defect
+// TestCloseRequestValidateBoundsItsSuccessor cannot: that defect test already
+// passes against today's code, because [CloseRequest.Validate] checks the
+// successor's data against Limits{}'s defaults regardless. What today's
+// Service.Close does not do is honour a host's *configured* limits for the
+// successor at all, because it calls req.Validate() unconditionally. A raised
+// payload limit should let a bigger successor through; today it cannot.
+func TestServiceCloseHonoursConfiguredLimits(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`{"padding":"` + strings.Repeat("p", ntfy.DefaultMaxDataBytes) + `"}`)
+
+	publishAndClose := func(t *testing.T, svc *ntfy.Service) (ntfy.CloseResult, error) {
+		t.Helper()
+
+		_, err := svc.Publish(t.Context(), ntfy.Draft{
+			Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer",
+		})
+		require.NoError(t, err)
+
+		return svc.Close(t.Context(), ntfy.CloseRequest{
+			Subject: "task-1", Version: 1,
+			Successor: &ntfy.Successor{SourceID: "event-2", Kind: "taken", SubjectVersion: 2, Data: payload},
+		})
+	}
+
+	t.Run("the default payload limit refuses an oversized successor", func(t *testing.T) {
+		t.Parallel()
+
+		svc, err := ntfy.New(ntfy.NewMemoryStore())
+		require.NoError(t, err)
+
+		_, err = publishAndClose(t, svc)
+		assert.ErrorIs(t, err, ntfy.ErrValidation)
+	})
+
+	t.Run("a raised payload limit accepts it and returns it byte for byte", func(t *testing.T) {
+		t.Parallel()
+
+		svc, err := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithLimits(ntfy.Limits{
+			MaxDataBytes: ntfy.Limit(1 << 20),
+		}))
+		require.NoError(t, err)
+
+		result, err := publishAndClose(t, svc)
+		require.NoError(t, err)
+		require.Len(t, result.Successors, 1)
+		assert.Equal(t, []byte(payload), []byte(result.Successors[0].Data))
+	})
+}
 
 func TestServiceClose(t *testing.T) {
 	t.Parallel()
