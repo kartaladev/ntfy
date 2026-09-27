@@ -91,4 +91,49 @@ func runIsolation(t *testing.T, factory Factory) {
 
 		assert.Equal(t, "/hijacked", reported["alice"].Links["task"], "the mutated copy did change")
 	})
+
+	parallel(t, "mutating an insertion does not change what a store keeps or reported", func(t *testing.T) {
+		e := newEnv(t, factory)
+
+		n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
+		n.Links, n.Data = isolationContent()
+
+		result := e.insert(false, n)
+		require.Len(t, result.Created, 1)
+
+		n.Links["task"] = "/hijacked"
+		n.Data[2] = 'X'
+
+		assert.Equal(t, "/v1/tasks/task-1", result.Created[0].Links["task"],
+			"the reported notification keeps the links it was inserted with")
+		assert.JSONEq(t, `{"by":"carol"}`, string(result.Created[0].Data))
+
+		stored := e.get("alice", n.ID)
+		assert.Equal(t, "/v1/tasks/task-1", stored.Links["task"])
+		assert.JSONEq(t, `{"by":"carol"}`, string(stored.Data))
+
+		assert.Equal(t, "/hijacked", n.Links["task"], "the caller's own map did change")
+	})
+
+	parallel(t, "insertions sharing one map are reported independently", func(t *testing.T) {
+		e := newEnv(t, factory)
+
+		links, data := isolationContent()
+
+		alice := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
+		bob := e.note("bob", "event-2", "task-1", "offer", 1, at(0))
+		alice.Links, alice.Data = links, data
+		bob.Links, bob.Data = links, data
+
+		result := e.insert(false, alice, bob)
+		require.Len(t, result.Created, 2)
+
+		result.Created[0].Links["task"] = "/hijacked"
+		result.Created[0].Data[2] = 'X'
+
+		assert.Equal(t, "/v1/tasks/task-1", result.Created[1].Links["task"],
+			"the second notification keeps its own links")
+		assert.JSONEq(t, `{"by":"carol"}`, string(result.Created[1].Data))
+		assert.Equal(t, "/hijacked", result.Created[0].Links["task"], "the mutated copy did change")
+	})
 }

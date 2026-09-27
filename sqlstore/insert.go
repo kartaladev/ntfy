@@ -100,7 +100,11 @@ func (s *Store) insert(ctx context.Context, subject string, insertions []ntfy.In
 			continue
 		}
 
-		accepted = append(accepted, n)
+		// Cloned, so that what this store reports — and what a close reports as
+		// its successors — shares no links or payload with the caller's
+		// insertions or with each other. The stored copy needs no clone: the
+		// values are serialised into binds inside this transaction.
+		accepted = append(accepted, n.Clone())
 		open[kind] = true
 		sources[source] = true
 	}

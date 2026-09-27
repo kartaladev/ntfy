@@ -11,7 +11,7 @@
 
 ## 3. Make the stores keep the invariant (green)
 
-- [ ] 3.1 Clone on accept and on return in `sqlstore` (`insert.go:103`, `:115`) so `InsertResult.Created` and `CloseResult.Successors` share nothing with the values passed to `Insert`. Verify the 1.1 case now passes on every dialect.
+- [x] 3.1 Clone on accept and on return in `sqlstore` (`insert.go:103`, `:115`) so `InsertResult.Created` and `CloseResult.Successors` share nothing with the values passed to `Insert`. Verify the 1.1 case now passes on every dialect.
 - [ ] 3.2 Add the isolation obligation to the `Store` port's godoc (`store.go:27-51`): a store copies what it retains and what it returns, and `Notification.Clone` is the mechanism. Verify by reading `go doc ntfy.Store` that an implementer learns the obligation without reading the suite.
 - [ ] 3.3 Confirm no clone is added to the paths the design audited as safe by construction (`sqlstore/sql.go:251` decode, `memory.go:258`, `:297`), and verify with `rg -n "Clone\(\)" memory.go memory_email.go store.go sqlstore/` that the call sites match the design's table.
 
