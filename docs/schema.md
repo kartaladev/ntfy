@@ -139,8 +139,9 @@ prefix.
 ## Verifying the schema at startup
 
 `Store.VerifySchema(ctx)` compares the live database with what the store's
-statements require: both tables, every column, the collation of every identifier
-column, and every index above. It reports every discrepancy at once, as a
+statements require: both tables, every column, that every identifier column
+compares byte for byte (its collation on PostgreSQL and SQLite, its `VARBINARY`
+type on MySQL), and every index above. It reports every discrepancy at once, as a
 `*sqlkit.SchemaError` matching `sqlkit.ErrSchemaMismatch`, rather than failing on
 first use. Call it when the host starts.
 
@@ -156,7 +157,7 @@ if err != nil {
 }
 
 if err := store.VerifySchema(ctx); err != nil {
-    return err // lists every missing table, column, collation and index
+    return err // lists every missing table, column and index, and every wrong identifier column
 }
 ```
 

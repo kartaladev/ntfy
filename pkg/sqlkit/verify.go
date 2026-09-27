@@ -13,9 +13,10 @@ type TableExpectation struct {
 	// Columns is every column the statements read or write, in the order
 	// issues about them are reported.
 	Columns []string
-	// IdentifierColumns are the columns whose comparison must be
-	// case-sensitive and whose ordering must be byte-wise, and which therefore
-	// must carry the dialect's [Dialect.IdentifierCollation].
+	// IdentifierColumns are the columns whose comparison must be byte for byte
+	// and whose ordering must be byte-wise, and which therefore must have the
+	// dialect's [Dialect.IdentifierType] where it pins one, and otherwise carry
+	// its [Dialect.IdentifierCollation].
 	IdentifierColumns []string
 	// Indexes are the secondary indexes the statements rely on, by unprefixed
 	// name. Primary keys are not listed: every dialect names them differently.
@@ -54,8 +55,9 @@ func (i SchemaIssue) String() string {
 type SchemaError struct {
 	// Dialect is the dialect verified against.
 	Dialect string
-	// Issues is every discrepancy found: missing tables and columns and wrong
-	// collations first, in table order, then missing indexes.
+	// Issues is every discrepancy found: missing tables and columns and
+	// identifier columns that would not compare byte for byte first, in table
+	// order, then missing indexes.
 	Issues []SchemaIssue
 }
 
@@ -81,18 +83,18 @@ func (e *SchemaError) Unwrap() error { return ErrSchemaMismatch }
 
 // SchemaQuery renders the column introspection a dialect offers for the given
 // tables, prefixed names as stored: one row per column, as (table, column,
-// collation).
+// collation, type).
 func SchemaQuery(dialect Dialect, tables []string) Statement {
 	w := NewWriter(dialect)
 	names := bindable(tables)
 
 	switch dialect.Name() {
 	case PostgreSQL.Name():
-		w.Write("SELECT table_name, column_name, COALESCE(collation_name, '') ")
+		w.Write("SELECT table_name, column_name, COALESCE(collation_name, ''), data_type ")
 		w.Write("FROM information_schema.columns ")
 		w.Write("WHERE table_schema = current_schema() AND table_name IN (", w.BindAll(names...), ")")
 	case MySQL.Name():
-		w.Write("SELECT TABLE_NAME, COLUMN_NAME, COALESCE(COLLATION_NAME, '') ")
+		w.Write("SELECT TABLE_NAME, COLUMN_NAME, COALESCE(COLLATION_NAME, ''), DATA_TYPE ")
 		w.Write("FROM information_schema.COLUMNS ")
 		w.Write("WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (", w.BindAll(names...), ")")
 	default:
@@ -100,7 +102,8 @@ func SchemaQuery(dialect Dialect, tables []string) Statement {
 		// to: BINARY is the default and the only way to lose it is to override
 		// it per column. Verification therefore checks that the tables and
 		// columns are there, and treats an unreported collation as the default.
-		w.Write("SELECT m.name, p.name, '' ")
+		// The declared type is read for symmetry; SQLite pins no type.
+		w.Write("SELECT m.name, p.name, '', p.type ")
 		w.Write("FROM sqlite_master m JOIN pragma_table_info(m.name) p ")
 		w.Write("WHERE m.type = 'table' AND m.name IN (", w.BindAll(names...), ")")
 	}
@@ -134,13 +137,14 @@ func IndexQuery(dialect Dialect, tables []string) Statement {
 // prefix applied to every table and index name, and reports every discrepancy
 // in one [*SchemaError] rather than failing on first use.
 //
-// It checks that every table and column exists, that identifier columns carry
-// the collation that makes comparison case-sensitive, and that every expected
-// index exists, by name. A missing table is reported once, without its columns
-// or indexes. It does not check column types: a dialect has several spellings
-// for the same storage, and a type mismatch that matters shows up as a failing
-// statement immediately, while a wrong collation shows up months later as the
-// wrong match.
+// It checks that every table and column exists, that identifier columns compare
+// byte for byte, and that every expected index exists, by name. An identifier
+// column is judged by the dialect: by its type where [Dialect.IdentifierType]
+// pins one, and otherwise by its collation. A missing table is reported once,
+// without its columns or indexes. It checks no other column's type: a dialect
+// has several spellings for the same storage, and a type mismatch that matters
+// shows up as a failing statement immediately, while an identifier column that
+// does not compare byte for byte shows up months later as the wrong match.
 //
 // A failure to read the schema at all is returned as itself, not as issues.
 func VerifySchema(
@@ -181,49 +185,69 @@ func VerifySchema(
 }
 
 // columnIssues reports a missing table, its missing columns and its identifier
-// columns with the wrong collation.
+// columns that would not compare byte for byte: of the wrong type where the
+// dialect pins one, or of the wrong collation where it pins that.
 func columnIssues(
-	dialect Dialect, table string, expected TableExpectation, observed map[string]map[string]string,
+	dialect Dialect, table string, expected TableExpectation, observed map[string]map[string]observedColumn,
 ) []SchemaIssue {
 	found, present := observed[table]
 	if !present {
 		return []SchemaIssue{{Table: table, Detail: "table is missing"}}
 	}
 
-	want := dialect.IdentifierCollation()
-
 	var issues []SchemaIssue
 
 	for _, column := range expected.Columns {
-		collation, ok := found[column]
+		live, ok := found[column]
 		if !ok {
 			issues = append(issues, SchemaIssue{Table: table, Column: column, Detail: "column is missing"})
 
 			continue
 		}
 
-		// An unreported collation is the dialect's default, which is correct
-		// everywhere verification can ask.
-		if !slices.Contains(expected.IdentifierColumns, column) || collation == "" || collation == want {
+		if !slices.Contains(expected.IdentifierColumns, column) {
 			continue
 		}
 
-		issues = append(issues, SchemaIssue{
-			Table: table, Column: column,
-			Detail: fmt.Sprintf(
-				"collation is %q but must be %q, or identifiers will compare case-insensitively",
-				collation, want,
-			),
-		})
+		if detail := identifierDetail(dialect, live); detail != "" {
+			issues = append(issues, SchemaIssue{Table: table, Column: column, Detail: detail})
+		}
 	}
 
 	return issues
 }
 
+// identifierDetail says what is wrong with an identifier column, or nothing
+// when it compares byte for byte.
+func identifierDetail(dialect Dialect, live observedColumn) string {
+	const consequence = ", or identifiers will not compare byte for byte"
+
+	if want := dialect.IdentifierType(); want != "" {
+		if strings.EqualFold(live.typ, want) {
+			return ""
+		}
+
+		declared := fmt.Sprintf("%q", live.typ)
+		if live.collation != "" {
+			declared += fmt.Sprintf(" collated %q", live.collation)
+		}
+
+		return fmt.Sprintf("type is %s but must be %q", declared, want) + consequence
+	}
+
+	// An unreported collation is the dialect's default, which is correct
+	// everywhere verification can ask.
+	if want := dialect.IdentifierCollation(); live.collation != "" && live.collation != want {
+		return fmt.Sprintf("collation is %q but must be %q", live.collation, want) + consequence
+	}
+
+	return ""
+}
+
 // indexIssues reports the expected indexes a present table lacks.
 func indexIssues(
 	prefix, table string, expected TableExpectation,
-	columns map[string]map[string]string, indexes map[string]map[string]bool,
+	columns map[string]map[string]observedColumn, indexes map[string]map[string]bool,
 ) []SchemaIssue {
 	if _, present := columns[table]; !present {
 		return nil
@@ -240,19 +264,24 @@ func indexIssues(
 	return issues
 }
 
-// readColumns runs the column introspection into a table to column to
-// collation map.
-func readColumns(ctx context.Context, querier Querier, statement Statement) (map[string]map[string]string, error) {
-	observed := make(map[string]map[string]string)
+// observedColumn is what the introspection reports of one live column.
+type observedColumn struct {
+	collation string
+	typ       string
+}
 
-	err := readText(ctx, querier, statement, "schema", 3, func(values []string) {
-		table, column, collation := values[0], values[1], values[2]
+// readColumns runs the column introspection into a table to column map.
+func readColumns(ctx context.Context, querier Querier, statement Statement) (map[string]map[string]observedColumn, error) {
+	observed := make(map[string]map[string]observedColumn)
+
+	err := readText(ctx, querier, statement, "schema", 4, func(values []string) {
+		table, column := values[0], values[1]
 
 		if observed[table] == nil {
-			observed[table] = make(map[string]string)
+			observed[table] = make(map[string]observedColumn)
 		}
 
-		observed[table][column] = collation
+		observed[table][column] = observedColumn{collation: values[2], typ: values[3]}
 	})
 
 	return observed, err

@@ -20,8 +20,8 @@ import (
 const (
 	// PostgresImage is the PostgreSQL image the suites run against.
 	PostgresImage = "postgres:17.6-alpine"
-	// MySQLImage is the MySQL image the suites run against. It is 8.0 or later
-	// because an identifier column needs the utf8mb4_0900_as_cs collation.
+	// MySQLImage is the MySQL image the suites run against. It is 8.0 or later,
+	// the oldest MySQL sqlkit supports.
 	MySQLImage = "mysql:8.4.6"
 )
 

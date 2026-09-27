@@ -13,11 +13,13 @@ import (
 )
 
 // introspectionRow is one row a database would return: (table, column,
-// collation) for the column introspection, (table, index) for the index one.
+// collation, type) for the column introspection, (table, index) for the index
+// one.
 type introspectionRow struct {
 	table     string
 	column    string
 	collation string
+	typ       string
 }
 
 // scriptedRows replays canned introspection rows.
@@ -35,7 +37,7 @@ func (r *scriptedRows) Next() bool {
 func (r *scriptedRows) Scan(dest ...any) error {
 	row := r.rows[r.index-1]
 
-	values := []string{row.table, row.column, row.collation}
+	values := []string{row.table, row.column, row.collation, row.typ}
 	for i, target := range dest {
 		*target.(*any) = values[i] //nolint:errcheck,forcetypeassert // verification always passes *any
 	}
@@ -87,13 +89,13 @@ var widgetExpectation = sqlkit.SchemaExpectation{
 }
 
 // completeColumns is the column introspection of a schema that meets the
-// expectation, with the given collation on every column.
-func completeColumns(prefix, collation string) []introspectionRow {
+// expectation, with the given collation and type on every column.
+func completeColumns(prefix, collation, typ string) []introspectionRow {
 	var rows []introspectionRow
 
 	for table, expected := range widgetExpectation {
 		for _, column := range expected.Columns {
-			rows = append(rows, introspectionRow{table: prefix + table, column: column, collation: collation})
+			rows = append(rows, introspectionRow{table: prefix + table, column: column, collation: collation, typ: typ})
 		}
 	}
 
@@ -118,12 +120,21 @@ func dropRows(table string, names ...string) func([]introspectionRow) []introspe
 
 // setCollation changes one column's reported collation.
 func setCollation(table, column, collation string) func([]introspectionRow) []introspectionRow {
+	return setColumn(table, column, collation, "")
+}
+
+// setColumn changes one column's reported collation and, when typ is not
+// empty, its type.
+func setColumn(table, column, collation, typ string) func([]introspectionRow) []introspectionRow {
 	return func(rows []introspectionRow) []introspectionRow {
 		rows = slices.Clone(rows)
 
 		for i := range rows {
 			if rows[i].table == table && rows[i].column == column {
 				rows[i].collation = collation
+				if typ != "" {
+					rows[i].typ = typ
+				}
 			}
 		}
 
@@ -139,22 +150,23 @@ func TestVerifySchema(t *testing.T) {
 		dialect sqlkit.Dialect
 		prefix  string
 		// columns and indexes change what a correct schema reports; nil leaves
-		// that half complete. collation is what every column reports.
+		// that half complete. collation and typ are what every column reports.
 		columns   func([]introspectionRow) []introspectionRow
 		indexes   func([]introspectionRow) []introspectionRow
 		collation string
+		typ       string
 		fail      bool
 		assert    func(t *testing.T, err error)
 	}
 
 	cases := []testCase{
 		{
-			name: "a schema that meets the expectation passes", dialect: sqlkit.MySQL, collation: "utf8mb4_0900_as_cs",
+			name: "a schema that meets the expectation passes", dialect: sqlkit.MySQL, typ: "varbinary",
 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
 		},
 		{
 			name: "a missing table is reported once, without its columns or indexes", dialect: sqlkit.MySQL,
-			collation: "utf8mb4_0900_as_cs", columns: dropRows("widgets"),
+			typ: "varbinary", columns: dropRows("widgets"),
 			assert: func(t *testing.T, err error) {
 				var schemaErr *sqlkit.SchemaError
 
@@ -164,7 +176,7 @@ func TestVerifySchema(t *testing.T) {
 			},
 		},
 		{
-			name: "a missing column is named", dialect: sqlkit.PostgreSQL, collation: "C",
+			name: "a missing column is named", dialect: sqlkit.PostgreSQL, collation: "C", typ: "text",
 			columns: dropRows("parts", "widget_id"),
 			assert: func(t *testing.T, err error) {
 				require.Error(t, err)
@@ -172,22 +184,42 @@ func TestVerifySchema(t *testing.T) {
 			},
 		},
 		{
-			name: "a case-insensitive collation on an identifier column is named", dialect: sqlkit.MySQL,
-			collation: "utf8mb4_0900_as_cs", columns: setCollation("widgets", "owner", "utf8mb4_0900_ai_ci"),
+			name: "a case-insensitive collation on an identifier column is named", dialect: sqlkit.PostgreSQL,
+			collation: "C", typ: "text", columns: setCollation("widgets", "owner", "en_US"),
 			assert: func(t *testing.T, err error) {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "widgets.owner")
-				assert.Contains(t, err.Error(), `collation is "utf8mb4_0900_ai_ci" but must be "utf8mb4_0900_as_cs"`)
-				assert.Contains(t, err.Error(), "case-insensitively", "the message has to say why it matters")
+				assert.Contains(t, err.Error(), `collation is "en_US" but must be "C"`)
+				assert.Contains(t, err.Error(), "byte for byte", "the message has to say why it matters")
+			},
+		},
+		{
+			name:    "a MySQL identifier column that is text under a collation is named, whatever the collation",
+			dialect: sqlkit.MySQL, typ: "varbinary",
+			columns: setColumn("widgets", "owner", "utf8mb4_0900_as_cs", "varchar"),
+			assert: func(t *testing.T, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(),
+					`widgets.owner: type is "varchar" collated "utf8mb4_0900_as_cs" but must be "varbinary"`)
+				assert.Contains(t, err.Error(), "byte for byte", "the message has to say why it matters")
+				assert.NotContains(t, err.Error(), "case-insensitively", "utf8mb4_0900_as_cs is case-sensitive")
+			},
+		},
+		{
+			name:    "a MySQL identifier column of fixed-width BINARY, which pads with NUL, is named",
+			dialect: sqlkit.MySQL, typ: "varbinary", columns: setColumn("widgets", "owner", "", "binary"),
+			assert: func(t *testing.T, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `widgets.owner: type is "binary" but must be "varbinary"`)
 			},
 		},
 		{
 			name: "a collation on a column that is not an identifier is not checked", dialect: sqlkit.MySQL,
-			collation: "utf8mb4_0900_as_cs", columns: setCollation("widgets", "payload", "utf8mb4_0900_ai_ci"),
+			typ: "varbinary", columns: setColumn("widgets", "payload", "utf8mb4_0900_ai_ci", "longtext"),
 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
 		},
 		{
-			name: "a missing index is named", dialect: sqlkit.PostgreSQL, collation: "C",
+			name: "a missing index is named", dialect: sqlkit.PostgreSQL, collation: "C", typ: "text",
 			indexes: dropRows("widgets"),
 			assert: func(t *testing.T, err error) {
 				require.Error(t, err)
@@ -195,13 +227,13 @@ func TestVerifySchema(t *testing.T) {
 			},
 		},
 		{
-			name: "sqlite reports no collation, which is its default", dialect: sqlkit.SQLite, collation: "",
+			name: "sqlite reports no collation, which is its default", dialect: sqlkit.SQLite, typ: "TEXT",
 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
 		},
 		{
-			name: "every discrepancy is reported in one error", dialect: sqlkit.MySQL, collation: "utf8mb4_0900_as_cs",
+			name: "every discrepancy is reported in one error", dialect: sqlkit.MySQL, typ: "varbinary",
 			columns: func(rows []introspectionRow) []introspectionRow {
-				return setCollation("parts", "id", "latin1_swedish_ci")(dropRows("widgets", "payload")(rows))
+				return setColumn("parts", "id", "latin1_swedish_ci", "varchar")(dropRows("widgets", "payload")(rows))
 			},
 			indexes: dropRows("widgets"),
 			assert: func(t *testing.T, err error) {
@@ -216,6 +248,7 @@ func TestVerifySchema(t *testing.T) {
 		},
 		{
 			name: "the prefix reaches tables and indexes", dialect: sqlkit.PostgreSQL, prefix: "app_", collation: "C",
+			typ:    "text",
 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
 		},
 		{
@@ -234,7 +267,7 @@ func TestVerifySchema(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			columns := completeColumns(tc.prefix, tc.collation)
+			columns := completeColumns(tc.prefix, tc.collation, tc.typ)
 			if tc.columns != nil {
 				columns = tc.columns(columns)
 			}
@@ -261,7 +294,7 @@ func TestVerifySchemaRefusesAnUnprefixedDeployment(t *testing.T) {
 
 	querier := &scriptedQuerier{
 		indexSQL: sqlkit.IndexQuery(sqlkit.PostgreSQL, []string{"app_parts", "app_widgets"}).SQL,
-		columns:  completeColumns("", "C"),
+		columns:  completeColumns("", "C", "text"),
 		indexes:  completeIndexes(""),
 	}
 
@@ -288,6 +321,7 @@ func TestIntrospectionQueriesPerDialect(t *testing.T) {
 			assert: func(t *testing.T, columns, indexes sqlkit.Statement) {
 				assert.Contains(t, columns.SQL, "information_schema.columns")
 				assert.Contains(t, columns.SQL, "current_schema()")
+				assert.Contains(t, columns.SQL, "data_type")
 				assert.Contains(t, indexes.SQL, "pg_indexes")
 			},
 		},
@@ -295,6 +329,7 @@ func TestIntrospectionQueriesPerDialect(t *testing.T) {
 			name: "mysql", dialect: sqlkit.MySQL,
 			assert: func(t *testing.T, columns, indexes sqlkit.Statement) {
 				assert.Contains(t, columns.SQL, "information_schema.COLUMNS")
+				assert.Contains(t, columns.SQL, "DATA_TYPE")
 				assert.Contains(t, indexes.SQL, "information_schema.STATISTICS")
 				assert.Contains(t, indexes.SQL, "DATABASE()")
 			},
@@ -303,6 +338,7 @@ func TestIntrospectionQueriesPerDialect(t *testing.T) {
 			name: "sqlite", dialect: sqlkit.SQLite,
 			assert: func(t *testing.T, columns, indexes sqlkit.Statement) {
 				assert.Contains(t, columns.SQL, "pragma_table_info")
+				assert.Contains(t, columns.SQL, "p.type")
 				assert.Contains(t, indexes.SQL, "'index'")
 			},
 		},

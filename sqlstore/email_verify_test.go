@@ -261,10 +261,10 @@ func TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes(t *testing.T) {
 	}
 
 	assert.Contains(t, issues(t, store.VerifySchema(t.Context())),
-		prefix+`ntfy_notifications.recipient: type is "varchar(255)" collated "utf8mb4_0900_as_cs" but must be VARBINARY`,
+		prefix+`ntfy_notifications.recipient: type is "varchar" collated "utf8mb4_0900_as_cs" but must be "varbinary"`,
 		"the old columns fail verification")
 	assert.Contains(t, issues(t, store.VerifyEmailSchema(t.Context())),
-		prefix+`ntfy_email_deliveries.owner: type is "varchar(255)" collated "utf8mb4_0900_as_cs" but must be VARBINARY`)
+		prefix+`ntfy_email_deliveries.owner: type is "varchar" collated "utf8mb4_0900_as_cs" but must be "varbinary"`)
 
 	for _, check := range documentedBlock(t, "### Checking before upgrading", prefix) {
 		rows, err := db.QueryContext(t.Context(), check)

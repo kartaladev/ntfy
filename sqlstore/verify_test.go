@@ -210,7 +210,7 @@ func TestVerifySchemaRequiresByteExactIdentifiersOnMySQL(t *testing.T) {
 	reportsTheRecipient := func(declared string) func(t *testing.T, store *sqlstore.Store, err error) {
 		return func(t *testing.T, store *sqlstore.Store, err error) {
 			listed := issues(t, err)
-			assert.Contains(t, listed, store.Tables()[0]+`.recipient: type is `+declared+` but must be VARBINARY`)
+			assert.Contains(t, listed, store.Tables()[0]+`.recipient: type is `+declared+` but must be "varbinary"`)
 			assert.NotContains(t, listed, "case-insensitively", "the issue says what is actually wrong")
 		}
 	}
@@ -219,17 +219,17 @@ func TestVerifySchemaRequiresByteExactIdentifiersOnMySQL(t *testing.T) {
 		{
 			name:   "a collation that ignores code points and normalisation is reported",
 			column: "VARCHAR(255) COLLATE utf8mb4_0900_as_cs",
-			assert: reportsTheRecipient(`"varchar(255)" collated "utf8mb4_0900_as_cs"`),
+			assert: reportsTheRecipient(`"varchar" collated "utf8mb4_0900_as_cs"`),
 		},
 		{
 			name:   "even a byte-exact collation is reported, since identifiers are binary strings",
 			column: "VARCHAR(255) COLLATE utf8mb4_0900_bin",
-			assert: reportsTheRecipient(`"varchar(255)" collated "utf8mb4_0900_bin"`),
+			assert: reportsTheRecipient(`"varchar" collated "utf8mb4_0900_bin"`),
 		},
 		{
 			name:   "a fixed-width binary string, which pads with NUL, is reported",
 			column: "BINARY(255)",
-			assert: reportsTheRecipient(`"binary(255)"`),
+			assert: reportsTheRecipient(`"binary"`),
 		},
 	}
 

@@ -581,19 +581,33 @@ func runValueCases(t *testing.T, factory Factory) {
 		}, f.widgetTimes(t), "ordering by the column must be chronological, even stored as text")
 	})
 
-	t.Run("identifiers compare case-sensitively", func(t *testing.T) {
+	t.Run("identifiers compare byte for byte", func(t *testing.T) {
 		f := newFixture(t, factory, fixtureSchemas)
 
-		f.insertWidget(t.Context(), t, "w-1", "alice")
-		f.insertWidget(t.Context(), t, "w-2", "Alice")
+		// Each owner differs from the others only in bytes some collation
+		// ignores: case, a trailing space, an ignorable code point, and the
+		// decomposed spelling of a precomposed character.
+		owners := map[string]string{
+			"w-1": "alice",
+			"w-2": "Alice",
+			"w-3": "alice ",
+			"w-4": "alice\u200b",
+			"w-5": "jos\u00e9",
+			"w-6": "jose\u0301",
+		}
 
-		w := sqlkit.NewWriter(f.Executor.Dialect())
-		w.Write("SELECT ", f.column("id"), " FROM ", f.table("widgets"), " WHERE ", f.column("owner"), " = ")
-		w.Write(w.Bind("alice"))
+		for id, owner := range owners {
+			f.insertWidget(t.Context(), t, id, owner)
+		}
 
-		ids := f.queryStrings(t, w.Done())
+		for id, owner := range owners {
+			w := sqlkit.NewWriter(f.Executor.Dialect())
+			w.Write("SELECT ", f.column("id"), " FROM ", f.table("widgets"), " WHERE ", f.column("owner"), " = ")
+			w.Write(w.Bind(owner))
 
-		assert.Equal(t, []string{"w-1"}, ids, "alice must not match Alice on any dialect")
+			assert.Equalf(t, []string{id}, f.queryStrings(t, w.Done()),
+				"%+q must match only itself on every dialect", owner)
+		}
 	})
 }
 

@@ -29,9 +29,15 @@ type Dialect interface {
 	// optimisation it may offer.
 	SupportsSkipLocked() bool
 	// IdentifierCollation is the collation that identifier columns must carry
-	// for comparison to be case-sensitive and ordering to be byte-wise. It is
-	// never empty: every dialect pins one.
+	// for comparison to be byte for byte and ordering to be byte-wise, or empty
+	// when the dialect's identifier columns are binary strings, which carry no
+	// collation. Exactly one of it and IdentifierType is empty: every dialect
+	// pins one or the other.
 	IdentifierCollation() string
+	// IdentifierType is the column type identifier columns must have, as the
+	// database's introspection names it, or empty when a text column carrying
+	// IdentifierCollation will do.
+	IdentifierType() string
 	// TimestampColumnType is the column type for a UTC instant stored at
 	// microsecond precision.
 	TimestampColumnType() string
@@ -98,6 +104,8 @@ func (postgres) SupportsSkipLocked() bool { return true }
 // hyphens would then make keyset pagination skip or repeat rows.
 func (postgres) IdentifierCollation() string { return "C" }
 
+func (postgres) IdentifierType() string { return "" }
+
 func (postgres) TimestampColumnType() string { return "timestamptz(6)" }
 
 func (postgres) JSONColumnType() string { return "text" }
@@ -124,10 +132,18 @@ func (mysql) SupportsReturning() bool { return false }
 
 func (mysql) SupportsSkipLocked() bool { return true }
 
-// IdentifierCollation pins case sensitivity. MySQL's default,
-// utf8mb4_0900_ai_ci, is case-insensitive, so without this "alice" would match
-// "Alice" on one dialect out of three.
-func (mysql) IdentifierCollation() string { return "utf8mb4_0900_as_cs" }
+// IdentifierCollation is empty: MySQL identifier columns are binary strings,
+// which carry no collation. See IdentifierType.
+func (mysql) IdentifierCollation() string { return "" }
+
+// IdentifierType pins VARBINARY, which compares and sorts by bytes and pads
+// nothing, on every supported server. No MySQL collation does all of that
+// before 8.0.17: the default, utf8mb4_0900_ai_ci, folds case, so "alice" would
+// match "Alice"; utf8mb4_0900_as_cs ignores code points such as U+200B and
+// equates NFC with NFD; utf8mb4_bin ignores trailing spaces. utf8mb4_0900_bin
+// would, but only from 8.0.17. BINARY is not enough either: it pads with NUL,
+// so a stored identifier stops matching the one it was stored as.
+func (mysql) IdentifierType() string { return "varbinary" }
 
 // TimestampColumnType is DATETIME rather than TIMESTAMP: TIMESTAMP converts
 // through the session time zone and runs out of range in 2038.
@@ -164,6 +180,8 @@ func (sqlite) SupportsReturning() bool { return true }
 func (sqlite) SupportsSkipLocked() bool { return false }
 
 func (sqlite) IdentifierCollation() string { return "BINARY" }
+
+func (sqlite) IdentifierType() string { return "" }
 
 // TimestampColumnType is TEXT because SQLite has no native date type. One fixed
 // encoding, [TimestampLayout], is written into it, so ordering and comparison

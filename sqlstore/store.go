@@ -188,5 +188,5 @@ var schemaExpectation = sqlkit.SchemaExpectation{
 // matches [sqlkit.ErrSchemaMismatch], rather than failing on first use. Call it
 // at startup.
 func (s *Store) VerifySchema(ctx context.Context) error {
-	return s.verify(ctx, schemaExpectation)
+	return sqlkit.VerifySchema(s.own(ctx), s.querier, s.dialect, s.prefix, schemaExpectation)
 }

@@ -3,7 +3,7 @@ package sqlkittest
 import "github.com/kartaladev/sqlkit"
 
 // The fixture is a schema with no domain: two tables, identifier columns that
-// must compare case-sensitively, one secondary index, one JSON payload column,
+// must compare byte for byte, one secondary index, one JSON payload column,
 // one timestamp column and a foreign key. It is the least a store needs, and
 // enough to prove an executor, rendering, the development runner and
 // verification behave the same on every combination.
@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS "{{PREFIX}}parts" (
 `,
 	"mysql": "-- sqlkit conformance fixture, MySQL 8.0 or later.\n" +
 		"CREATE TABLE IF NOT EXISTS `{{PREFIX}}widgets` (\n" +
-		"    `id`      VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
-		"    `owner`   VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
+		"    `id`      VARBINARY(64)  NOT NULL,\n" +
+		"    `owner`   VARBINARY(255) NOT NULL,\n" +
 		"    `payload` LONGTEXT NULL,\n" +
 		"    `at`      DATETIME(6) NULL,\n" +
 		"    `score`   BIGINT NOT NULL DEFAULT 0,\n" +
@@ -62,8 +62,8 @@ CREATE TABLE IF NOT EXISTS "{{PREFIX}}parts" (
 		"    KEY `{{PREFIX}}widgets_owner_idx` (`owner`)\n" +
 		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n" +
 		"CREATE TABLE IF NOT EXISTS `{{PREFIX}}parts` (\n" +
-		"    `id`        VARCHAR(64) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
-		"    `widget_id` VARCHAR(64) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
+		"    `id`        VARBINARY(64) NOT NULL,\n" +
+		"    `widget_id` VARBINARY(64) NOT NULL,\n" +
 		"    PRIMARY KEY (`id`),\n" +
 		"    CONSTRAINT `{{PREFIX}}parts_widget_fk` FOREIGN KEY (`widget_id`) REFERENCES `{{PREFIX}}widgets` (`id`)\n" +
 		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n",
@@ -94,8 +94,8 @@ var brokenSchemas = map[string]string{
 );
 `,
 	"mysql": "CREATE TABLE IF NOT EXISTS `{{PREFIX}}widgets` (\n" +
-		"    `id`      VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL PRIMARY KEY,\n" +
-		"    `owner`   VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
+		"    `id`      VARBINARY(64)  NOT NULL PRIMARY KEY,\n" +
+		"    `owner`   VARBINARY(255) NOT NULL,\n" +
 		"    `payload` LONGTEXT NULL,\n" +
 		"    `at`      DATETIME(6) NULL\n" +
 		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n",
