@@ -23,6 +23,9 @@ const (
 	// DefaultReconnectDelay is the base a stream tells its client to wait before
 	// reconnecting. The value a stream carries is drawn between it and twice it.
 	DefaultReconnectDelay = time.Second
+	// DefaultMaxStreamsPerInstance is how many streams one instance may hold open
+	// across every recipient and every transport.
+	DefaultMaxStreamsPerInstance = 10_000
 )
 
 // Hub routes signals from a [Broadcaster] to the subscriptions of the recipient
@@ -37,6 +40,7 @@ type Hub struct {
 	writeTimeout time.Duration
 	reconnect    time.Duration
 	maxStreams   int
+	maxTotal     int
 
 	// running is true only while a run's broadcaster has confirmed its
 	// subscription. It is written under runMu and read without it.
@@ -53,6 +57,7 @@ type Hub struct {
 	// mu, so that Subscribe decides and inserts in one critical section and a run
 	// ending in between cannot leave an orphaned subscription behind.
 	receiving     bool
+	streams       int
 	subscriptions map[string]map[*Subscription]struct{}
 }
 
@@ -66,6 +71,8 @@ type hubConfig struct {
 	writeTimeout *time.Duration
 	reconnect    *time.Duration
 	maxStreams   *int
+	maxTotal     *int
+	withoutTotal bool
 }
 
 // WithHeartbeat replaces [DefaultHeartbeat]. It must be positive.
@@ -82,6 +89,21 @@ func WithWriteTimeout(timeout time.Duration) HubOption {
 // at least one.
 func WithMaxStreamsPerRecipient(n int) HubOption {
 	return func(c *hubConfig) { c.maxStreams = &n }
+}
+
+// WithMaxStreamsPerInstance replaces [DefaultMaxStreamsPerInstance], the number
+// of streams one instance holds open across every recipient. It must be at least
+// one, and at least the per-recipient cap, which it would otherwise make
+// unreachable. [WithoutMaxStreamsPerInstance] removes it.
+func WithMaxStreamsPerInstance(n int) HubOption {
+	return func(c *hubConfig) { c.maxTotal = &n }
+}
+
+// WithoutMaxStreamsPerInstance removes the instance-wide cap, for a host that
+// bounds connections elsewhere, such as at its proxy. Only the per-recipient cap
+// then applies. It cannot be combined with [WithMaxStreamsPerInstance].
+func WithoutMaxStreamsPerInstance() HubOption {
+	return func(c *hubConfig) { c.withoutTotal = true }
 }
 
 // WithReconnectDelay replaces [DefaultReconnectDelay], the base a stream tells
@@ -115,6 +137,7 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		writeTimeout:  DefaultWriteTimeout,
 		reconnect:     DefaultReconnectDelay,
 		maxStreams:    DefaultMaxStreamsPerRecipient,
+		maxTotal:      DefaultMaxStreamsPerInstance,
 		readyCh:       make(chan struct{}),
 		subscriptions: make(map[string]map[*Subscription]struct{}),
 	}
@@ -128,6 +151,16 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		return nil, &ConfigurationError{Detail: "a hub reconnect delay must be positive"}
 	case cfg.maxStreams != nil && *cfg.maxStreams < 1:
 		return nil, &ConfigurationError{Detail: "a hub must allow at least one stream per recipient"}
+	case cfg.maxTotal != nil && cfg.withoutTotal:
+		return nil, &ConfigurationError{
+			Detail: "the instance stream cap is both set and removed; " +
+				"choose WithMaxStreamsPerInstance or WithoutMaxStreamsPerInstance",
+		}
+	case cfg.maxTotal != nil && *cfg.maxTotal < 1:
+		return nil, &ConfigurationError{
+			Detail: "a hub must allow at least one stream per instance; " +
+				"use WithoutMaxStreamsPerInstance to remove the cap",
+		}
 	}
 
 	if cfg.heartbeat != nil {
@@ -144,6 +177,20 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 
 	if cfg.maxStreams != nil {
 		hub.maxStreams = *cfg.maxStreams
+	}
+
+	switch {
+	case cfg.withoutTotal:
+		hub.maxTotal = 0
+	case cfg.maxTotal != nil:
+		hub.maxTotal = *cfg.maxTotal
+	}
+
+	if hub.maxTotal > 0 && hub.maxTotal < hub.maxStreams {
+		return nil, &ConfigurationError{
+			Detail: "the instance stream cap must be at least the per-recipient cap, " +
+				"which it would otherwise make unreachable",
+		}
 	}
 
 	return hub, nil
@@ -236,6 +283,7 @@ func (h *Hub) closeSubscriptions() {
 	}
 
 	h.subscriptions = make(map[string]map[*Subscription]struct{})
+	h.streams = 0
 }
 
 // Running reports whether the hub is receiving signals: a run is in progress and
@@ -313,6 +361,10 @@ func (h *Hub) Subscribe(recipient string) (*Subscription, error) {
 		return nil, fmt.Errorf("%w: the hub is not receiving signals", ErrUnavailable)
 	}
 
+	if h.maxTotal > 0 && h.streams >= h.maxTotal {
+		return nil, fmt.Errorf("%w: %d streams are already open on this instance", ErrTooManyStreams, h.maxTotal)
+	}
+
 	held := h.subscriptions[recipient]
 	if len(held) >= h.maxStreams {
 		return nil, fmt.Errorf("%w: %d streams are already open for this recipient", ErrTooManyStreams, h.maxStreams)
@@ -330,6 +382,7 @@ func (h *Hub) Subscribe(recipient string) (*Subscription, error) {
 		done:      make(chan struct{}),
 	}
 	held[subscription] = struct{}{}
+	h.streams++
 
 	return subscription, nil
 }
@@ -412,6 +465,7 @@ func (s *Subscription) closeLocked() {
 		}
 
 		delete(held, s)
+		s.hub.streams--
 
 		if len(held) == 0 {
 			delete(s.hub.subscriptions, s.recipient)
