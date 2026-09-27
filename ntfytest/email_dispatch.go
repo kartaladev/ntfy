@@ -2,8 +2,10 @@ package ntfytest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,8 +18,9 @@ import (
 )
 
 // RunEmailDispatch runs email dispatchers end to end over stores the factory
-// builds: concurrent dispatchers, a dispatcher that stops mid-send, and a
-// redeploy.
+// builds: concurrent dispatchers, a dispatcher that stops mid-send, an
+// at-least-once resend after some or all of its notifications were read, the
+// reason a failed delivery records, and a redeploy.
 func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 	t.Helper()
 
@@ -113,6 +116,162 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 		})
 	}
 
+	parallel(t, "an at-least-once resend covers only what is still active", func(t *testing.T) {
+		d := newDispatchEnv(t, factory)
+		read := d.publish("alice")
+		kept := d.publish("alice")
+		d.clock.advance(10 * time.Minute)
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		d.setOnSend(func(ntfy.EmailMessage) { cancel() })
+
+		stopping := d.dispatcher("stopping", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		_, err := stopping.Dispatch(ctx)
+		require.NoError(t, err)
+		require.Len(t, d.sent(), 1)
+		require.Len(t, d.sent()[0].NotificationIDs, 2)
+
+		d.setOnSend(nil)
+
+		_, err = d.svc.MarkRead(t.Context(), "alice", read.ID)
+		require.NoError(t, err)
+
+		d.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+
+		next := d.dispatcher("next", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		result, err := next.Dispatch(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Sent)
+		assert.Equal(t, 1, result.SkippedInactive)
+
+		messages := d.sent()
+		require.Len(t, messages, 2)
+		assert.Equal(t, messages[0].IdempotencyKey, messages[1].IdempotencyKey)
+		assert.Equal(t, []string{kept.ID}, messages[1].NotificationIDs)
+		assert.Equal(t, ntfy.EmailSkipInactive, d.records.reasonOf(read.ID))
+	})
+
+	parallel(t, "an at-least-once resend sends nothing once every notification is read", func(t *testing.T) {
+		d := newDispatchEnv(t, factory)
+		one := d.publish("alice")
+		two := d.publish("alice")
+		d.clock.advance(10 * time.Minute)
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		d.setOnSend(func(ntfy.EmailMessage) { cancel() })
+
+		stopping := d.dispatcher("stopping", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		_, err := stopping.Dispatch(ctx)
+		require.NoError(t, err)
+		require.Len(t, d.sent(), 1)
+
+		d.setOnSend(nil)
+
+		_, err = d.svc.MarkRead(t.Context(), "alice", one.ID, two.ID)
+		require.NoError(t, err)
+
+		d.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+
+		next := d.dispatcher("next", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		result, err := next.Dispatch(t.Context())
+		require.NoError(t, err)
+		assert.Zero(t, result.Sent)
+		assert.Equal(t, 2, result.SkippedInactive)
+		assert.Len(t, d.sent(), 1, "nothing is sent a second time")
+	})
+
+	parallel(t, "an at-least-once resend that fails stays in doubt under its key", func(t *testing.T) {
+		d := newDispatchEnv(t, factory)
+		d.publish("alice")
+		d.clock.advance(10 * time.Minute)
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		d.setOnSend(func(ntfy.EmailMessage) { cancel() })
+
+		stopping := d.dispatcher("stopping", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		_, err := stopping.Dispatch(ctx)
+		require.NoError(t, err)
+
+		d.setOnSend(nil)
+		d.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+		newer := d.publish("alice")
+
+		d.setSendErr(func(ntfy.EmailMessage) error { return errors.New("connection refused") })
+
+		next := d.dispatcher("next", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		failed, err := next.Dispatch(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, 1, failed.Retried)
+
+		d.setSendErr(nil)
+		d.clock.advance(time.Hour)
+
+		_, err = next.Dispatch(t.Context())
+		require.NoError(t, err)
+
+		messages := d.sent()
+		require.Len(t, messages, 4, "the original, the failed resend, the resend, and the newer one alone")
+		assert.Equal(t, messages[0].IdempotencyKey, messages[2].IdempotencyKey, "the resend keeps the key")
+		assert.Equal(t, messages[0].NotificationIDs, messages[2].NotificationIDs, "and absorbs nothing")
+		assert.Equal(t, []string{newer.ID}, messages[3].NotificationIDs)
+	})
+
+	parallel(t, "a failed delivery records the library's own reason", func(t *testing.T) {
+		d := newDispatchEnv(t, factory)
+		n := d.publish("alice")
+		d.clock.advance(10 * time.Minute)
+
+		d.setSendErr(func(ntfy.EmailMessage) error {
+			return errors.New("550 5.1.1 <alice@example.com>: Recipient address rejected")
+		})
+
+		result, err := d.dispatcher("failing", ntfy.WithEmailMaxAttempts(1)).Dispatch(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, 1, result.Failed)
+		assert.Zero(t, result.Unrecorded)
+
+		assert.Equal(t, ntfy.EmailReasonSendFailed, d.records.reasonOf(n.ID))
+		require.Len(t, d.reported(), 1)
+		assert.Contains(t, d.reported()[0].Error(), "alice@example.com", "the host still receives the whole error")
+	})
+
+	parallel(t, "a store accepts host detail up to the documented bound", func(t *testing.T) {
+		d := newDispatchEnv(t, factory)
+		n := d.publish("alice")
+		d.clock.advance(10 * time.Minute)
+
+		d.setSendErr(func(ntfy.EmailMessage) error { return errors.New("connection refused") })
+
+		// A multi-byte detail longer than the bound checks the store accepts a
+		// reason of MaxEmailReasonBytes bytes, whatever its column counts. The
+		// EmailStore port does not read a reason back, so this asserts what the
+		// store accepted, not what it kept.
+		detail := strings.Repeat("é", ntfy.MaxEmailReasonBytes)
+
+		result, err := d.dispatcher("detailed",
+			ntfy.WithEmailMaxAttempts(1),
+			ntfy.WithEmailFailureDetail(func(context.Context, ntfy.EmailFailure) string { return detail }),
+		).Dispatch(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, 1, result.Failed)
+		assert.Zero(t, result.Unrecorded, "the bounded reason fits the delivery record")
+
+		assert.Len(t, d.records.reasonOf(n.ID), ntfy.MaxEmailReasonBytes)
+	})
+
+	// Construction never touches a store, so this proves the refusal is the same
+	// on every store, rather than testing each store's column width.
+	parallel(t, "an owner too long to store is refused before any traffic", func(t *testing.T) {
+		d := newDispatchEnv(t, factory)
+
+		_, err := ntfy.NewEmailDispatcher(d.svc, noopSuiteMailer, noopSuiteBook, noopSuiteTemplate,
+			ntfy.WithEmailOwner(strings.Repeat("o", ntfy.MaxIdentifierBytes+1)))
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
+	})
+
 	parallel(t, "a redeployed dispatcher does not resend", func(t *testing.T) {
 		d := newDispatchEnv(t, factory)
 		d.publish("alice")
@@ -141,32 +300,71 @@ func (c *dispatchClock) advance(d time.Duration) {
 	c.now.Store(&next)
 }
 
-// contextEmailStore makes a store's email records fail once their context is
-// cancelled, as a store talking to a database does, so that a cancelled pass
-// behaves identically on every store.
-type contextEmailStore struct {
+// The ports a case that never dispatches still has to supply.
+var (
+	noopSuiteMailer = ntfy.MailerFunc(func(context.Context, ntfy.EmailMessage) error { return nil })
+	noopSuiteBook   = ntfy.AddressBookFunc(func(_ context.Context, recipient string) (string, bool, error) {
+		return recipient + "@example.com", true, nil
+	})
+	noopSuiteTemplate = ntfy.EmailTemplateFunc(func(context.Context, ntfy.EmailBatch) (ntfy.EmailContent, error) {
+		return ntfy.EmailContent{Subject: "s", TextBody: "b"}, nil
+	})
+)
+
+// recordingEmailStore decorates a store so that its email records fail once
+// their context is cancelled, as a store talking to a database does, so that a
+// cancelled pass behaves identically on every store. It keeps every record the
+// store accepted, so a case can assert what reached the delivery record on any
+// store alike: the EmailStore port does not read a reason back.
+type recordingEmailStore struct {
 	ntfy.Store
 	ntfy.EmailStore
+
+	mu      sync.Mutex
+	records []ntfy.EmailRecord
 }
 
-func (s contextEmailStore) RecordEmails(ctx context.Context, record ntfy.EmailRecord) (int64, error) {
+func (s *recordingEmailStore) RecordEmails(ctx context.Context, record ntfy.EmailRecord) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 
-	return s.EmailStore.RecordEmails(ctx, record)
+	changed, err := s.EmailStore.RecordEmails(ctx, record)
+	if err == nil && changed > 0 {
+		s.mu.Lock()
+		s.records = append(s.records, record)
+		s.mu.Unlock()
+	}
+
+	return changed, err
+}
+
+// reasonOf returns the reason last recorded for a notification.
+func (s *recordingEmailStore) reasonOf(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := len(s.records) - 1; i >= 0; i-- {
+		if slices.Contains(s.records[i].IDs, id) {
+			return s.records[i].Reason
+		}
+	}
+
+	return ""
 }
 
 // dispatchEnv is one dispatch case's service and the ports it observes.
 type dispatchEnv struct {
-	t     *testing.T
-	clock *dispatchClock
-	svc   *ntfy.Service
+	t       *testing.T
+	clock   *dispatchClock
+	svc     *ntfy.Service
+	records *recordingEmailStore
 
 	mu       sync.Mutex
 	messages []ntfy.EmailMessage
 	errs     []error
 	onSend   func(ntfy.EmailMessage)
+	sendErr  func(ntfy.EmailMessage) error
 	seq      int
 }
 
@@ -178,10 +376,28 @@ func newDispatchEnv(t *testing.T, factory EmailFactory) *dispatchEnv {
 	start := base
 	clock.now.Store(&start)
 
-	svc, err := ntfy.New(contextEmailStore{Store: store, EmailStore: store}, ntfy.WithClock(clock))
+	records := &recordingEmailStore{Store: store, EmailStore: store}
+
+	svc, err := ntfy.New(records, ntfy.WithClock(clock))
 	require.NoError(t, err)
 
-	return &dispatchEnv{t: t, clock: clock, svc: svc}
+	return &dispatchEnv{t: t, clock: clock, svc: svc, records: records}
+}
+
+// setOnSend replaces the hook the mailer runs on every send.
+func (d *dispatchEnv) setOnSend(onSend func(ntfy.EmailMessage)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.onSend = onSend
+}
+
+// setSendErr makes the mailer fail every send with what sendErr returns.
+func (d *dispatchEnv) setSendErr(sendErr func(ntfy.EmailMessage) error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.sendErr = sendErr
 }
 
 // publish publishes a notification for a recipient on a subject of its own.
@@ -210,11 +426,15 @@ func (d *dispatchEnv) dispatcher(owner string, opts ...ntfy.EmailOption) *ntfy.E
 	mailer := ntfy.MailerFunc(func(_ context.Context, message ntfy.EmailMessage) error {
 		d.mu.Lock()
 		d.messages = append(d.messages, message)
-		onSend := d.onSend
+		onSend, sendErr := d.onSend, d.sendErr
 		d.mu.Unlock()
 
 		if onSend != nil {
 			onSend(message)
+		}
+
+		if sendErr != nil {
+			return sendErr(message)
 		}
 
 		return nil

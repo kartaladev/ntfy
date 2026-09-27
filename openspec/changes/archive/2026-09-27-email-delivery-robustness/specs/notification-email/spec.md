@@ -6,7 +6,9 @@ By default the system SHALL email each notification at most once. A send that ma
 
 Under at-least-once delivery, a repeated send SHALL cover a subset of the notifications the original attempt covered: the system SHALL NOT add a notification to a message it has already attempted, and SHALL drop any notification that stopped being ACTIVE since, as it does before a first attempt. Where every notification of an in-doubt message has stopped being ACTIVE, the system SHALL send nothing further for it.
 
-The system SHALL state as limits that a repeated send is rendered again at each attempt rather than replayed from a stored copy, and therefore that a message template changed between two attempts produces different content under one idempotency key; and that a sender which ignores the idempotency key may deliver both.
+A repeated send that fails without being rejected, or whose notifications cannot all be read again before it, SHALL stay in doubt under the same idempotency key and be repeated once its lease lapses, rather than be retried as a new message; it SHALL NOT be sent without a notification it covered that could not be read. The attempt limit SHALL still apply, after which the notifications are recorded as failed.
+
+The system SHALL state as limits that a repeated send is rendered again at each attempt rather than replayed from a stored copy, and therefore that a message template changed between two attempts produces different content under one idempotency key; that a sender which ignores the idempotency key may deliver both; and that a repeated send which fails is attempted again after the lease rather than after the growing retry delay.
 
 #### Scenario: A crash after sending does not resend by default
 
@@ -33,9 +35,24 @@ The system SHALL state as limits that a repeated send is rendered again at each 
 - **WHEN** an in-doubt message is resent under at-least-once delivery after the recipient has read every notification it covered
 - **THEN** no message is sent, and those notifications are recorded as skipped
 
+#### Scenario: A resend that fails keeps its key
+
+- **WHEN** an in-doubt message is resent under at-least-once delivery, the sender fails transiently, and alice has received a newer notification meanwhile
+- **THEN** a later pass sends the message again under the original idempotency key over the original notifications, and the newer notification goes in a separate message
+
+#### Scenario: A resend whose notifications cannot be read waits whole
+
+- **WHEN** an in-doubt message is resent under at-least-once delivery and one of its notifications cannot be read again
+- **THEN** nothing is sent for it in that pass, and a later pass sends it under the original idempotency key
+
+#### Scenario: A resend that keeps failing fails at the attempt limit
+
+- **WHEN** an in-doubt message is resent under at-least-once delivery and the sender fails transiently on the attempt that reaches the limit
+- **THEN** its notifications are recorded as failed and never claimed again
+
 ### Requirement: Send failures are classified, retried within a budget, and reported
 
-The system SHALL treat a send the host's sender reports as rejected as a permanent failure, recorded as failed and never retried. The system SHALL retry any other failure that means the message was not sent, after a delay that grows with the attempts already made, up to an attempt limit, after which it SHALL record the notifications as failed. A failure to render a message SHALL be a permanent failure. Every failure SHALL be reported to the host rather than silently swallowed, and SHALL NOT abandon the rest of the pass.
+The system SHALL treat a send the host's sender reports as rejected as a permanent failure, recorded as failed and never retried. The system SHALL retry any other failure that means the message was not sent, after a delay that grows with the attempts already made (except a repeated send under at-least-once delivery, which stays in doubt as that requirement states), up to an attempt limit, after which it SHALL record the notifications as failed. A failure to render a message SHALL be a permanent failure. Every failure SHALL be reported to the host rather than silently swallowed, and SHALL NOT abandon the rest of the pass.
 
 Every retry SHALL be scheduled strictly later than the failure that caused it. Whatever the attempts made, the configured delay and the configured ceiling, the delay SHALL be positive and SHALL NOT exceed the ceiling by more than the jitter the system applies. No combination of accepted configuration and attempt count SHALL produce a delay that is zero, negative, or shorter than an earlier attempt's ceiling-bounded delay.
 
@@ -89,7 +106,7 @@ The system SHALL refuse to construct a dispatcher that has no sender, no address
 
 With no configuration, the system SHALL record, against a failed, retried or skipped delivery, a reason it owns itself: the classification of the outcome, and never text obtained from the host's sender, template or address lookup. The full error SHALL continue to reach the host's error handler unchanged, where the host applies its own logging and redaction policy.
 
-The host SHALL be able to record detail of its own choosing by supplying a rule that turns a failure into the text to record. The system SHALL bound what is recorded to a documented maximum length, truncating beyond it, so that a delivery record cannot grow without limit whatever the host returns.
+The host SHALL be able to record detail of its own choosing by supplying a rule that turns a failure into the text to record. The system SHALL ask the rule only about the outcome it records, and SHALL always give it the error behind the failure, never none. The system SHALL bound what is recorded to a documented maximum length, truncating beyond it, so that a delivery record cannot grow without limit whatever the host returns; truncation SHALL never leave the recorded reason empty.
 
 #### Scenario: A sender's error text is not stored by default
 
@@ -105,6 +122,16 @@ The host SHALL be able to record detail of its own choosing by supplying a rule 
 
 - **WHEN** a host's rule returns text longer than the documented maximum
 - **THEN** the stored reason is truncated to that maximum and the delivery is otherwise recorded normally
+
+#### Scenario: A host's rule hears only of the recorded outcome
+
+- **WHEN** a host supplies a rule and a send fails transiently, well within the attempt limit
+- **THEN** the rule is asked once, about a retry, and never about a failure that is not recorded
+
+#### Scenario: A send left in doubt by a stopped pass still carries an error
+
+- **WHEN** a host supplies a rule that reads the error's text, and a pass under at-most-once delivery abandons a send an earlier pass left in doubt by stopping
+- **THEN** the rule receives an error that is an in-doubt error, and the pass completes
 
 #### Scenario: Skip reasons are unaffected
 

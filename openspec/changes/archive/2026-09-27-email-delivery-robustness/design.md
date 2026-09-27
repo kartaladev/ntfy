@@ -86,6 +86,22 @@ The `*c.ceiling` dereference guarded only by `c.backoff` (`:307`) becomes a guar
 
 *Out of scope:* validating `IDGenerator` output against the identifier column. The generator is shared with notifications and is not the email dispatcher's to police; it belongs with a store-level concern.
 
+### D6. A resend that fails stays in doubt (added after review)
+
+Code review showed that a resend failing transiently, or whose re-read failed, was recorded `RETRY`. A `RETRY` looks exactly like a first attempt that failed, so the next pass sent it as a new message: a new key, merged with newer notifications. The original attempt may still have been delivered, so even a sender honouring the key could deliver it twice.
+
+The resend now stays `SENDING` under its key and is repeated once the lease lapses, with the attempt limit still ending it in `FAILED`. A failed re-read holds back the whole resend, so the key never goes out missing a notification it covered.
+
+*Alternative considered:* stop letting a `RETRY` merge with newer notifications. Rejected: a store cannot tell a failed resend from a failed first attempt without a new status, which would be a port and schema change.
+
+**Default:** a failed resend is repeated after the lease, not the backoff; the spec states this as a limit. **Override:** `WithEmailLease` sets the wait, as it does for every send in doubt.
+
+### D7. Review fold-ins to the reason policy and validation
+
+- The host's rule is asked only about the status actually recorded, once per status, and its `Err` is never nil: for a send a stopped pass left in doubt, it wraps `ErrMailInDoubt`.
+- Truncation steps back at most one rune's width, so text that is not UTF-8 is cut at the bound and never emptied. Stores keep the previous reason when given an empty one.
+- The ceiling is checked against the base after defaults apply, not option against option, so neither value set alone can pass the other's default.
+
 ## Risks / Trade-offs
 
 - **A host read the old at-least-once wording as a guarantee** → It never held, and the correction is documentation plus a spec scenario, not a behaviour change. The stated limits tell them what to rely on instead: a key-honouring sender.

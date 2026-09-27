@@ -51,6 +51,7 @@ with `Run`, or from its own scheduler; constructing a dispatcher starts nothing.
 | Delivery guarantee | `AtMostOnce` | `WithDeliveryGuarantee(ntfy.AtLeastOnce)` |
 | Owner recorded in leases | `email-` and a UUIDv7 | `WithEmailOwner` |
 | Failures in a pass | ignored, silently | `WithEmailErrorHandler` — supply one that logs |
+| Detail recorded with a failure | the library's own reason code, at most 1024 bytes | `WithEmailFailureDetail` |
 
 - **The grace delay** keeps a notification someone reads in the application within
   a few minutes from ever being emailed.
@@ -60,8 +61,12 @@ with `Run`, or from its own scheduler; constructing a dispatcher starts nothing.
   a template is already the opt-in. A noisy publisher should be narrowed:
   `WithEmailKinds` with the kinds that ask someone to act.
 - A zero or negative duration or limit, a lag no longer than the grace delay, a
-  backoff ceiling below its base, a filter and kinds together, or an unknown
-  guarantee is a configuration error from `NewEmailDispatcher`.
+  backoff ceiling below its base, a filter and kinds together, an unknown
+  guarantee, or an owner longer than 255 bytes is a configuration error from
+  `NewEmailDispatcher`.
+- **A retry is always scheduled after the failure that caused it.** The delay
+  doubles from the base and stops at the ceiling, however large the ceiling and
+  however many attempts have been made.
 
 ## One pass
 
@@ -89,9 +94,9 @@ the pass.
 | filtered out | `SKIPPED` (`filtered`) | never |
 | no address | `SKIPPED` (`no_address`), with no error reported | never |
 | read, closed or deleted before sending | `SKIPPED` (`inactive` or `deleted`) | never |
-| `ErrMailRejected` | `FAILED` | never |
-| a template error | `FAILED`: a rendering bug does not fix itself | never |
-| any other send, lookup or filter error | `RETRY`, after the backoff | until the attempt limit, then `FAILED` |
+| `ErrMailRejected` | `FAILED` (`send_rejected`) | never |
+| a template error | `FAILED` (`render_failed`): a rendering bug does not fix itself | never |
+| any other send, lookup, filter, read or identifier error | `RETRY` (`send_failed`, `lookup_failed`, `filter_failed`, `read_failed` or `id_failed`), after the backoff | until the attempt limit, then `FAILED` |
 | `ErrMailInDoubt`, or a pass that stopped mid-send | depends on the guarantee | see below |
 
 **A skip is final.** A host that fixes an address or widens its filter later does
@@ -107,9 +112,10 @@ that message.
   the outcome — is recorded `ABANDONED` and never repeated. An email can be lost;
   it is never duplicated. The notification is still in the inbox.
 - **`AtLeastOnce`**: a send in doubt is repeated once its lease lapses, with the
-  same idempotency key, over exactly the same notifications, never merged with
-  newer ones. With a sender that deduplicates on the key, the email arrives once;
-  with one that does not, it can arrive twice.
+  same idempotency key. The repeat covers a subset of the original message's
+  notifications: never merged with newer ones, and never one that has stopped
+  being `ACTIVE` since. If none is left, nothing is sent. With a sender that deduplicates on
+  the key, the email arrives once; with one that does not, it can arrive twice.
 
 ## Preferences, quiet hours and unsubscribes
 
@@ -129,8 +135,15 @@ dispatcher, err := ntfy.NewEmailDispatcher(svc, mailer, addressBook, template, n
 - **Under `AtMostOnce`, a pass that stops mid-send loses that message's email.**
   The window is one send; the notifications stay in the inbox and are counted as
   abandoned by the next pass.
+- **Under `AtLeastOnce`, a repeat is rendered again, not replayed.** A template
+  changed between two attempts sends different content under one idempotency
+  key. The protection is a sender that honours the key.
+- **Under `AtLeastOnce`, a repeat that fails is tried again after the lease, not
+  the backoff.** It stays in doubt under its key, so it is never sent as a new
+  message merged with newer notifications; the attempt limit still ends it.
 - **Under `AtLeastOnce`, a sender that ignores the idempotency key can deliver a
-  message twice.**
+  message twice**, and a repeat covers only what is still `ACTIVE`, so the two
+  deliveries can differ in what they cover.
 - **A notification read or closed between the recheck and the send is still
   emailed.** The window is one render and one send.
 - **A skip is final**, and a notification older than the maximum lag is never
@@ -139,3 +152,9 @@ dispatcher, err := ntfy.NewEmailDispatcher(svc, mailer, addressBook, template, n
   settled**; its record is removed with the other orphans.
 - **Email writes do not join the caller's transaction**, like every notification
   write.
+- **A delivery record keeps the library's own reason code, not the sender's
+  error text.** An abandoned send in doubt records `send_in_doubt`. The whole
+  error reaches `WithEmailErrorHandler`, where the host's logging and retention
+  policy applies. A host that wants detail stored supplies
+  `WithEmailFailureDetail` and decides what is safe to keep; whatever it returns
+  is truncated to 1024 bytes (`MaxEmailReasonBytes`).
