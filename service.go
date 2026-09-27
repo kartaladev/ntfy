@@ -231,7 +231,7 @@ func (s *Service) Get(ctx context.Context, recipient, id string) (Notification, 
 
 // List returns a page of a recipient's notifications, newest first.
 func (s *Service) List(ctx context.Context, q ListQuery) (Page, error) {
-	if err := q.Validate(); err != nil {
+	if err := q.ValidateWithin(s.limits); err != nil {
 		return Page{}, err
 	}
 
