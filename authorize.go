@@ -46,7 +46,9 @@ var SelfOnly SubscriptionAuthorizer = SubscriptionAuthorizerFunc(selfOnly)
 //
 // It grants no authority to change anything. An acting user following another
 // recipient under this policy still cannot mark that recipient's notifications
-// read: such a request is refused as forbidden. A host that needs one user to
+// read: a mark request over a WebSocket connection that follows them is refused
+// as forbidden, and over the HTTP contract their notifications are not found,
+// exactly like ones that do not exist. A host that needs one user to
 // mark another's notifications read does that over the HTTP contract, behind its
 // own authorization.
 var AllowAll SubscriptionAuthorizer = SubscriptionAuthorizerFunc(func(context.Context, string, string) error {

@@ -1,7 +1,9 @@
 package websocket_test
 
 import (
+	"context"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -86,25 +88,46 @@ func TestMarkOnFollowedConnection(t *testing.T) {
 func TestTransportsGrantTheSameAuthority(t *testing.T) {
 	t.Parallel()
 
+	// outcome is what both transports answered actor following bob, after the
+	// HTTP contract has refused to mark bob's notification read.
+	type outcome struct {
+		s     *server
+		actor string
+		bobs  string
+		// stream is the status the stream transport answered the follow with.
+		stream int
+		// d and err are the WebSocket transport's answer to the same follow.
+		d   dialed
+		err error
+	}
+
 	type testCase struct {
 		name   string
 		policy ntfy.SubscriptionAuthorizer
 		actor  string
-		// assert checks the WebSocket transport's answer to actor connecting
-		// for bob and marking bob's notification read.
-		assert func(t *testing.T, d dialed, err error, bobs string)
+		assert func(t *testing.T, o outcome)
 	}
 
-	// refusesTheMark asserts a connection the policy permitted, whose mark
-	// request naming bob's notification is refused.
-	refusesTheMark := func(t *testing.T, d dialed, err error, bobs string) {
+	// permitsFollowingOnly asserts that both transports let actor follow bob,
+	// that the WebSocket connection refuses to mark bob's notification, and
+	// that the connection stays open and keeps delivering bob's signals.
+	permitsFollowingOnly := func(t *testing.T, o outcome) {
 		t.Helper()
 
-		upgraded(t, d, err)
+		assert.Equal(t, http.StatusOK, o.stream, "the stream transport permits following bob")
+		upgraded(t, o.d, o.err)
 
-		send(t, d.conn, `{"type":"mark-read","ref":"r1","ids":["`+bobs+`"]}`)
-		assert.Equal(t, "forbidden", readFrame(t, d.conn)["code"],
-			"the WebSocket transport refuses the same mark")
+		send(t, o.d.conn, `{"type":"mark-read","ref":"r1","ids":["`+o.bobs+`"]}`)
+		assert.JSONEq(t,
+			`{"type":"error","ref":"r1","code":"forbidden",`+
+				`"message":"ntfy: unauthorized: a connection following another recipient may not mark notifications read"}`,
+			string(readRaw(t, o.d.conn)), "the WebSocket transport refuses the same mark")
+
+		unchanged(t, o.s, "bob", o.actor)
+
+		o.s.publish(t, "bob", "event-3")
+		assert.Equal(t, string(ntfy.ChangeCreated), readFrame(t, o.d.conn)["change"],
+			"the connection still delivers bob's signals")
 	}
 
 	cases := []testCase{
@@ -112,12 +135,14 @@ func TestTransportsGrantTheSameAuthority(t *testing.T) {
 			name:   "the default policy follows nobody else",
 			policy: ntfy.SelfOnly,
 			actor:  "alice",
-			assert: func(t *testing.T, d dialed, err error, _ string) {
-				refused(http.StatusForbidden, "forbidden")(t, d, err)
+			assert: func(t *testing.T, o outcome) {
+				assert.Equal(t, http.StatusForbidden, o.stream, "the stream transport refuses following bob")
+				refused(http.StatusForbidden, "forbidden")(t, o.d, o.err)
+				unchanged(t, o.s, "bob", o.actor)
 			},
 		},
-		{name: "every subscription permitted", policy: ntfy.AllowAll, actor: "alice", assert: refusesTheMark},
-		{name: "a supervisor policy", policy: supervisorPolicy, actor: "sup", assert: refusesTheMark},
+		{name: "every subscription permitted", policy: ntfy.AllowAll, actor: "alice", assert: permitsFollowingOnly},
+		{name: "a supervisor policy", policy: supervisorPolicy, actor: "sup", assert: permitsFollowingOnly},
 	}
 
 	for _, tc := range cases {
@@ -132,24 +157,55 @@ func TestTransportsGrantTheSameAuthority(t *testing.T) {
 			s.publish(t, "bob", "event-1")
 			s.publish(t, tc.actor, "event-2")
 
-			bobs := s.idOf(t, "bob")
+			o := outcome{s: s, actor: tc.actor, bobs: s.idOf(t, "bob")}
 
-			// The HTTP transport: mark bob's notification, named over the contract.
-			assert.Equal(t, http.StatusNotFound, s.markReadOverHTTP(t, tc.actor, bobs),
-				"the HTTP transport refuses to mark another recipient's notification")
+			// The HTTP contract: mark bob's notification, named over the contract.
+			assert.Equal(t, http.StatusNotFound, s.markReadOverHTTP(t, tc.actor, o.bobs),
+				"the HTTP contract refuses to mark another recipient's notification")
 
-			// The WebSocket transport: the same mark, over a connection that
-			// follows bob as far as the policy allows.
-			d, err := s.dial(t, dialRequest{actor: tc.actor, recipient: "bob"})
-			tc.assert(t, d, err, bobs)
+			// Both realtime transports: follow bob as far as the policy allows.
+			o.stream = s.followOverStream(t, tc.actor, "bob")
+			o.d, o.err = s.dial(t, dialRequest{actor: tc.actor, recipient: "bob"})
 
-			for _, recipient := range []string{"bob", tc.actor} {
-				count, err := s.svc.CountActive(t.Context(), recipient)
-				require.NoError(t, err)
-				assert.EqualValues(t, 1, count, "%s's notifications are unchanged", recipient)
-			}
+			tc.assert(t, o)
 		})
 	}
+}
+
+// unchanged asserts that each recipient still has its one active notification.
+func unchanged(t *testing.T, s *server, recipients ...string) {
+	t.Helper()
+
+	for _, recipient := range recipients {
+		count, err := s.svc.CountActive(t.Context(), recipient)
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, count, "%s's notifications are unchanged", recipient)
+	}
+}
+
+// followOverStream opens actor's server-sent event stream of recipient's
+// signals, keeps it open until the test ends, and returns the status the
+// stream transport answered with.
+func (s *server) followOverStream(t *testing.T, actor, recipient string) int {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		s.url+"/v1/notifications/stream?recipient="+url.QueryEscape(recipient), http.NoBody)
+	require.NoError(t, err)
+
+	req.Header.Set(actorHeader, actor)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		cancel()
+		_ = resp.Body.Close()
+	})
+
+	return resp.StatusCode
 }
 
 // markReadOverHTTP marks a notification read over the HTTP contract as actor,

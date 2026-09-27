@@ -105,8 +105,9 @@ namespaced under `ntfy.` so they do not collide with one.
 Both authorize the subscription with the same policy (`ntfy.SelfOnly` by
 default), refuse while the hub is not running, and count against the same
 per-recipient cap of 8 connections per instance. The policy grants following
-only: a WebSocket client can also mark notifications read over its connection,
-and that always acts on the acting user, never on a followed recipient:
+only: a WebSocket client can also mark the acting user's own notifications read
+over a connection opened for the acting user, and a connection that follows
+anyone else refuses mark requests altogether:
 
 | Direction | Message |
 | --- | --- |
