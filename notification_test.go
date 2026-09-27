@@ -2,6 +2,7 @@ package ntfy_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,6 +26,23 @@ func validDraft() ntfy.Draft {
 	}
 }
 
+// issue asserts that err is a validation error carrying an issue for pointer.
+func issue(t *testing.T, err error, pointer string) {
+	t.Helper()
+
+	require.ErrorIs(t, err, ntfy.ErrValidation)
+
+	var validation *ntfy.ValidationError
+	require.ErrorAs(t, err, &validation)
+
+	pointers := make([]string, 0, len(validation.Issues))
+	for _, issue := range validation.Issues {
+		pointers = append(pointers, issue.Pointer)
+	}
+
+	assert.Contains(t, pointers, pointer)
+}
+
 func TestDraftValidate(t *testing.T) {
 	t.Parallel()
 
@@ -32,22 +50,6 @@ func TestDraftValidate(t *testing.T) {
 		name   string
 		draft  func(d *ntfy.Draft)
 		assert func(t *testing.T, err error)
-	}
-
-	issue := func(t *testing.T, err error, pointer string) {
-		t.Helper()
-
-		require.ErrorIs(t, err, ntfy.ErrValidation)
-
-		var validation *ntfy.ValidationError
-		require.ErrorAs(t, err, &validation)
-
-		pointers := make([]string, 0, len(validation.Issues))
-		for _, issue := range validation.Issues {
-			pointers = append(pointers, issue.Pointer)
-		}
-
-		assert.Contains(t, pointers, pointer)
 	}
 
 	cases := []testCase{
@@ -142,6 +144,96 @@ func TestDraftValidate(t *testing.T) {
 			tc.assert(t, draft.Validate())
 		})
 	}
+}
+
+func TestDraftValidateContentLimits(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		draft  func(d *ntfy.Draft)
+		assert func(t *testing.T, err error)
+	}
+
+	cases := []testCase{
+		{
+			name:   "a title longer than the limit is refused",
+			draft:  func(d *ntfy.Draft) { d.Title = strings.Repeat("t", ntfy.DefaultMaxTitleBytes+1) },
+			assert: func(t *testing.T, err error) { issue(t, err, "/title") },
+		},
+		{
+			name:  "a title of exactly the limit is valid",
+			draft: func(d *ntfy.Draft) { d.Title = strings.Repeat("t", ntfy.DefaultMaxTitleBytes) },
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name: "a payload larger than the limit is refused",
+			draft: func(d *ntfy.Draft) {
+				d.Data = json.RawMessage(`{"padding":"` + strings.Repeat("p", ntfy.DefaultMaxDataBytes) + `"}`)
+			},
+			assert: func(t *testing.T, err error) { issue(t, err, "/data") },
+		},
+		{
+			name: "more links than the limit are refused",
+			draft: func(d *ntfy.Draft) {
+				d.Links = map[string]string{}
+				for i := range ntfy.DefaultMaxLinks + 1 {
+					d.Links["rel-"+strconv.Itoa(i)] = "/v1/tasks/task-1"
+				}
+			},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links") },
+		},
+		{
+			name: "a relation name longer than the limit is refused",
+			draft: func(d *ntfy.Draft) {
+				d.Links = map[string]string{strings.Repeat("r", ntfy.DefaultMaxLinkRelationBytes+1): "/v1/tasks/task-1"}
+			},
+			assert: func(t *testing.T, err error) {
+				issue(t, err, "/links/"+strings.Repeat("r", ntfy.DefaultMaxLinkRelationBytes+1))
+			},
+		},
+		{
+			name: "an href longer than the limit is refused",
+			draft: func(d *ntfy.Draft) {
+				d.Links = map[string]string{"task": "/v1/tasks/" + strings.Repeat("x", ntfy.DefaultMaxLinkHrefBytes)}
+			},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/task") },
+		},
+		{
+			name: "a relation name carrying a slash is escaped in the pointer",
+			draft: func(d *ntfy.Draft) {
+				d.Links = map[string]string{"a/b": "/v1/tasks/" + strings.Repeat("x", ntfy.DefaultMaxLinkHrefBytes)}
+			},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/a~1b") },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			draft := validDraft()
+			tc.draft(&draft)
+
+			tc.assert(t, draft.Validate())
+		})
+	}
+}
+
+func TestDraftValidateWithinRaisedLimits(t *testing.T) {
+	t.Parallel()
+
+	payload := json.RawMessage(`{"padding":"` + strings.Repeat("p", ntfy.DefaultMaxDataBytes) + `"}`)
+
+	draft := validDraft()
+	draft.Data = payload
+
+	require.Error(t, draft.Validate(), "the default limit refuses it")
+
+	limits := ntfy.Limits{MaxDataBytes: ntfy.Limit(1 << 20)}
+	assert.NoError(t, draft.ValidateWithin(limits), "a host that raises the limit accepts it")
 }
 
 func TestNotificationJSONKeepsOpaqueContentExact(t *testing.T) {

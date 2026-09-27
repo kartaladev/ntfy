@@ -151,7 +151,7 @@ func (r CloseRequest) Validate() error {
 	if s := r.Successor; s != nil {
 		for _, issue := range validateContent(content{
 			sourceID: s.SourceID, kind: s.Kind, subjectVersion: s.SubjectVersion, data: s.Data,
-		}, false) {
+		}, false, Limits{}) {
 			issue.Pointer = "/successor" + issue.Pointer
 			issues = append(issues, issue)
 		}
