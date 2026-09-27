@@ -784,3 +784,35 @@ func TestWriteError(t *testing.T) {
 		})
 	}
 }
+
+// TestHandlerStreamEndsWhenTheHubStops proves a stream does not outlive the
+// instance's ability to deliver signals to it: when the hub's run ends, the
+// response body ends rather than carrying on with heartbeats.
+func TestHandlerStreamEndsWhenTheHubStops(t *testing.T) {
+	t.Parallel()
+
+	env := newHTTPEnv(t, false, nil)
+	stop := runHub(t, env.hub)
+
+	server := httptest.NewServer(env.handler)
+	t.Cleanup(server.Close)
+
+	s := openStream(t, server, "alice", "")
+	require.Equal(t, http.StatusOK, s.resp.StatusCode)
+	s.expect(t, "the connected comment", equals(": connected"))
+
+	require.ErrorIs(t, stop(), context.Canceled)
+
+	deadline := time.After(hubWait)
+
+	for {
+		select {
+		case _, ok := <-s.lines:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("the stream stayed open after the instance stopped receiving signals")
+		}
+	}
+}

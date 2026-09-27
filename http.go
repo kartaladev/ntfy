@@ -360,6 +360,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, actor string) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-subscription.Done():
+			// The instance stopped receiving signals. Ending the response is what
+			// makes the client reconnect — to this instance once it recovers, or to
+			// another — and re-read the store.
+			return
 		case <-subscription.Ready():
 			signal, ok := subscription.Take()
 			if !ok {
