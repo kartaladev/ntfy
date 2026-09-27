@@ -261,7 +261,7 @@ func TestNewEmailDispatcher(t *testing.T) {
 		{name: "an unknown guarantee", opts: []ntfy.EmailOption{ntfy.WithDeliveryGuarantee("EXACTLY_ONCE")}, assert: refused},
 		{name: "an empty owner", opts: []ntfy.EmailOption{ntfy.WithEmailOwner("")}, assert: refused},
 		{
-			name:   "an owner longer than the delivery record admits",
+			name: "an owner longer than the delivery record admits",
 			opts: []ntfy.EmailOption{ntfy.WithEmailOwner(strings.Repeat("o", ntfy.MaxIdentifierBytes+1))},
 			assert: func(t *testing.T, d *ntfy.EmailDispatcher, err error) {
 				refused(t, d, err)

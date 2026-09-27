@@ -29,16 +29,16 @@
 ## 5. Close the construction gaps
 
 - [x] 5.1 Guard both pointers in the ceiling-versus-base check (`email_dispatcher.go:307`) and verify the test from 1.3 passes with a configuration error rather than a panic.
-- [ ] 5.2 Add the owner length bound to `WithEmailOwner` validation, naming the limit in the error. Verify with a test for the spec scenario "An owner too long to store", and verify the same configuration is refused identically on every store by running it in the shared suite rather than per store.
+- [x] 5.2 Add the owner length bound to `WithEmailOwner` validation, naming the limit in the error. Verify with a test for the spec scenario "An owner too long to store", and verify the same configuration is refused identically on every store by running it in the shared suite rather than per store.
 
 ## 6. Pin the guarantees in the shared suite
 
-- [ ] 6.1 Add the at-least-once subset behaviour and the empty-resend case to `ntfytest.RunEmailDispatch`, so a host-supplied store cannot diverge. Verify by running the suite against both `NewMemoryStore` and `sqlstore`.
-- [ ] 6.2 Add the recorded-reason expectations to `ntfytest.RunEmailDispatch`, not `ntfytest.RunEmail`: `EmailCandidate` (`email.go:115-126`) carries `Status`, `BatchID` and `Attempts` but no `Reason`, so a stored reason cannot be read back through the `EmailStore` port on any store, and asserting it there would mean widening that port for nothing the library needs. Drive a real dispatcher over the factory's store and verify both stores record the classification identically, on every driver and dialect.
+- [x] 6.1 Add the at-least-once subset behaviour and the empty-resend case to `ntfytest.RunEmailDispatch`, so a host-supplied store cannot diverge. Verify by running the suite against both `NewMemoryStore` and `sqlstore`.
+- [x] 6.2 Add the recorded-reason expectations to `ntfytest.RunEmailDispatch`, not `ntfytest.RunEmail`: `EmailCandidate` (`email.go:115-126`) carries `Status`, `BatchID` and `Attempts` but no `Reason`, so a stored reason cannot be read back through the `EmailStore` port on any store, and asserting it there would mean widening that port for nothing the library needs. Drive a real dispatcher over the factory's store and verify both stores record the classification identically, on every driver and dialect.
 
 ## 7. Verify the whole change
 
 - [ ] 7.1 Run `make all` and verify lint, split-check and tests pass on every module.
-- [ ] 7.2 Run `make store-matrix` and verify the email conformance suites pass on every driver and dialect, including MySQL for the owner bound.
+- [x] 7.2 Run `make store-matrix` and verify the email conformance suites pass on every driver and dialect, including MySQL for the owner bound.
 - [ ] 7.3 Re-run each red test from group 1 against its temporarily reverted fix and verify each fails again, confirming none passes vacuously.
-- [ ] 7.4 Run `openspec validate "email-delivery-robustness" --strict` and verify every spec scenario has a corresponding test.
+- [x] 7.4 Run `openspec validate "email-delivery-robustness" --strict` and verify every spec scenario has a corresponding test.
