@@ -45,6 +45,9 @@ const (
 	MaxKindBytes = 100
 	// MaxIdentifierBytes is the longest recipient, source and subject.
 	MaxIdentifierBytes = 255
+	// MaxIDBytes is the longest notification identifier an [IDGenerator] may
+	// mint.
+	MaxIDBytes = 64
 )
 
 // Notification is one notification for one recipient.

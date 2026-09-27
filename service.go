@@ -36,7 +36,9 @@ func WithClock(clock Clock) Option {
 }
 
 // WithIDGenerator replaces the default [UUIDv7Generator]. A nil generator is
-// ignored.
+// ignored. Every identifier it mints must be 1 to [MaxIDBytes] bytes; a write
+// that mints one outside that fails with a [ConfigurationError] and writes
+// nothing under it.
 func WithIDGenerator(generator IDGenerator) Option {
 	return func(s *Service) {
 		if generator != nil {
@@ -105,6 +107,10 @@ func New(store Store, opts ...Option) (*Service, error) {
 	if err := svc.limits.validate(); err != nil {
 		return nil, err
 	}
+
+	// Checked per identifier rather than probed here: minting one to look at
+	// would spend a value of a host generator backed by a sequence.
+	svc.ids = boundedIDs{svc.ids}
 
 	return svc, nil
 }

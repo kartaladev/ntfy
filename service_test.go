@@ -2,6 +2,7 @@ package ntfy_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +99,96 @@ func TestNew(t *testing.T) {
 
 			svc, err := ntfy.New(tc.store, tc.opts...)
 			tc.assert(t, svc, err)
+		})
+	}
+}
+
+// TestServiceRefusesIdentifiersNoStoreCanHold holds a host's IDGenerator to
+// what every store can hold: an identifier of 1 to MaxIDBytes bytes. The cases
+// do not vary context, so the table has no ctx field.
+func TestServiceRefusesIdentifiersNoStoreCanHold(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		id     string
+		seeded bool // alice already has a notification on task-1, minted soundly
+		act    func(t *testing.T, svc *ntfy.Service) error
+		assert func(t *testing.T, store ntfy.Store, err error)
+	}
+
+	publish := func(t *testing.T, svc *ntfy.Service) error {
+		_, err := svc.Publish(t.Context(), ntfy.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer"})
+
+		return err
+	}
+
+	// closeWithSuccessor closes task-1 with a successor, whose identifier the
+	// service under test mints.
+	closeWithSuccessor := func(t *testing.T, svc *ntfy.Service) error {
+		_, err := svc.Close(t.Context(), ntfy.CloseRequest{
+			Subject: "task-1", Version: 5, Reason: "taken",
+			Successor: &ntfy.Successor{SourceID: "event-5", Kind: "taken", SubjectVersion: 5},
+		})
+
+		return err
+	}
+
+	refused := func(t *testing.T, store ntfy.Store, err error) {
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
+		assert.ErrorContains(t, err, "ID generator")
+
+		page, err := store.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+		require.NoError(t, err)
+		assert.Empty(t, page.Notifications, "nothing is written under an identifier no store can hold")
+	}
+
+	cases := []testCase{
+		{name: "an identifier one byte too long is refused", id: strings.Repeat("x", ntfy.MaxIDBytes+1), act: publish, assert: refused},
+		{name: "an empty identifier is refused", id: "", act: publish, assert: refused},
+		{
+			name: "an identifier of exactly the limit is stored",
+			id:   strings.Repeat("x", ntfy.MaxIDBytes),
+			act:  publish,
+			assert: func(t *testing.T, store ntfy.Store, err error) {
+				require.NoError(t, err)
+
+				got, err := store.Get(t.Context(), "alice", strings.Repeat("x", ntfy.MaxIDBytes))
+				require.NoError(t, err)
+				assert.Equal(t, "alice", got.Recipient)
+			},
+		},
+		{
+			name:   "a successor's identifier is held to the limit too",
+			id:     strings.Repeat("x", ntfy.MaxIDBytes+1),
+			seeded: true,
+			act:    closeWithSuccessor,
+			assert: func(t *testing.T, _ ntfy.Store, err error) {
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
+				assert.ErrorContains(t, err, "ID generator")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := ntfy.NewMemoryStore()
+
+			if tc.seeded {
+				seed, err := ntfy.New(store)
+				require.NoError(t, err)
+
+				_, err = seed.Publish(t.Context(),
+					ntfy.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer", SubjectVersion: 1})
+				require.NoError(t, err)
+			}
+
+			svc, err := ntfy.New(store, ntfy.WithIDGenerator(ntfy.IDGeneratorFunc(func() (string, error) { return tc.id, nil })))
+			require.NoError(t, err)
+
+			tc.assert(t, store, tc.act(t, svc))
 		})
 	}
 }
