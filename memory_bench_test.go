@@ -283,3 +283,60 @@ func BenchmarkMemoryStoreMarkAllRead(b *testing.B) {
 		})
 	}
 }
+
+// withinBound is a count-bound pass in which no seeded recipient exceeds the
+// bound, the steady state of a host running the pruner with the default. It
+// removes nothing, so one seeded store serves every call.
+func withinBound() ntfy.PruneRequest {
+	return ntfy.PruneRequest{
+		Now: seedStart.Add(48 * time.Hour), MaxPerRecipient: ntfy.DefaultMaxPerRecipient, Strategy: ntfy.EvictOldestActive,
+	}
+}
+
+// BenchmarkMemoryStorePruneCount measures the count bound's pass when every
+// recipient is within it, so B/op and allocs/op are what the pass costs merely
+// to find that out.
+func BenchmarkMemoryStorePruneCount(b *testing.B) {
+	for _, size := range benchmarkSizes {
+		b.Run(size.name, func(b *testing.B) {
+			store, _ := seedMemoryStore(b, size.notifications, size.recipients)
+			ctx := b.Context()
+			req := withinBound()
+
+			for b.Loop() {
+				if _, err := store.Prune(ctx, req); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize gates the count
+// bound's pass the way the read gate does, on allocations rather than time:
+// a pass that finds every recipient within the bound must not allocate in
+// proportion to what the store holds. Allocation counts do not depend on the
+// machine's load, so the ratio is exact.
+func TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize(t *testing.T) {
+	const (
+		runs       = 5
+		ratioLimit = 2.0
+	)
+
+	allocs := func(notifications, recipients int) float64 {
+		store, _ := seedMemoryStore(t, notifications, recipients)
+		req := withinBound()
+
+		return testing.AllocsPerRun(runs, func() {
+			result, err := store.Prune(t.Context(), req)
+			require.NoError(t, err)
+			require.Zero(t, result.DeletedForCount+result.EvictedActive, "the fixture must stay within the bound")
+		})
+	}
+
+	small := allocs(smallNotifications, smallRecipients)
+	large := allocs(largeNotifications, largeRecipients)
+
+	assert.LessOrEqualf(t, large, small*ratioLimit,
+		"a within-bound count pass allocated with store size: %.0f allocations at 20k, %.0f at 200k", small, large)
+}

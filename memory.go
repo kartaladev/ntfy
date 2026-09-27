@@ -471,17 +471,19 @@ func (s *MemoryStore) Prune(_ context.Context, req PruneRequest) (PruneResult, e
 // pruneCount brings each recipient within the count bound, inactive
 // notifications first. The caller holds the lock.
 func (s *MemoryStore) pruneCount(req PruneRequest, result *PruneResult) {
-	byRecipient := make(map[string][]Notification)
-	for _, n := range s.notifications {
-		byRecipient[n.Recipient] = append(byRecipient[n.Recipient], n)
-	}
+	// The keys are collected before the loop, so evicting inside it cannot
+	// disturb the iteration.
+	for _, recipient := range slices.Sorted(maps.Keys(s.recipients)) {
+		ids := s.recipients[recipient]
 
-	for _, recipient := range slices.Sorted(maps.Keys(byRecipient)) {
-		held := byRecipient[recipient]
-		excess := len(held) - req.MaxPerRecipient
-
+		excess := len(ids) - req.MaxPerRecipient
 		if excess <= 0 {
 			continue
+		}
+
+		held := make([]Notification, 0, len(ids))
+		for id := range ids {
+			held = append(held, s.notifications[id])
 		}
 
 		slices.SortFunc(held, oldestFirst)

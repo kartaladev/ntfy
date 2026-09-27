@@ -152,6 +152,60 @@ The three replacements change only state, timestamps and `ClosedReason`, never
 `Recipient`. `memory_email.go` only reads the map. D2 holds, and the index needs
 maintaining in `put` and `remove` only.
 
+## Prune count bound
+
+The plan's benchmark prunes with a bound of 50 against 100 per recipient. There,
+every recipient is materialised and evicted in both versions, so it cannot show
+design.md D4's claim. D4 claims that the pass copies the whole store before any
+per-recipient work, even when nobody exceeds the bound. The measurement therefore
+uses the steady state: `DefaultMaxPerRecipient` (500) against 100 per recipient.
+Nothing is removed, so one seeded store serves every call.
+
+**Threshold, stated before measuring:** a within-bound pass at 200k/2000 makes
+at most 2× the allocations it makes at 20k/200. This is
+`TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize`, which uses
+`testing.AllocsPerRun`. Allocation counts are deterministic, so this gate does
+not depend on load.
+
+Before, the gate fails:
+
+```
+        	Error:      	"16045" is not less than or equal to "3246"
+        	Messages:   	a within-bound count pass allocated with store size: 1623 allocations at 20k, 16045 at 200k
+FAIL
+```
+
+Command: `GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStorePruneCount' -benchmem -benchtime 20x -count 3 .`
+
+Before:
+
+```
+BenchmarkMemoryStorePruneCount/20k-14         	      20	   3890777 ns/op	12991161 B/op	    1623 allocs/op
+BenchmarkMemoryStorePruneCount/20k-14         	      20	   4830338 ns/op	12990889 B/op	    1623 allocs/op
+BenchmarkMemoryStorePruneCount/20k-14         	      20	   6237544 ns/op	12990655 B/op	    1623 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	  54317519 ns/op	130088696 B/op	   16045 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	  46741683 ns/op	130088156 B/op	   16045 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	  34035398 ns/op	130088150 B/op	   16045 allocs/op
+```
+
+After (`pruneCount` iterates `recipients`, materialising only recipients over the
+bound), the gate passes:
+
+```
+BenchmarkMemoryStorePruneCount/20k-14         	      20	     18081 ns/op	    9392 B/op	      12 allocs/op
+BenchmarkMemoryStorePruneCount/20k-14         	      20	     18273 ns/op	    9392 B/op	      12 allocs/op
+BenchmarkMemoryStorePruneCount/20k-14         	      20	     16215 ns/op	    9392 B/op	      12 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	    242860 ns/op	  100784 B/op	      16 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	    230804 ns/op	  100784 B/op	      16 allocs/op
+BenchmarkMemoryStorePruneCount/200k-14        	      20	    225475 ns/op	  100784 B/op	      16 allocs/op
+```
+
+At 200k a pass that removes nothing drops from 130 MB to 100 KB, and it holds the
+lock for about 0.23 ms instead of 34–54 ms. The 100 KB that remains is the
+sorted list of recipient keys. It is proportional to recipients, not to
+notifications, and it is kept because `PruneResult.Recipients` is reported in
+sorted order.
+
 ## After
 
 <filled in by Task 6>

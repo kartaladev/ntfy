@@ -13,7 +13,7 @@
 - [x] 2.4 Read `CountActive` (:341-354) through the index and verify the counting cases of `ntfytest.Run` still pass.
 - [x] 2.5 Read `List` (:262-301) through the index, keeping `matches`, `newestFirst`, the sort and the cursor handling untouched, and verify the listing and paging cases of `ntfytest.Run` still pass — including "Newest first with exact paging".
 - [x] 2.6 Read `MarkAllRead` (:394-415) through the index and verify the mark-all cases still pass, including "Mark all read does not swallow what arrived later".
-- [ ] 2.7 Rework `pruneCount` (:448-473) to iterate `recipients` instead of copying every `Notification` into `byRecipient` (:449-452), materialising one recipient at a time and leaving `evict` and the strategy logic unchanged. Verify with `go test -run 'TestPrune' -count=1 ./...` and `-benchmem` on the prune benchmark that the whole-store allocation is gone.
+- [x] 2.7 Rework `pruneCount` (:448-473) to iterate `recipients` instead of copying every `Notification` into `byRecipient` (:449-452), materialising one recipient at a time and leaving `evict` and the strategy logic unchanged. Verify with `go test -run 'TestPrune' -count=1 ./...` and `-benchmem` on the prune benchmark that the whole-store allocation is gone.
 
 ## 3. Meet the gate
 
