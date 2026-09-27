@@ -1784,6 +1784,81 @@ git commit -m "Document the publish and query limits and their overrides"
 
 ---
 
+### Task 9: What execution and review changed
+
+Tasks 1–8 were executed as written except for the deviations below, each a recorded ruling. Where this section differs from the code blocks above, **this section wins**.
+
+**Files:**
+- Modify: `http.go`, `http_test.go`, `websocket/handler.go`, `websocket/refusal_test.go`, `notification.go`, `notification_test.go`, `limits.go`, `limits_test.go`, `service.go`, `service.go`/`store.go` (a rename), `service_publish_test.go`, `service_ops_test.go`, `docs/notifications.md`
+
+**Interfaces:**
+- Consumes: everything Tasks 1–8 produced.
+- Produces: `func ParseQuery(r *http.Request) (url.Values, error)` in the core, which the `list` and `stream` handlers and the WebSocket handshake use. The unexported `(Limits).snapshot() Limits`, which `WithLimits` applies.
+
+- [x] **Step 1: Keep the existing import (Task 4)**
+
+`service_publish_test.go` already imported `"encoding/json"`, added by `stop-store-aliasing-caller-data`. Only `"strings"` is added.
+
+- [x] **Step 2: Prove the close defect where it actually is (Task 5)**
+
+By the time Task 5 ran, Task 2 had made the shared `validateContent` apply the default data bound to a successor, so `TestCloseRequestValidateBoundsItsSuccessor` already passed. It stays as a pin. The red proof is `TestServiceCloseHonoursConfiguredLimits`: a host's raised `MaxDataBytes` never reached successor validation while `Service.Close` called `req.Validate()`. It fails with `/successor/data: is longer than 65536 bytes` until `Close` calls `req.ValidateWithin(s.limits)`.
+
+- [x] **Step 3: Stop shadowing `max` (lint)**
+
+gocritic `builtinShadow` flagged six locals named `max`, in `notification.go`, `service.go` and `store.go`. Three were hidden by golangci-lint's `max-same-issues: 3`. All six are renamed to `limit`. The rename is mechanical, with no behaviour change.
+
+- [x] **Step 4: Refuse any request whose query cannot be parsed**
+
+`url.ParseQuery` discards everything only at its 10,000-parameter ceiling. On a `;` separator or a bad escape such as `%zz`, it keeps the pairs that did parse. So `stream`, which read `r.URL.Query().Get("recipient")`, followed `recipient=bob` from `recipient=bob&x=%zz`. That contradicts the HTTP spec: "The system SHALL NOT answer such a request by acting on the part of it that parsed." Design D6 and `tasks.md` 4.3 had assumed that `stream` fails closed, which is only true at the ceiling.
+
+Red: `recipient=bob&x=%25zz` and `x=1;y=2&recipient=bob` on the stream and on the WebSocket handshake acted on `recipient=bob`. Green is one core helper that `list`, `stream` and the WebSocket handshake all call before anything else:
+
+```go
+func ParseQuery(r *http.Request) (url.Values, error) {
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return nil, &ValidationError{Subject: "request", Issues: []ValidationIssue{
+			{Pointer: "/query", Detail: "could not be parsed"},
+		}}
+	}
+
+	return values, nil
+}
+```
+
+The existing "10,001 parameters" stream case now expects `400 validation_failed`, not a fallback to the acting user.
+
+- [x] **Step 5: Match host link schemes case-insensitively**
+
+`New` accepted `LinkSchemes: {"MAILTO"}`, and then every `mailto:` href was refused. Red: an uppercase host scheme accepting a `mailto:` href. Green:
+
+```go
+	if slices.ContainsFunc(limits.linkSchemes(), func(scheme string) bool {
+		return strings.EqualFold(scheme, parsed.Scheme)
+	}) {
+		return ""
+	}
+```
+
+- [x] **Step 6: Snapshot the limits a host supplies**
+
+`WithLimits` now applies `s.limits = limits.snapshot()`, which copies each set `*int` and clones `LinkSchemes`. A host mutating its values after `New` changes nothing. A test proves it.
+
+- [x] **Step 7: Report an over-count link map once**
+
+When `len(links)` exceeds `maxLinks()`, only the count issue is reported and the per-link checks are skipped. Before this, 5,000 links produced 5,001 issues.
+
+- [x] **Step 8: Documentation and remaining tests**
+
+The godoc for `WithLimits` and `Limits` names every construction error, including an empty `LinkSchemes` and an empty scheme. Each `ValidateWithin` says it expects limits that `New` would accept. `docs/notifications.md` says an href must parse as a URL reference. New tests cover:
+- an `escapePointer` case for `~`, which becomes `~0`;
+- a raised draft cap: `DefaultMaxDraftsPerPublish+1` drafts are accepted under a raised cap, and the same test fails under the defaults.
+
+- [x] **Step 9: Verify**
+
+Run: `make all`, then `GOTOOLCHAIN=go1.26.8 go test -race -count=1 ./...` at the root and in `websocket/`.
+Expected: `0 issues.` in every module, and every test passing.
+
 ## Self-Review
 
 Run against the spec after the plan was written; issues found were fixed inline and are recorded here.
