@@ -1530,3 +1530,14 @@ Run after writing the plan, per the skill. What it found, and what was fixed inl
 4. **Fixed while reviewing:** the Task 5 red test originally asserted `ntfy.EmailReasonSendFailed`, which would not compile before Step 3 and so could not fail for its own reason — it now asserts the absence of the address and is tightened onto the constant in Step 6. The Task 2 upper bound originally read `ceiling + ceiling/5`, which overflows for `math.MaxInt64`; it is now the `upperBound` helper.
 5. **Deviation recorded, not silently absorbed:** `tasks.md` 6.2 asks for recorded-reason expectations in `ntfytest.RunEmail`. `EmailCandidate` carries no `Reason`, so a store's reason is unreadable through the port and the assertion belongs in `RunEmailDispatch` instead. Task 7 Step 4 states this and why.
 6. **Noted, out of scope:** `docs_test.go` guards `docs/notifications.md` only, so nothing mechanically checks the `docs/email.md` edits in Tasks 1 and 6; the plan verifies them with `rg` instead. Extending the docs test to `docs/email.md` would be a change of its own.
+
+## Execution Record
+
+Where the implementation departed from the steps above, and why:
+
+1. **`docs/email.md` is guarded after all.** `TestTheEmailDocumentMatchesTheImplementation` (`example_email_test.go`) pins its sections; Self-Review item 6 missed it. It needs "never merged" in "Delivery guarantees", which Task 1 Step 10's wording dropped. The phrase was kept (it is still true), and the test gained needles for the new contract: `subset`, `rendered again, not replayed`, `reason code`, `WithEmailFailureDetail`, `send_in_doubt`, 1024 and 255.
+2. **`delay` guards with `wait >= d.ceiling-wait`, not `wait >= d.ceiling/2`.** Integer division lets an odd ceiling snap to the cap one nanosecond early; the subtraction is exact and still cannot overflow.
+3. **Task 5 Step 7's mixed case became `TestEmailDispatcherRecordsItsOwnReason`**, one case per terminal path, including the filter, lookup, read, identifier and in-doubt paths the mixed case could not reach. The harness gained `deletingStore.unreadable` and `mintFails`. A cleanup, which skips narrowed runs, fails if any `EmailReason`/`EmailSkip` constant is never recorded.
+4. **The owner case also asserts that the error names 255**, as the spec scenario requires.
+5. **The shared suite's decorator keeps only records the store accepted**, and gained a case recording a multi-byte detail at `MaxEmailReasonBytes` on every store.
+6. **Two commits, not seven.** Tasks 1–6's hunks interleave in the same files; they landed as one commit, and the suite as a second.

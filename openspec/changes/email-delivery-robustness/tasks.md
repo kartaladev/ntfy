@@ -38,7 +38,7 @@
 
 ## 7. Verify the whole change
 
-- [ ] 7.1 Run `make all` and verify lint, split-check and tests pass on every module.
+- [x] 7.1 Run `make all` and verify lint, split-check and tests pass on every module.
 - [x] 7.2 Run `make store-matrix` and verify the email conformance suites pass on every driver and dialect, including MySQL for the owner bound.
-- [ ] 7.3 Re-run each red test from group 1 against its temporarily reverted fix and verify each fails again, confirming none passes vacuously.
+- [x] 7.3 Re-run each red test from group 1 against its temporarily reverted fix and verify each fails again, confirming none passes vacuously.
 - [x] 7.4 Run `openspec validate "email-delivery-robustness" --strict` and verify every spec scenario has a corresponding test.
