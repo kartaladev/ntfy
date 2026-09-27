@@ -349,6 +349,13 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, actor string) {
 		return nil
 	}
 
+	// Written at open, not at close: the value has to survive a stalled client, a
+	// dropped connection or a dead process, and a client applies the last one it
+	// received.
+	if write("retry: "+strconv.FormatInt(h.hub.ReconnectDelay().Milliseconds(), 10)+"\n\n") != nil {
+		return
+	}
+
 	if write(": connected\n\n") != nil {
 		return
 	}

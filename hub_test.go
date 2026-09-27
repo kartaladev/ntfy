@@ -778,3 +778,78 @@ func TestHubRun(t *testing.T) {
 		})
 	}
 }
+
+func TestHubReconnectDelay(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		opts   []ntfy.HubOption
+		assert func(t *testing.T, hub *ntfy.Hub, err error)
+	}
+
+	cases := []testCase{
+		{
+			name: "the default delay is one second, jittered below two",
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, time.Second, ntfy.DefaultReconnectDelay)
+
+				for range 100 {
+					delay := hub.ReconnectDelay()
+					assert.GreaterOrEqual(t, delay, time.Second)
+					assert.Less(t, delay, 2*time.Second)
+				}
+			},
+		},
+		{
+			name: "a hundred streams are not all told the same delay",
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+
+				first := hub.ReconnectDelay()
+				spread := false
+
+				for range 100 {
+					if hub.ReconnectDelay() != first {
+						spread = true
+
+						break
+					}
+				}
+
+				assert.True(t, spread, "every stream was told the same delay")
+			},
+		},
+		{
+			name: "an option replaces the base",
+			opts: []ntfy.HubOption{ntfy.WithReconnectDelay(4 * time.Second)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+
+				for range 100 {
+					delay := hub.ReconnectDelay()
+					assert.GreaterOrEqual(t, delay, 4*time.Second)
+					assert.Less(t, delay, 8*time.Second)
+				}
+			},
+		},
+		{
+			name: "a non-positive delay is a configuration error",
+			opts: []ntfy.HubOption{ntfy.WithReconnectDelay(0)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
+				assert.Nil(t, hub)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), tc.opts...)
+			tc.assert(t, hub, err)
+		})
+	}
+}

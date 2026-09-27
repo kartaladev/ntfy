@@ -3,6 +3,7 @@ package ntfy
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,9 @@ const (
 	// DefaultMaxStreamsPerRecipient is how many streams one recipient may hold
 	// open on one instance, across every transport.
 	DefaultMaxStreamsPerRecipient = 8
+	// DefaultReconnectDelay is the base a stream tells its client to wait before
+	// reconnecting. The value a stream carries is drawn between it and twice it.
+	DefaultReconnectDelay = time.Second
 )
 
 // Hub routes signals from a [Broadcaster] to the subscriptions of the recipient
@@ -31,6 +35,7 @@ type Hub struct {
 	broadcaster  Broadcaster
 	heartbeat    time.Duration
 	writeTimeout time.Duration
+	reconnect    time.Duration
 	maxStreams   int
 
 	// running is true only while a run's broadcaster has confirmed its
@@ -59,6 +64,7 @@ type HubOption func(*hubConfig)
 type hubConfig struct {
 	heartbeat    *time.Duration
 	writeTimeout *time.Duration
+	reconnect    *time.Duration
 	maxStreams   *int
 }
 
@@ -76,6 +82,15 @@ func WithWriteTimeout(timeout time.Duration) HubOption {
 // at least one.
 func WithMaxStreamsPerRecipient(n int) HubOption {
 	return func(c *hubConfig) { c.maxStreams = &n }
+}
+
+// WithReconnectDelay replaces [DefaultReconnectDelay], the base a stream tells
+// its client to wait before reconnecting. It must be positive.
+//
+// The jitter that spreads it is not configurable: a base with no spread returns
+// an instance's clients in one wave, which is what the delay exists to prevent.
+func WithReconnectDelay(d time.Duration) HubOption {
+	return func(c *hubConfig) { c.reconnect = &d }
 }
 
 // NewHub builds a hub over a broadcaster, normally the service's
@@ -98,6 +113,7 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		broadcaster:   broadcaster,
 		heartbeat:     DefaultHeartbeat,
 		writeTimeout:  DefaultWriteTimeout,
+		reconnect:     DefaultReconnectDelay,
 		maxStreams:    DefaultMaxStreamsPerRecipient,
 		readyCh:       make(chan struct{}),
 		subscriptions: make(map[string]map[*Subscription]struct{}),
@@ -108,6 +124,8 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		return nil, &ConfigurationError{Detail: "a hub heartbeat must be positive"}
 	case cfg.writeTimeout != nil && *cfg.writeTimeout <= 0:
 		return nil, &ConfigurationError{Detail: "a hub write timeout must be positive"}
+	case cfg.reconnect != nil && *cfg.reconnect <= 0:
+		return nil, &ConfigurationError{Detail: "a hub reconnect delay must be positive"}
 	case cfg.maxStreams != nil && *cfg.maxStreams < 1:
 		return nil, &ConfigurationError{Detail: "a hub must allow at least one stream per recipient"}
 	}
@@ -118,6 +136,10 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 
 	if cfg.writeTimeout != nil {
 		hub.writeTimeout = *cfg.writeTimeout
+	}
+
+	if cfg.reconnect != nil {
+		hub.reconnect = *cfg.reconnect
 	}
 
 	if cfg.maxStreams != nil {
@@ -255,6 +277,14 @@ func (h *Hub) Heartbeat() time.Duration { return h.heartbeat }
 
 // WriteTimeout is how long a transport waits for a client to accept a write.
 func (h *Hub) WriteTimeout() time.Duration { return h.writeTimeout }
+
+// ReconnectDelay is how long a new stream tells its client to wait before
+// reconnecting. Every call draws its own value, between the configured base —
+// [DefaultReconnectDelay] unless [WithReconnectDelay] replaces it — and twice
+// it, so that an instance's clients do not all return at the same moment.
+func (h *Hub) ReconnectDelay() time.Duration {
+	return h.reconnect + time.Duration(rand.Int64N(int64(h.reconnect)))
+}
 
 // deliver offers a signal to every subscription of its recipient. It never
 // waits on a client.
