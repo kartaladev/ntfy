@@ -129,9 +129,9 @@ type PublishResult struct {
 // subjects in the same order. When a subject fails, the subjects already
 // written stay written, are reported and signalled, and the error is returned.
 func (s *Service) Publish(ctx context.Context, drafts ...Draft) (PublishResult, error) {
-	if max := s.limits.maxDraftsPerPublish(); len(drafts) > max {
+	if limit := s.limits.maxDraftsPerPublish(); len(drafts) > limit {
 		return PublishResult{}, &ValidationError{Subject: "publish", Issues: []ValidationIssue{{
-			Pointer: "/drafts", Detail: "carries more than " + strconv.Itoa(max) + " drafts",
+			Pointer: "/drafts", Detail: "carries more than " + strconv.Itoa(limit) + " drafts",
 		}}}
 	}
 

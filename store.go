@@ -268,7 +268,7 @@ func (q ListQuery) ValidateWithin(limits Limits) error {
 		})
 	}
 
-	max := limits.maxFilterValues()
+	limit := limits.maxFilterValues()
 
 	for _, filter := range []struct {
 		pointer string
@@ -277,16 +277,16 @@ func (q ListQuery) ValidateWithin(limits Limits) error {
 		{"/kinds", len(q.Kinds)},
 		{"/states", len(q.States)},
 	} {
-		if filter.values > max {
+		if filter.values > limit {
 			issues = append(issues, ValidationIssue{
-				Pointer: filter.pointer, Detail: "carries more than " + strconv.Itoa(max) + " values",
+				Pointer: filter.pointer, Detail: "carries more than " + strconv.Itoa(limit) + " values",
 			})
 		}
 	}
 
 	// Each state is checked only within the bound, so that an oversized filter
 	// reports one issue rather than one per value.
-	if len(q.States) <= max {
+	if len(q.States) <= limit {
 		for i, state := range q.States {
 			if !state.Valid() {
 				issues = append(issues, ValidationIssue{

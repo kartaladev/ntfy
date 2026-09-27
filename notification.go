@@ -189,9 +189,9 @@ func validateContent(c content, withSubject bool, limits Limits) []ValidationIss
 		issues = append(issues, ValidationIssue{Pointer: "/subjectVersion", Detail: "must not be negative"})
 	}
 
-	if max := limits.maxTitleBytes(); len(c.title) > max {
+	if limit := limits.maxTitleBytes(); len(c.title) > limit {
 		issues = append(issues, ValidationIssue{
-			Pointer: "/title", Detail: "is longer than " + strconv.Itoa(max) + " bytes",
+			Pointer: "/title", Detail: "is longer than " + strconv.Itoa(limit) + " bytes",
 		})
 	}
 
@@ -199,10 +199,10 @@ func validateContent(c content, withSubject bool, limits Limits) []ValidationIss
 
 	// The size is checked first, so that an oversized payload is refused
 	// without scanning it for well-formed JSON.
-	switch max := limits.maxDataBytes(); {
-	case len(c.data) > max:
+	switch limit := limits.maxDataBytes(); {
+	case len(c.data) > limit:
 		issues = append(issues, ValidationIssue{
-			Pointer: "/data", Detail: "is longer than " + strconv.Itoa(max) + " bytes",
+			Pointer: "/data", Detail: "is longer than " + strconv.Itoa(limit) + " bytes",
 		})
 	case len(c.data) > 0 && !json.Valid(c.data):
 		issues = append(issues, ValidationIssue{Pointer: "/data", Detail: "is not valid JSON"})
@@ -220,24 +220,24 @@ func validateLinks(links map[string]string, limits Limits) []ValidationIssue {
 
 	var issues []ValidationIssue
 
-	if max := limits.maxLinks(); len(links) > max {
+	if limit := limits.maxLinks(); len(links) > limit {
 		issues = append(issues, ValidationIssue{
-			Pointer: "/links", Detail: "carries more than " + strconv.Itoa(max) + " links",
+			Pointer: "/links", Detail: "carries more than " + strconv.Itoa(limit) + " links",
 		})
 	}
 
 	for _, relation := range slices.Sorted(maps.Keys(links)) {
 		pointer := "/links/" + escapePointer(relation)
 
-		if max := limits.maxLinkRelationBytes(); len(relation) > max {
+		if limit := limits.maxLinkRelationBytes(); len(relation) > limit {
 			issues = append(issues, ValidationIssue{
-				Pointer: pointer, Detail: "has a relation name longer than " + strconv.Itoa(max) + " bytes",
+				Pointer: pointer, Detail: "has a relation name longer than " + strconv.Itoa(limit) + " bytes",
 			})
 		}
 
-		if max := limits.maxLinkHrefBytes(); len(links[relation]) > max {
+		if limit := limits.maxLinkHrefBytes(); len(links[relation]) > limit {
 			issues = append(issues, ValidationIssue{
-				Pointer: pointer, Detail: "has an href longer than " + strconv.Itoa(max) + " bytes",
+				Pointer: pointer, Detail: "has an href longer than " + strconv.Itoa(limit) + " bytes",
 			})
 
 			continue
