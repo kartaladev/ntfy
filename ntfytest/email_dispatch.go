@@ -182,6 +182,43 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 		assert.Len(t, d.sent(), 1, "nothing is sent a second time")
 	})
 
+	parallel(t, "an at-least-once resend that fails stays in doubt under its key", func(t *testing.T) {
+		d := newDispatchEnv(t, factory)
+		d.publish("alice")
+		d.clock.advance(10 * time.Minute)
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		d.setOnSend(func(ntfy.EmailMessage) { cancel() })
+
+		stopping := d.dispatcher("stopping", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		_, err := stopping.Dispatch(ctx)
+		require.NoError(t, err)
+
+		d.setOnSend(nil)
+		d.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+		newer := d.publish("alice")
+
+		d.setSendErr(func(ntfy.EmailMessage) error { return errors.New("connection refused") })
+
+		next := d.dispatcher("next", ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+		failed, err := next.Dispatch(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, 1, failed.Retried)
+
+		d.setSendErr(nil)
+		d.clock.advance(time.Hour)
+
+		_, err = next.Dispatch(t.Context())
+		require.NoError(t, err)
+
+		messages := d.sent()
+		require.Len(t, messages, 4, "the original, the failed resend, the resend, and the newer one alone")
+		assert.Equal(t, messages[0].IdempotencyKey, messages[2].IdempotencyKey, "the resend keeps the key")
+		assert.Equal(t, messages[0].NotificationIDs, messages[2].NotificationIDs, "and absorbs nothing")
+		assert.Equal(t, []string{newer.ID}, messages[3].NotificationIDs)
+	})
+
 	parallel(t, "a failed delivery records the library's own reason", func(t *testing.T) {
 		d := newDispatchEnv(t, factory)
 		n := d.publish("alice")
@@ -201,15 +238,17 @@ func RunEmailDispatch(t *testing.T, factory EmailFactory) {
 		assert.Contains(t, d.reported()[0].Error(), "alice@example.com", "the host still receives the whole error")
 	})
 
-	parallel(t, "a store records host detail up to the documented bound", func(t *testing.T) {
+	parallel(t, "a store accepts host detail up to the documented bound", func(t *testing.T) {
 		d := newDispatchEnv(t, factory)
 		n := d.publish("alice")
 		d.clock.advance(10 * time.Minute)
 
 		d.setSendErr(func(ntfy.EmailMessage) error { return errors.New("connection refused") })
 
-		// A multi-byte detail longer than the bound checks the store keeps a
-		// reason of MaxEmailReasonBytes bytes whatever its column counts.
+		// A multi-byte detail longer than the bound checks the store accepts a
+		// reason of MaxEmailReasonBytes bytes, whatever its column counts. The
+		// EmailStore port does not read a reason back, so this asserts what the
+		// store accepted, not what it kept.
 		detail := strings.Repeat("é", ntfy.MaxEmailReasonBytes)
 
 		result, err := d.dispatcher("detailed",

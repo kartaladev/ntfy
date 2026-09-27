@@ -1541,3 +1541,25 @@ Where the implementation departed from the steps above, and why:
 4. **The owner case also asserts that the error names 255**, as the spec scenario requires.
 5. **The shared suite's decorator keeps only records the store accepted**, and gained a case recording a multi-byte detail at `MaxEmailReasonBytes` on every store.
 6. **Two commits, not seven.** Tasks 1–6's hunks interleave in the same files; they landed as one commit, and the suite as a second.
+
+---
+
+### Task 9: Fold in review findings (tasks.md group 8)
+
+**Files:**
+- Modify: `email_dispatcher.go`: `send`, `recheck` (now returns `unread` and `errs` instead of retrying), new `hold`, `retry` (the detail rule is asked lazily, per status), `resolveDoubt` (passes `errSendStopped`), `truncateReason`, and `apply` (the ceiling check moves here from `validate`)
+- Modify: `email.go`: the `EmailFailure.Err` godoc says it is never nil
+- Test: `email_dispatch_test.go`, `email_internal_test.go` (`TestEmailConfigValidateGuardsUnsetPointers` becomes `TestEmailConfigBackoffCeiling`, which drives `apply`), `ntfytest/email_dispatch.go`
+- Modify: `docs/email.md` ("Stated limits"), and this change's `specs/`, `design.md` (D6, D7) and `tasks.md`
+
+**Interfaces:**
+- `func (p *emailPass) hold(candidates []EmailCandidate, batch, reason string, cause error, countAttempt bool)`: fails candidates at the attempt limit; otherwise records `SENDING` under `batch` (when `countAttempt`) and counts them retried.
+- `func (p *emailPass) recheck(recipient string, candidates []EmailCandidate) (live []EmailCandidate, notifications []Notification, unread []EmailCandidate, errs []error)`
+- `var errSendStopped = fmt.Errorf("the pass that sent it stopped before recording the outcome: %w", ErrMailInDoubt)`
+
+- [x] **Step 1:** Add the six red cases and run each. Expected failures: a new key and a merged set (findings 1 and 2), `[FAILED RETRY]` (3), a nil-pointer panic (4), `nil` for base 2h with no ceiling (5), and an empty reason (6).
+- [x] **Step 2:** In `send`, set `resend := batch != ""`. On a failed re-read, `hold` the whole resend with `countAttempt=true`. On an ordinary send failure, `hold(live, batch, EmailReasonSendFailed, err, false)` instead of `retry`.
+- [x] **Step 3:** Ask the detail rule lazily in `retry`, pass `errSendStopped` in `resolveDoubt`, cap `truncateReason`'s walk-back at `utf8.UTFMax`, and compare `d.ceiling < d.backoff` in `apply`.
+- [x] **Step 4:** Add "a resend that keeps failing fails at the attempt limit". Disable the limit in `hold` and watch the test fail, then restore it.
+- [x] **Step 5:** Add "an at-least-once resend that fails stays in doubt under its key" to `RunEmailDispatch`, and run the memory store, SQLite and `make store-matrix`.
+- [x] **Step 6:** Run `make all` and `openspec validate email-delivery-robustness --strict`, then commit.

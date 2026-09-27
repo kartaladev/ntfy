@@ -151,6 +151,8 @@ type dispatchHarness struct {
 	render func(batch ntfy.EmailBatch) error
 	// mintFails, once set, fails every identifier the service mints.
 	mintFails atomic.Bool
+	// statuses are the outcomes a host's failure-detail rule heard of.
+	statuses []ntfy.EmailStatus
 
 	dispatcher *ntfy.EmailDispatcher
 }
@@ -756,6 +758,213 @@ func TestEmailDispatcherDispatch(t *testing.T) {
 
 				record := h.email.lastRecordOf(t, page.Notifications[0].ID)
 				assert.Equal(t, ntfy.EmailReasonSendFailed, record.Reason)
+			},
+		},
+		{
+			name: "at least once: a resend that fails keeps its key and never absorbs a newer notification",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+				h.publish("alice", "offer")
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.email.dropped.Store(true)
+
+				_, err := h.dispatch()
+				require.NoError(t, err)
+				require.Len(t, h.sent(), 1)
+
+				h.email.dropped.Store(false)
+				h.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+				h.publish("alice", "assigned")
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				_, err = h.dispatch()
+				require.NoError(t, err)
+
+				h.send = nil
+				h.clock.advance(2 * time.Hour)
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, _ ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+
+				messages := h.sent()
+				original := messages[0]
+
+				for _, message := range messages[1:] {
+					if !slices.ContainsFunc(message.NotificationIDs, func(id string) bool {
+						return slices.Contains(original.NotificationIDs, id)
+					}) {
+						continue
+					}
+
+					assert.Equal(t, original.IdempotencyKey, message.IdempotencyKey, "a repeat keeps the key of the attempt in doubt")
+					assert.Subset(t, original.NotificationIDs, message.NotificationIDs, "and never adds a notification")
+				}
+
+				assert.Len(t, messages, 4, "the original, the failed resend, the resend, and the newer one alone")
+			},
+		},
+		{
+			name: "at least once: a resend whose read fails keeps its key and never absorbs a newer notification",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+				n := h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.email.dropped.Store(true)
+
+				_, err := h.dispatch()
+				require.NoError(t, err)
+				require.Len(t, h.sent(), 1)
+
+				h.email.dropped.Store(false)
+				h.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+				h.publish("alice", "assigned")
+
+				h.store.unreadable.Store(n.ID, true)
+
+				_, err = h.dispatch()
+				require.NoError(t, err)
+
+				h.store.unreadable.Delete(n.ID)
+				h.clock.advance(2 * time.Hour)
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, _ ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+
+				messages := h.sent()
+				original := messages[0]
+
+				for _, message := range messages[1:] {
+					if !slices.Contains(message.NotificationIDs, original.NotificationIDs[0]) {
+						continue
+					}
+
+					assert.Equal(t, original.IdempotencyKey, message.IdempotencyKey, "a repeat keeps the key of the attempt in doubt")
+					assert.Equal(t, original.NotificationIDs, message.NotificationIDs, "and never adds a notification")
+				}
+
+				assert.Len(t, messages, 3, "the original, the resend, and the newer one alone")
+			},
+		},
+		{
+			name: "at least once: a resend that keeps failing fails at the attempt limit",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce), ntfy.WithEmailMaxAttempts(2))
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.email.dropped.Store(true)
+
+				_, err := h.dispatch()
+				require.NoError(t, err)
+
+				h.email.dropped.Store(false)
+				h.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 1, Failed: 1}, result, "the second attempt is the last")
+
+				record := h.email.lastRecordOf(t, h.sent()[0].NotificationIDs[0])
+				assert.Equal(t, ntfy.EmailStatusFailed, record.Status)
+				assert.Equal(t, ntfy.EmailReasonSendFailed, record.Reason)
+
+				h.clock.advance(2 * time.Hour)
+
+				again, err := h.dispatch()
+				require.NoError(t, err)
+				assert.Zero(t, again.Claimed, "a failed delivery is never claimed again")
+			},
+		},
+		{
+			name: "a retried failure asks the host's rule about the retry only",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithEmailFailureDetail(func(_ context.Context, failure ntfy.EmailFailure) string {
+					h.mu.Lock()
+					defer h.mu.Unlock()
+
+					h.statuses = append(h.statuses, failure.Status)
+
+					return failure.Reason
+				}))
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 1, Retried: 1}, result)
+
+				h.mu.Lock()
+				defer h.mu.Unlock()
+
+				assert.Equal(t, []ntfy.EmailStatus{ntfy.EmailStatusRetry}, h.statuses,
+					"the rule hears only of the outcome that is recorded")
+			},
+		},
+		{
+			name: "at most once: a send a stopped pass left in doubt gives the host's rule an error",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithEmailFailureDetail(func(_ context.Context, failure ntfy.EmailFailure) string {
+					return failure.Reason + ": " + failure.Err.Error()
+				}))
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.email.dropped.Store(true)
+
+				_, err := h.dispatch()
+				require.NoError(t, err)
+
+				h.email.dropped.Store(false)
+				h.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 1, Abandoned: 1}, result)
+
+				record := h.email.lastRecordOf(t, h.sent()[0].NotificationIDs[0])
+				assert.True(t, strings.HasPrefix(record.Reason, ntfy.EmailReasonSendInDoubt+": "), record.Reason)
+			},
+		},
+		{
+			name: "recorded detail that is not UTF-8 is still bounded and never empty",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(
+					ntfy.WithEmailMaxAttempts(1),
+					ntfy.WithEmailFailureDetail(func(context.Context, ntfy.EmailFailure) string {
+						return strings.Repeat("\x80", 2*ntfy.MaxEmailReasonBytes)
+					}),
+				)
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, _ ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+
+				record := h.email.lastRecordOf(t, h.sent()[0].NotificationIDs[0])
+				assert.NotEmpty(t, record.Reason, "an empty reason would leave the previous one in place")
+				assert.LessOrEqual(t, len(record.Reason), ntfy.MaxEmailReasonBytes)
 			},
 		},
 		{

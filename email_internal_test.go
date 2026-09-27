@@ -74,10 +74,10 @@ func TestEmailDispatcherDelay(t *testing.T) {
 	}
 }
 
-func TestEmailConfigValidateGuardsUnsetPointers(t *testing.T) {
+func TestEmailConfigBackoffCeiling(t *testing.T) {
 	t.Parallel()
 
-	base, below := time.Hour, time.Minute
+	hour, twoHours, minute := time.Hour, 2*time.Hour, time.Minute
 
 	type testCase struct {
 		name   string
@@ -85,21 +85,34 @@ func TestEmailConfigValidateGuardsUnsetPointers(t *testing.T) {
 		assert func(t *testing.T, err error)
 	}
 
+	refused := func(t *testing.T, err error) {
+		require.ErrorIs(t, err, ErrConfiguration)
+		assert.Contains(t, err.Error(), "backoff ceiling")
+	}
+
+	// No option sets a base without a ceiling today: WithEmailBackoff sets both.
+	// The check compares the values in effect, so adding one cannot panic, nor
+	// slip a base past the default ceiling.
 	cases := []testCase{
 		{
-			// No option sets a base without a ceiling today: WithEmailBackoff sets
-			// both. The guard exists so that adding one cannot panic.
-			name:   "a base with no ceiling is not a contradiction",
-			config: emailConfig{backoff: &base},
+			name:   "a base with no ceiling, within the default ceiling",
+			config: emailConfig{backoff: &hour},
 			assert: func(t *testing.T, err error) { assert.NoError(t, err) },
 		},
 		{
-			name:   "a ceiling below its base is refused",
-			config: emailConfig{backoff: &base, ceiling: &below},
-			assert: func(t *testing.T, err error) {
-				require.ErrorIs(t, err, ErrConfiguration)
-				assert.Contains(t, err.Error(), "backoff ceiling")
-			},
+			name:   "a base with no ceiling, above the default ceiling",
+			config: emailConfig{backoff: &twoHours},
+			assert: refused,
+		},
+		{
+			name:   "a ceiling below its base",
+			config: emailConfig{backoff: &hour, ceiling: &minute},
+			assert: refused,
+		},
+		{
+			name:   "a ceiling with no base, below the default base",
+			config: emailConfig{ceiling: &[]time.Duration{time.Second}[0]},
+			assert: refused,
 		},
 	}
 
@@ -107,7 +120,11 @@ func TestEmailConfigValidateGuardsUnsetPointers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			tc.assert(t, tc.config.validate())
+			d := &EmailDispatcher{
+				grace: DefaultEmailGraceDelay, maxLag: DefaultEmailMaxLag,
+				backoff: DefaultEmailBackoff, ceiling: DefaultEmailBackoffCeiling,
+			}
+			tc.assert(t, tc.config.apply(d))
 		})
 	}
 }

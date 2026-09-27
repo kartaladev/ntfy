@@ -138,6 +138,9 @@ dispatcher, err := ntfy.NewEmailDispatcher(svc, mailer, addressBook, template, n
 - **Under `AtLeastOnce`, a repeat is rendered again, not replayed.** A template
   changed between two attempts sends different content under one idempotency
   key. The protection is a sender that honours the key.
+- **Under `AtLeastOnce`, a repeat that fails is tried again after the lease, not
+  the backoff.** It stays in doubt under its key, so it is never sent as a new
+  message merged with newer notifications; the attempt limit still ends it.
 - **Under `AtLeastOnce`, a sender that ignores the idempotency key can deliver a
   message twice**, and a repeat covers only what is still `ACTIVE`, so the two
   deliveries can differ in what they cover.

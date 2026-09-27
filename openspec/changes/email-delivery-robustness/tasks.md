@@ -42,3 +42,10 @@
 - [x] 7.2 Run `make store-matrix` and verify the email conformance suites pass on every driver and dialect, including MySQL for the owner bound.
 - [x] 7.3 Re-run each red test from group 1 against its temporarily reverted fix and verify each fails again, confirming none passes vacuously.
 - [x] 7.4 Run `openspec validate "email-delivery-robustness" --strict` and verify every spec scenario has a corresponding test.
+
+## 8. Fold in review findings
+
+- [x] 8.1 Add failing tests showing that an at-least-once resend which fails transiently, or whose re-read fails, goes out later under a new key merged with a newer notification; keep such a resend `SENDING` under its key (design D6); test that the attempt limit still ends it `FAILED`; pin the transient case in `ntfytest.RunEmailDispatch`.
+- [x] 8.2 Add failing tests showing that the failure-detail rule hears of a `FAILED` outcome that is never recorded, and receives a nil `Err` for a send a stopped pass left in doubt; ask it only about the recorded status, and pass an error wrapping `ErrMailInDoubt` (design D7).
+- [x] 8.3 Add failing tests showing that truncating non-UTF-8 detail can empty the reason, and that a base set alone can pass the default ceiling; bound the truncation walk-back, and compare ceiling and base after defaults apply (design D7).
+- [x] 8.4 Reword the shared-suite detail case to claim what the port can show: that the store accepted the write, not what it kept.

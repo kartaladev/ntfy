@@ -121,7 +121,8 @@ type EmailFailure struct {
 	// host records no detail of its own.
 	Reason string
 	// Err is the error behind the failure, exactly as the host's port returned
-	// it, or nil for a send left in doubt by a pass that stopped.
+	// it. It is never nil: for a send an earlier pass left in doubt by stopping,
+	// it wraps [ErrMailInDoubt].
 	Err error
 }
 

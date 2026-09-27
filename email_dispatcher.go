@@ -37,6 +37,10 @@ const (
 	DefaultEmailBackoffCeiling = time.Hour
 )
 
+// errSendStopped is the error behind a send an earlier pass left in doubt by
+// stopping between the send and recording its outcome.
+var errSendStopped = fmt.Errorf("the pass that sent it stopped before recording the outcome: %w", ErrMailInDoubt)
+
 // emailJitter is the share of a retry delay that is randomised, so that
 // deliveries failing together do not retry in lockstep.
 const emailJitter = 0.2
@@ -303,6 +307,13 @@ func (c emailConfig) apply(d *EmailDispatcher) error {
 		return &ConfigurationError{Detail: "the email max lag must be longer than the grace delay"}
 	}
 
+	// Compared in effect rather than as set, so that a base set alone cannot
+	// pass the default ceiling, nor a ceiling set alone fall below the default
+	// base.
+	if d.ceiling < d.backoff {
+		return &ConfigurationError{Detail: "the email backoff ceiling must be no shorter than its base"}
+	}
+
 	return nil
 }
 
@@ -327,8 +338,6 @@ func (c emailConfig) validate() error {
 		return refuse("the email attempt limit must be positive")
 	case nonPositive(c.backoff):
 		return refuse("the email backoff must be positive")
-	case c.backoff != nil && c.ceiling != nil && *c.ceiling < *c.backoff:
-		return refuse("the email backoff ceiling must be no shorter than its base")
 	case c.filter != nil && c.kinds != nil:
 		return refuse("an email filter and email kinds are both set; choose WithEmailFilter or WithEmailKinds")
 	case c.filter != nil && *c.filter == nil:
@@ -530,18 +539,21 @@ func (p *emailPass) detail(recipient, batch, reason string, status EmailStatus, 
 }
 
 // truncateReason bounds a reason at [MaxEmailReasonBytes] without splitting a
-// rune, so a truncated reason is still valid UTF-8.
+// rune, so that valid UTF-8 stays valid. A reason that is not UTF-8 is cut at
+// the bound itself, so a truncated reason is never empty: stores keep the
+// previous reason when given an empty one.
 func truncateReason(reason string) string {
 	if len(reason) <= MaxEmailReasonBytes {
 		return reason
 	}
 
-	cut := MaxEmailReasonBytes
-	for cut > 0 && !utf8.RuneStart(reason[cut]) {
-		cut--
+	for cut := MaxEmailReasonBytes; cut > MaxEmailReasonBytes-utf8.UTFMax; cut-- {
+		if utf8.RuneStart(reason[cut]) {
+			return reason[:cut]
+		}
 	}
 
-	return reason[:cut]
+	return reason[:MaxEmailReasonBytes]
 }
 
 // candidateIDs lists candidates' notification identifiers.
@@ -608,22 +620,31 @@ func (p *emailPass) retry(candidates []EmailCandidate, batch, reason string, cau
 		byAttempts[made] = append(byAttempts[made], c)
 	}
 
+	// The host's rule hears only of an outcome that is recorded, once each.
 	recipient := candidates[0].Notification.Recipient
-	failed := p.detail(recipient, batch, reason, EmailStatusFailed, cause)
-	retried := p.detail(recipient, batch, reason, EmailStatusRetry, cause)
+	texts := map[EmailStatus]string{}
+	text := func(status EmailStatus) string {
+		if _, ok := texts[status]; !ok {
+			texts[status] = p.detail(recipient, batch, reason, status, cause)
+		}
+
+		return texts[status]
+	}
 
 	for _, made := range counts {
 		group := byAttempts[made]
 
 		if made >= p.d.attempts {
-			p.record(group, EmailRecord{Status: EmailStatusFailed, Reason: failed, Attempt: countAttempt})
+			p.record(group, EmailRecord{Status: EmailStatusFailed, Reason: text(EmailStatusFailed), Attempt: countAttempt})
 			p.result.Failed += len(group)
 
 			continue
 		}
 
 		next := p.now.Add(p.d.delay(made))
-		p.record(group, EmailRecord{Status: EmailStatusRetry, Reason: retried, NextAttemptAt: &next, Attempt: countAttempt})
+		p.record(group, EmailRecord{
+			Status: EmailStatusRetry, Reason: text(EmailStatusRetry), NextAttemptAt: &next, Attempt: countAttempt,
+		})
 		p.result.Retried += len(group)
 	}
 
@@ -671,7 +692,7 @@ func (p *emailPass) resolveDoubt(candidates []EmailCandidate) {
 	if p.d.guarantee == AtMostOnce {
 		p.record(candidates, EmailRecord{
 			Status: EmailStatusAbandoned,
-			Reason: p.detail(recipient, batch, EmailReasonSendInDoubt, EmailStatusAbandoned, nil),
+			Reason: p.detail(recipient, batch, EmailReasonSendInDoubt, EmailStatusAbandoned, errSendStopped),
 		})
 		p.result.Abandoned += len(candidates)
 
@@ -746,7 +767,26 @@ func (p *emailPass) deliver(recipient string, candidates []EmailCandidate) {
 // outcome. batch is the message's key for a resend, and empty for a new
 // message, which gets a fresh one.
 func (p *emailPass) send(recipient, address string, candidates []EmailCandidate, batch string) {
-	live, notifications := p.recheck(recipient, candidates)
+	// Only a send an earlier pass left in doubt arrives with its key, and only
+	// under AtLeastOnce.
+	resend := batch != ""
+
+	live, notifications, unread, errs := p.recheck(recipient, candidates)
+
+	if len(unread) > 0 {
+		if resend {
+			// A message under this key must not go out without a notification it
+			// covered, so the whole resend waits for the next pass.
+			p.hold(append(live, unread...), batch, EmailReasonReadFailed, errors.Join(errs...), true)
+
+			return
+		}
+
+		for i, c := range unread {
+			p.retry([]EmailCandidate{c}, c.BatchID, EmailReasonReadFailed, errs[i], true)
+		}
+	}
+
 	if len(live) == 0 {
 		return
 	}
@@ -803,19 +843,65 @@ func (p *emailPass) send(recipient, address string, candidates []EmailCandidate,
 			live[i].Attempts++
 		}
 
+		if resend {
+			p.hold(live, batch, EmailReasonSendFailed, err, false)
+
+			return
+		}
+
 		p.retry(live, batch, EmailReasonSendFailed, err, false)
 	}
 }
 
+// hold keeps a resend in doubt after a failure, recorded SENDING under its key
+// so that a later pass resends it once the lease lapses: a RETRY would be sent
+// as a new message, under a new key and merged with newer notifications, which
+// a sender honouring the key could not recognise as a repeat. Candidates that
+// used up their attempts fail instead. countAttempt counts this attempt, for a
+// failure that happened before anything was recorded as SENDING.
+func (p *emailPass) hold(candidates []EmailCandidate, batch, reason string, cause error, countAttempt bool) {
+	recipient := candidates[0].Notification.Recipient
+
+	var spent, kept []EmailCandidate
+
+	for _, c := range candidates {
+		made := c.Attempts
+		if countAttempt {
+			made++
+		}
+
+		if made >= p.d.attempts {
+			spent = append(spent, c)
+		} else {
+			kept = append(kept, c)
+		}
+	}
+
+	if len(spent) > 0 {
+		p.record(spent, EmailRecord{
+			Status: EmailStatusFailed, Reason: p.detail(recipient, batch, reason, EmailStatusFailed, cause), Attempt: countAttempt,
+		})
+		p.result.Failed += len(spent)
+	}
+
+	if len(kept) > 0 {
+		if countAttempt {
+			p.record(kept, EmailRecord{Status: EmailStatusSending, BatchID: batch, Attempt: true})
+		}
+
+		p.result.Retried += len(kept)
+	}
+
+	p.report(recipient, batch, cause)
+}
+
 // recheck reads each candidate again, skipping the ones read, closed or deleted
-// since they were claimed, and returns the ones still ACTIVE.
-func (p *emailPass) recheck(recipient string, candidates []EmailCandidate) ([]EmailCandidate, []Notification) {
-	var (
-		live          []EmailCandidate
-		notifications []Notification
-		inactive      []EmailCandidate
-		deleted       []EmailCandidate
-	)
+// since they were claimed. It returns the ones still ACTIVE, and the ones it
+// could not read with why, for the caller to retry or hold.
+func (p *emailPass) recheck(
+	recipient string, candidates []EmailCandidate,
+) (live []EmailCandidate, notifications []Notification, unread []EmailCandidate, errs []error) {
+	var inactive, deleted []EmailCandidate
 
 	for _, c := range candidates {
 		n, err := p.d.service.store.Get(p.ctx, recipient, c.Notification.ID)
@@ -824,7 +910,8 @@ func (p *emailPass) recheck(recipient string, candidates []EmailCandidate) ([]Em
 		case errors.Is(err, ErrNotFound):
 			deleted = append(deleted, c)
 		case err != nil:
-			p.retry([]EmailCandidate{c}, c.BatchID, EmailReasonReadFailed, err, true)
+			unread = append(unread, c)
+			errs = append(errs, err)
 		case n.State != StateActive:
 			inactive = append(inactive, c)
 		default:
@@ -836,5 +923,5 @@ func (p *emailPass) recheck(recipient string, candidates []EmailCandidate) ([]Em
 	p.skip(inactive, EmailSkipInactive)
 	p.skip(deleted, EmailSkipDeleted)
 
-	return live, notifications
+	return live, notifications, unread, errs
 }
