@@ -3,6 +3,7 @@ package ntfy
 import (
 	"encoding/json"
 	"maps"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -238,10 +239,41 @@ func validateLinks(links map[string]string, limits Limits) []ValidationIssue {
 			issues = append(issues, ValidationIssue{
 				Pointer: pointer, Detail: "has an href longer than " + strconv.Itoa(max) + " bytes",
 			})
+
+			continue
+		}
+
+		if detail := checkScheme(links[relation], limits); detail != "" {
+			issues = append(issues, ValidationIssue{Pointer: pointer, Detail: detail})
 		}
 	}
 
 	return issues
+}
+
+// checkScheme reports why an href is refused, or an empty string when it is
+// permitted. It checks form only: it never resolves an href, never asks where
+// it points, and never rewrites one it accepts.
+func checkScheme(href string, limits Limits) string {
+	if limits.AnyLinkScheme {
+		return ""
+	}
+
+	parsed, err := url.Parse(href)
+	if err != nil {
+		return "has an href that is not a URL reference"
+	}
+
+	// A relative reference carries no scheme and is always permitted.
+	if parsed.Scheme == "" {
+		return ""
+	}
+
+	if slices.Contains(limits.linkSchemes(), strings.ToLower(parsed.Scheme)) {
+		return ""
+	}
+
+	return "has an href using the " + strings.ToLower(parsed.Scheme) + " scheme, which is not permitted"
 }
 
 // escapePointer escapes a relation name for an RFC 6901 JSON Pointer.

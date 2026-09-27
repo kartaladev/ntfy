@@ -236,6 +236,91 @@ func TestDraftValidateWithinRaisedLimits(t *testing.T) {
 	assert.NoError(t, draft.ValidateWithin(limits), "a host that raises the limit accepts it")
 }
 
+func TestDraftValidateLinkSchemes(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		links  map[string]string
+		limits ntfy.Limits
+		assert func(t *testing.T, err error)
+	}
+
+	cases := []testCase{
+		{
+			name:   "a javascript href is refused by default",
+			links:  map[string]string{"task": "javascript:alert(1)"},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/task") },
+		},
+		{
+			name:   "the scheme is matched however it is cased",
+			links:  map[string]string{"task": "JavaScript:alert(1)"},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/task") },
+		},
+		{
+			name:   "a data href is refused by default",
+			links:  map[string]string{"task": "data:text/html,<script>alert(1)</script>"},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/task") },
+		},
+		{
+			name:   "a mailto href is refused by default",
+			links:  map[string]string{"task": "mailto:alice@example.test"},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/task") },
+		},
+		{
+			name:  "http, https and relative hrefs are accepted by default",
+			links: map[string]string{"a": "http://x.test/a", "b": "https://x.test/b", "c": "/v1/tasks/task-1"},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name:   "an href that is not a URL reference is refused",
+			links:  map[string]string{"task": "/v1/tasks/%zz"},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/task") },
+		},
+		{
+			name:   "a host permits another scheme",
+			links:  map[string]string{"task": "mailto:alice@example.test"},
+			limits: ntfy.Limits{LinkSchemes: []string{"http", "https", "mailto"}},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name:   "a host opts out of the check",
+			links:  map[string]string{"task": "javascript:alert(1)"},
+			limits: ntfy.Limits{AnyLinkScheme: true},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			draft := validDraft()
+			draft.Links = tc.links
+
+			tc.assert(t, draft.ValidateWithin(tc.limits))
+		})
+	}
+}
+
+func TestDraftValidateDoesNotRewriteAnAcceptedHref(t *testing.T) {
+	t.Parallel()
+
+	href := "https://x.test/a%2Fb?q=1&q=2#frag"
+
+	draft := validDraft()
+	draft.Links = map[string]string{"task": href}
+
+	require.NoError(t, draft.Validate())
+	assert.Equal(t, href, draft.Links["task"], "validation never normalises an href it accepts")
+}
+
 func TestNotificationJSONKeepsOpaqueContentExact(t *testing.T) {
 	t.Parallel()
 
