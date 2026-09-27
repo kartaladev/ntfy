@@ -105,6 +105,11 @@ type dialRequest struct {
 	actor     string
 	recipient string
 	origin    string
+	// rawQuery, when set, replaces the query string built from recipient, sent
+	// exactly as written — unlike recipient, which is escaped. It is how a test
+	// sends a query net/url can only partially parse, such as one carrying a
+	// bad escape or a semicolon separator.
+	rawQuery string
 	// onPing, when set, sees every ping the client receives. Returning false
 	// withholds the pong, as a stalled client would.
 	onPing func() bool
@@ -124,7 +129,11 @@ func (s *server) dial(t *testing.T, req dialRequest) (dialed, error) {
 	t.Helper()
 
 	target := "ws" + strings.TrimPrefix(s.url, "http") + "/v1/notifications/socket"
-	if req.recipient != "" {
+
+	switch {
+	case req.rawQuery != "":
+		target += "?" + req.rawQuery
+	case req.recipient != "":
 		target += "?recipient=" + url.QueryEscape(req.recipient)
 	}
 

@@ -293,4 +293,5 @@ stream is open. A different Fiber major version should be checked again.
 - **A limit bounds what is published from here on.** Rows stored before a limit
   was lowered are untouched and are still returned in full.
 - **A link's href is checked for form only.** Nothing resolves it, follows it,
-  or asks where it points.
+  or asks where it points. It must parse as a URL reference: a raw `%` that is
+  not an escape is refused.

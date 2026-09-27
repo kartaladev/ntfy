@@ -201,7 +201,10 @@ func (h *Handler) Pattern() string { return h.pattern }
 //
 // Every refusal is answered through [ntfy.WriteError] before the connection
 // is upgraded, in this order: no acting user or a foreign browser origin is
-// forbidden, a refused subscription is forbidden, a hub that is not receiving
+// forbidden, a query the server cannot parse is a bad request — read with
+// [ntfy.ParseQuery], never [http.Request.URL.Query], so that a connection is
+// never opened by following the part of an unparseable query that happened to
+// parse — a refused subscription is forbidden, a hub that is not receiving
 // signals is unavailable, and a recipient over the hub's cap is too many
 // requests. The subscription is released on every exit.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -224,7 +227,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recipient := r.URL.Query().Get("recipient")
+	values, err := ntfy.ParseQuery(r)
+	if err != nil {
+		ntfy.WriteError(w, err)
+
+		return
+	}
+
+	recipient := values.Get("recipient")
 	if recipient == "" {
 		recipient = actor
 	}

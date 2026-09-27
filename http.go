@@ -169,6 +169,27 @@ func (h *Handler) acting(serve func(w http.ResponseWriter, r *http.Request, acto
 	})
 }
 
+// ParseQuery parses r's raw query string, refusing the request when
+// [url.ParseQuery] cannot parse all of it — a `;` separator, a bad escape such
+// as `%zz`, or more parameters than it will parse — rather than returning
+// whatever pairs happened to parse and discarding the rest along with the
+// error.
+//
+// A transport calls it in place of [http.Request.URL.Query], which is exactly
+// that discarding behaviour, so that no request is ever served, or acted on,
+// from a partially parsed query. The error is a [ValidationError] ready to
+// pass to [WriteError].
+func ParseQuery(r *http.Request) (url.Values, error) {
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return nil, &ValidationError{Subject: "request", Issues: []ValidationIssue{
+			{Pointer: "/query", Detail: "could not be parsed"},
+		}}
+	}
+
+	return values, nil
+}
+
 // listResponse is the listing's body.
 type listResponse struct {
 	Notifications []Notification `json:"notifications"`
@@ -178,14 +199,9 @@ type listResponse struct {
 // list answers GET /notifications. It lists the acting user's notifications;
 // no parameter names another recipient.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request, actor string) {
-	// Parsed here rather than through r.URL.Query(), which discards every value
-	// and the error when the query cannot be parsed, leaving the listing to be
-	// served with its filters silently dropped.
-	values, err := url.ParseQuery(r.URL.RawQuery)
+	values, err := ParseQuery(r)
 	if err != nil {
-		WriteError(w, &ValidationError{Subject: "request", Issues: []ValidationIssue{
-			{Pointer: "/query", Detail: "could not be parsed"},
-		}})
+		WriteError(w, err)
 
 		return
 	}
@@ -315,7 +331,14 @@ func (e *subscriptionRefusedError) Unwrap() error { return ErrUnauthorized }
 // recipient's change signals: the acting user's own by default, or the one the
 // recipient parameter names, if the subscription policy permits it.
 func (h *Handler) stream(w http.ResponseWriter, r *http.Request, actor string) {
-	recipient := r.URL.Query().Get("recipient")
+	values, err := ParseQuery(r)
+	if err != nil {
+		WriteError(w, err)
+
+		return
+	}
+
+	recipient := values.Get("recipient")
 	if recipient == "" {
 		recipient = actor
 	}

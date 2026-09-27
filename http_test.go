@@ -358,6 +358,26 @@ func TestHandlerListAndCount(t *testing.T) {
 			},
 		},
 		{
+			name: "a query with an escape net/url cannot decode is refused, not served on the part that parsed",
+			assert: func(t *testing.T, env *httpEnv) {
+				env.publish(t, offer("alice", "a1"))
+
+				rec := env.do(t, http.MethodGet, "/v1/notifications?kind=a&x=%zz", "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				assert.Equal(t, "validation_failed", decodeError(t, rec).Error.Code)
+			},
+		},
+		{
+			name: "a query using the semicolon separator is refused, not served on the part that parsed",
+			assert: func(t *testing.T, env *httpEnv) {
+				env.publish(t, offer("alice", "a1"))
+
+				rec := env.do(t, http.MethodGet, "/v1/notifications?x=1;y=2&kind=a", "alice", nil)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				assert.Equal(t, "validation_failed", decodeError(t, rec).Error.Code)
+			},
+		},
+		{
 			name: "a filter carrying more values than the bound is a bad request",
 			assert: func(t *testing.T, env *httpEnv) {
 				target := "/v1/notifications?" + strings.Repeat("kind=x&", ntfy.DefaultMaxFilterValues+1)
@@ -696,20 +716,36 @@ func TestHandlerStream(t *testing.T) {
 			},
 		},
 		{
-			name: "a stream whose query cannot be parsed follows the acting user, never someone else",
+			name: "a stream whose query overflows net/url's parameter cap is refused, not served for the acting user",
 			run:  true,
-			assert: func(t *testing.T, env *httpEnv, server *httptest.Server) {
-				// The recipient parameter is unreachable in a query the server
-				// cannot parse, so the stream falls back to the acting user.
+			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
+				// Over net/url's parameter cap, ParseQuery refuses the whole
+				// request rather than falling back to the acting user, which
+				// would silently serve a request the server could not parse.
 				query := "?recipient=bob&" + strings.Repeat("x=1&", 10001)
 
 				s := openStream(t, server, "alice", query)
-				require.Equal(t, http.StatusOK, s.resp.StatusCode)
-
-				s.expect(t, "the connected comment", equals(": connected"))
-
-				env.publish(t, offer("alice", "a1"))
-				s.expect(t, "an unread-changed event", equals("event: unread-changed"))
+				require.Equal(t, http.StatusBadRequest, s.resp.StatusCode)
+			},
+		},
+		{
+			name: "a stream whose query carries an escape net/url cannot decode is refused, not served on the part that parsed",
+			run:  true,
+			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
+				// net/url.ParseQuery keeps "recipient=bob" and only skips the
+				// "x=%zz" pair, returning an error. Acting on the part that
+				// parsed would mean following bob without ever having parsed a
+				// request that named him.
+				s := openStream(t, server, "alice", "?recipient=bob&x=%zz")
+				require.Equal(t, http.StatusBadRequest, s.resp.StatusCode)
+			},
+		},
+		{
+			name: "a stream whose query uses the semicolon separator is refused, not served on the part that parsed",
+			run:  true,
+			assert: func(t *testing.T, _ *httpEnv, server *httptest.Server) {
+				s := openStream(t, server, "alice", "?x=1;y=2&recipient=bob")
+				require.Equal(t, http.StatusBadRequest, s.resp.StatusCode)
 			},
 		},
 		{
