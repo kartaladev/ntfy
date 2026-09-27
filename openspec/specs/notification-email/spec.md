@@ -80,6 +80,12 @@ The system SHALL combine a recipient's qualifying notifications from one pass in
 
 By default the system SHALL email each notification at most once. A send that may have happened, because the process stopped or the sender could not tell, SHALL NOT be repeated and SHALL be recorded as abandoned. The host SHALL be able to choose at-least-once delivery instead, under which an in-doubt send is repeated with the same idempotency key as the original attempt, so a sender that honours the key delivers it once. Every message SHALL carry an idempotency key that stays the same for every attempt of the same message.
 
+Under at-least-once delivery, a repeated send SHALL cover a subset of the notifications the original attempt covered: the system SHALL NOT add a notification to a message it has already attempted, and SHALL drop any notification that stopped being ACTIVE since, as it does before a first attempt. Where every notification of an in-doubt message has stopped being ACTIVE, the system SHALL send nothing further for it.
+
+A repeated send that fails without being rejected, or whose notifications cannot all be read again before it, SHALL stay in doubt under the same idempotency key and be repeated once its lease lapses, rather than be retried as a new message; it SHALL NOT be sent without a notification it covered that could not be read. The attempt limit SHALL still apply, after which the notifications are recorded as failed.
+
+The system SHALL state as limits that a repeated send is rendered again at each attempt rather than replayed from a stored copy, and therefore that a message template changed between two attempts produces different content under one idempotency key; that a sender which ignores the idempotency key may deliver both; and that a repeated send which fails is attempted again after the lease rather than after the growing retry delay.
+
 #### Scenario: A crash after sending does not resend by default
 
 - **WHEN** a dispatcher sends alice's message and stops before recording it, and a later pass runs after its lease expired
@@ -88,12 +94,37 @@ By default the system SHALL email each notification at most once. A send that ma
 #### Scenario: A host chooses at-least-once delivery
 
 - **WHEN** a dispatcher configured for at-least-once delivery sends alice's message and stops before recording it, and a later pass runs after its lease expired
-- **THEN** the message is sent again for the same notifications with the same idempotency key
+- **THEN** the message is sent again for those of the original notifications that are still ACTIVE, with the same idempotency key
 
 #### Scenario: A resend does not absorb newer notifications
 
 - **WHEN** an in-doubt message is resent under at-least-once delivery while alice has received a newer notification
-- **THEN** the resent message covers exactly the original notifications, and the newer one goes in a separate message
+- **THEN** the resent message covers none of the newer notification, and the newer one goes in a separate message
+
+#### Scenario: A resend drops what the recipient has read since
+
+- **WHEN** an in-doubt message covering three of alice's notifications is resent under at-least-once delivery after she has read one of them
+- **THEN** the resent message covers the two still ACTIVE, carries the original idempotency key, and the notification she read is recorded as skipped and never emailed
+
+#### Scenario: Nothing is resent once every notification has been read
+
+- **WHEN** an in-doubt message is resent under at-least-once delivery after the recipient has read every notification it covered
+- **THEN** no message is sent, and those notifications are recorded as skipped
+
+#### Scenario: A resend that fails keeps its key
+
+- **WHEN** an in-doubt message is resent under at-least-once delivery, the sender fails transiently, and alice has received a newer notification meanwhile
+- **THEN** a later pass sends the message again under the original idempotency key over the original notifications, and the newer notification goes in a separate message
+
+#### Scenario: A resend whose notifications cannot be read waits whole
+
+- **WHEN** an in-doubt message is resent under at-least-once delivery and one of its notifications cannot be read again
+- **THEN** nothing is sent for it in that pass, and a later pass sends it under the original idempotency key
+
+#### Scenario: A resend that keeps failing fails at the attempt limit
+
+- **WHEN** an in-doubt message is resent under at-least-once delivery and the sender fails transiently on the attempt that reaches the limit
+- **THEN** its notifications are recorded as failed and never claimed again
 
 ### Requirement: Concurrent dispatchers never send the same notification twice
 
@@ -144,7 +175,9 @@ With no configuration, the system SHALL consider notifications of every kind for
 
 ### Requirement: Send failures are classified, retried within a budget, and reported
 
-The system SHALL treat a send the host's sender reports as rejected as a permanent failure, recorded as failed and never retried. The system SHALL retry any other failure that means the message was not sent, after a delay that grows with the attempts already made, up to an attempt limit, after which it SHALL record the notifications as failed. A failure to render a message SHALL be a permanent failure. Every failure SHALL be reported to the host rather than silently swallowed, and SHALL NOT abandon the rest of the pass.
+The system SHALL treat a send the host's sender reports as rejected as a permanent failure, recorded as failed and never retried. The system SHALL retry any other failure that means the message was not sent, after a delay that grows with the attempts already made (except a repeated send under at-least-once delivery, which stays in doubt as that requirement states), up to an attempt limit, after which it SHALL record the notifications as failed. A failure to render a message SHALL be a permanent failure. Every failure SHALL be reported to the host rather than silently swallowed, and SHALL NOT abandon the rest of the pass.
+
+Every retry SHALL be scheduled strictly later than the failure that caused it. Whatever the attempts made, the configured delay and the configured ceiling, the delay SHALL be positive and SHALL NOT exceed the ceiling by more than the jitter the system applies. No combination of accepted configuration and attempt count SHALL produce a delay that is zero, negative, or shorter than an earlier attempt's ceiling-bounded delay.
 
 #### Scenario: The sender rejects a message
 
@@ -161,9 +194,50 @@ The system SHALL treat a send the host's sender reports as rejected as a permane
 - **WHEN** rendering fails for alice and succeeds for bob in the same pass
 - **THEN** bob is emailed, and the failure for alice reaches the host
 
+#### Scenario: A very large ceiling never schedules a retry in the past
+
+- **WHEN** a host configures the largest ceiling the system accepts and a notification fails transiently on attempt after attempt
+- **THEN** every retry is scheduled after the failure that caused it, no attempt is scheduled at or before the instant it was computed, and no notification is re-claimed sooner than the ceiling allows
+
+### Requirement: A recorded failure reason carries no host data by default
+
+With no configuration, the system SHALL record, against a failed, retried or skipped delivery, a reason it owns itself: the classification of the outcome, and never text obtained from the host's sender, template or address lookup. The full error SHALL continue to reach the host's error handler unchanged, where the host applies its own logging and redaction policy.
+
+The host SHALL be able to record detail of its own choosing by supplying a rule that turns a failure into the text to record. The system SHALL ask the rule only about the outcome it records, and SHALL always give it the error behind the failure, never none. The system SHALL bound what is recorded to a documented maximum length, truncating beyond it, so that a delivery record cannot grow without limit whatever the host returns; truncation SHALL never leave the recorded reason empty.
+
+#### Scenario: A sender's error text is not stored by default
+
+- **WHEN** the host's sender fails with an error whose text contains the recipient's email address, and a dispatch pass records the outcome
+- **THEN** the stored reason is the system's own classification, contains no part of the sender's error text, and the unmodified error still reaches the host's error handler
+
+#### Scenario: A host records its own detail
+
+- **WHEN** a host supplies a rule that maps a failure to text it considers safe to store, and a send fails
+- **THEN** the stored reason is the text that rule returned
+
+#### Scenario: Recorded detail is bounded
+
+- **WHEN** a host's rule returns text longer than the documented maximum
+- **THEN** the stored reason is truncated to that maximum and the delivery is otherwise recorded normally
+
+#### Scenario: A host's rule hears only of the recorded outcome
+
+- **WHEN** a host supplies a rule and a send fails transiently, well within the attempt limit
+- **THEN** the rule is asked once, about a retry, and never about a failure that is not recorded
+
+#### Scenario: A send left in doubt by a stopped pass still carries an error
+
+- **WHEN** a host supplies a rule that reads the error's text, and a pass under at-most-once delivery abandons a send an earlier pass left in doubt by stopping
+- **THEN** the rule receives an error that is an in-doubt error, and the pass completes
+
+#### Scenario: Skip reasons are unaffected
+
+- **WHEN** a notification is skipped because its recipient has no address, or because the selection rejected it
+- **THEN** the stored reason is the system's existing skip reason, unchanged
+
 ### Requirement: Wiring mistakes fail at construction
 
-The system SHALL refuse to construct a dispatcher that has no sender, no address lookup or no template, whose notification store does not record email deliveries, or whose durations, caps or limits are zero or negative where a positive value is required.
+The system SHALL refuse to construct a dispatcher that has no sender, no address lookup or no template, whose notification store does not record email deliveries, or whose durations, caps or limits are zero or negative where a positive value is required. It SHALL also refuse a value it could not store, such as a dispatcher owner longer than the delivery record admits, so that a configuration accepted on one supported store cannot fail at run time on another.
 
 #### Scenario: A dispatcher without a sender
 
@@ -179,6 +253,11 @@ The system SHALL refuse to construct a dispatcher that has no sender, no address
 
 - **WHEN** a host configures a negative grace delay
 - **THEN** construction fails with a configuration error
+
+#### Scenario: An owner too long to store
+
+- **WHEN** a host configures a dispatcher owner longer than the delivery record admits
+- **THEN** construction fails with a configuration error naming the limit, on every supported store alike
 
 ### Requirement: Email delivery state is durable and identical on every store
 
