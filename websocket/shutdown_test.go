@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	cws "github.com/coder/websocket"
 	"github.com/stretchr/testify/assert"
@@ -109,4 +110,66 @@ func receiveErr(t *testing.T, ch <-chan error) error {
 
 		return nil
 	}
+}
+
+// TestStopClosesConnectionsAsGoingAway proves a connection does not outlive the
+// instance's ability to deliver signals to it: when the hub's run ends, the
+// connection is closed 1001 with a reason naming the stop, which a client tells
+// apart from a protocol error.
+func TestStopClosesConnectionsAsGoingAway(t *testing.T) {
+	t.Parallel()
+
+	svc, err := ntfy.New(ntfy.NewMemoryStore())
+	require.NoError(t, err)
+
+	hub, err := ntfy.NewHub(svc.Broadcaster())
+	require.NoError(t, err)
+
+	// The shared runHub helper stops the hub only at cleanup; this test stops it
+	// in the middle, so it runs the hub itself.
+	ctx, stop := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+
+	go func() { runErr <- hub.Run(ctx) }()
+
+	t.Cleanup(func() {
+		stop()
+		<-runErr
+	})
+
+	select {
+	case <-hub.Ready():
+	case err := <-runErr:
+		t.Fatalf("the hub stopped before it was ready: %v", err)
+	case <-time.After(testWait):
+		t.Fatal("the hub never became ready")
+	}
+
+	handler, err := websocket.NewHandler(svc, hub, websocket.WithActor(headerActor))
+	require.NoError(t, err)
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	conn := dialURL(t, server.URL)
+
+	readErr := make(chan error, 1)
+
+	go func() {
+		_, _, err := conn.Read(context.Background())
+		readErr <- err
+	}()
+
+	stop()
+
+	select {
+	case err = <-readErr:
+	case <-time.After(testWait):
+		t.Fatal("the connection stayed open after the instance stopped receiving signals")
+	}
+
+	var closeErr cws.CloseError
+	require.ErrorAs(t, err, &closeErr, "the connection was closed with a status")
+	assert.Equal(t, cws.StatusGoingAway, closeErr.Code)
+	assert.Contains(t, closeErr.Reason, "stopped receiving")
 }
