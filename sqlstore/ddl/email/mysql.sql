@@ -8,9 +8,9 @@
 -- batches on every dialect, and the dispatcher removes the records it leaves
 -- behind.
 --
--- Identifier columns are pinned to utf8mb4_0900_as_cs and timestamps are
--- DATETIME(6), as in the notification store's schema. MySQL has no CREATE INDEX
--- IF NOT EXISTS, so indexes are declared inside the table.
+-- Identifier columns are VARBINARY and timestamps are DATETIME(6), as in the
+-- notification store's schema; see that document for why. MySQL has no CREATE
+-- INDEX IF NOT EXISTS, so indexes are declared inside the table.
 --
 -- One index here belongs to the notifications table rather than the email
 -- table: ntfy_notifications_email_idx lets a dispatcher claim the notifications
@@ -25,11 +25,11 @@
 -- runs the ALTER TABLE in docs/schema.md once instead of re-applying this.
 
 CREATE TABLE IF NOT EXISTS `{{PREFIX}}ntfy_email_deliveries` (
-    `notification_id`  VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `recipient`        VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `status`           VARCHAR(16)  COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `batch_id`         VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NULL,
-    `owner`            VARCHAR(255) COLLATE utf8mb4_0900_as_cs NULL,
+    `notification_id`  VARBINARY(64)  NOT NULL,
+    `recipient`        VARBINARY(255) NOT NULL,
+    `status`           VARBINARY(16)  NOT NULL,
+    `batch_id`         VARBINARY(64)  NULL,
+    `owner`            VARBINARY(255) NULL,
     `lease_until`      DATETIME(6) NULL,
     `attempts`         INT NOT NULL,
     `next_attempt_at`  DATETIME(6) NULL,

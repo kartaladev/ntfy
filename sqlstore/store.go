@@ -181,11 +181,35 @@ var schemaExpectation = sqlkit.SchemaExpectation{
 	},
 }
 
+// mysqlIdentifierCollation is what schema verification expects of a MySQL
+// identifier column: binary, MySQL's name for the collation of binary strings.
+// Identifier columns are VARBINARY, which compares and sorts by bytes and pads
+// nothing on every supported server, and which reports no collation at all, so
+// that any column reporting a character-set collation is named.
+const mysqlIdentifierCollation = "binary"
+
+// verifyDialect is the dialect schema verification checks against. It differs
+// from the store's dialect only in what it expects of MySQL identifier columns:
+// the vendored sqlkit still expects utf8mb4_0900_as_cs, which ignores code
+// points such as U+200B and equates NFC with NFD. It goes once sqlkit expects
+// binary identifier columns itself; the tripwire
+// TestSQLKitStillExpectsTheOldMySQLCollation says when.
+type verifyDialect struct{ sqlkit.Dialect }
+
+// IdentifierCollation implements [sqlkit.Dialect].
+func (d verifyDialect) IdentifierCollation() string {
+	if d.Name() == sqlkit.MySQL.Name() {
+		return mysqlIdentifierCollation
+	}
+
+	return d.Dialect.IdentifierCollation()
+}
+
 // VerifySchema compares the live database with what the store's statements
 // require: both tables, every column, the collation of every identifier column,
 // and every index. It reports every discrepancy at once as a
 // [*sqlkit.SchemaError], which matches [sqlkit.ErrSchemaMismatch], rather than
 // failing on first use. Call it at startup.
 func (s *Store) VerifySchema(ctx context.Context) error {
-	return sqlkit.VerifySchema(s.own(ctx), s.querier, s.dialect, s.prefix, schemaExpectation)
+	return sqlkit.VerifySchema(s.own(ctx), s.querier, verifyDialect{s.dialect}, s.prefix, schemaExpectation)
 }

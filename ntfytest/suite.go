@@ -31,6 +31,7 @@ func Run(t *testing.T, factory Factory) {
 	t.Run("watermark", func(t *testing.T) { runWatermark(t, factory) })
 	t.Run("successors", func(t *testing.T) { runSuccessors(t, factory) })
 	t.Run("isolation", func(t *testing.T) { runIsolation(t, factory) })
+	t.Run("identity", func(t *testing.T) { runIdentity(t, factory) })
 	t.Run("coalescing", func(t *testing.T) { runCoalescing(t, factory) })
 	t.Run("concurrency", func(t *testing.T) { runConcurrency(t, factory) })
 	t.Run("retention", func(t *testing.T) { runRetention(t, factory) })

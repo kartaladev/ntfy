@@ -191,3 +191,51 @@ func TestVerifySchemaOnSQLite(t *testing.T) {
 
 	runVerifySchema(t, stdsqlExecutor(t, db, sqlkit.SQLite))
 }
+
+// TestVerifySchemaRequiresByteExactIdentifiersOnMySQL is separate from
+// runVerifySchema because only MySQL can declare an identifier column whose
+// comparison depends on a collation; the other dialects have no such column to
+// break. The cases do not vary context, so the table has no ctx field.
+func TestVerifySchemaRequiresByteExactIdentifiersOnMySQL(t *testing.T) {
+	t.Parallel()
+
+	executor := stdsqlExecutor(t, openSQL(t, "mysql", sqlkittest.RunTestMySQL(t)), sqlkit.MySQL)
+
+	type testCase struct {
+		name      string
+		collation string
+		assert    func(t *testing.T, store *sqlstore.Store, err error)
+	}
+
+	reportsTheRecipient := func(collation string) func(t *testing.T, store *sqlstore.Store, err error) {
+		return func(t *testing.T, store *sqlstore.Store, err error) {
+			assert.Contains(t, issues(t, err),
+				store.Tables()[0]+`.recipient: collation is "`+collation+`" but must be "binary"`)
+		}
+	}
+
+	cases := []testCase{
+		{
+			name:      "a collation that ignores code points and normalisation is reported",
+			collation: "utf8mb4_0900_as_cs",
+			assert:    reportsTheRecipient("utf8mb4_0900_as_cs"),
+		},
+		{
+			name:      "even a byte-exact collation is reported, since identifiers are binary strings",
+			collation: "utf8mb4_0900_bin",
+			assert:    reportsTheRecipient("utf8mb4_0900_bin"),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := harness.NewStore(t, executor)
+			exec(t, executor, "ALTER TABLE `"+store.Tables()[0]+"` MODIFY `recipient` VARCHAR(255) COLLATE "+
+				tc.collation+" NOT NULL")
+
+			tc.assert(t, store, store.VerifySchema(t.Context()))
+		})
+	}
+}
