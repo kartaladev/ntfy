@@ -157,53 +157,112 @@ func statusList(statuses ...ntfy.EmailStatus) []any {
 	return out
 }
 
-// writeLapsed writes the condition under which an existing delivery record may
-// be claimed: an unleased or lapsed CLAIMED or RETRY record that is due, or a
-// lapsed SENDING record. column qualifies a column name.
-func (s *Store) writeLapsed(w *sqlkit.Writer, column func(string) string, now any) {
-	w.Write("((", column("status"), " IN (", w.BindAll(statusList(ntfy.EmailStatusClaimed, ntfy.EmailStatusRetry)...), ")",
+// writeDueRetry writes the condition under which a CLAIMED or RETRY record may
+// be claimed: unleased or lapsed, with its next attempt due. column qualifies a
+// column name.
+func (s *Store) writeDueRetry(w *sqlkit.Writer, column func(string) string, now any) {
+	w.Write("(", column("status"), " IN (", w.BindAll(statusList(ntfy.EmailStatusClaimed, ntfy.EmailStatusRetry)...), ")",
 		" AND (", column("lease_until"), " IS NULL OR ", column("lease_until"), " <= ", w.Bind(now), ")",
-		" AND (", column("next_attempt_at"), " IS NULL OR ", column("next_attempt_at"), " <= ", w.Bind(now), "))",
-		" OR (", column("status"), " = ", w.Bind(string(ntfy.EmailStatusSending)),
-		" AND (", column("lease_until"), " IS NULL OR ", column("lease_until"), " <= ", w.Bind(now), ")))")
+		" AND (", column("next_attempt_at"), " IS NULL OR ", column("next_attempt_at"), " <= ", w.Bind(now), "))")
+}
+
+// writeInDoubt writes the condition under which a SENDING record is in doubt:
+// its lease lapsed, whatever the notification's state now is. column qualifies
+// a column name.
+func (s *Store) writeInDoubt(w *sqlkit.Writer, column func(string) string, now any) {
+	w.Write("(", column("status"), " = ", w.Bind(string(ntfy.EmailStatusSending)),
+		" AND (", column("lease_until"), " IS NULL OR ", column("lease_until"), " <= ", w.Bind(now), "))")
+}
+
+// writeLapsed writes the condition under which an existing delivery record may
+// be claimed: a due CLAIMED or RETRY record, or a lapsed SENDING record. The
+// claim uses the two halves separately, one per branch; the take-over uses both.
+func (s *Store) writeLapsed(w *sqlkit.Writer, column func(string) string, now any) {
+	w.Write("(")
+	s.writeDueRetry(w, column, now)
+	w.Write(" OR ")
+	s.writeInDoubt(w, column, now)
+	w.Write(")")
 }
 
 // dueEmails selects, oldest first, up to the claim's limit of notifications due
 // for email.
 func (s *Store) dueEmails(ctx context.Context, claim ntfy.EmailClaim, now time.Time) ([]dueEmail, error) {
+	var due []dueEmail
+
+	err := s.queryTexts(ctx, s.dueEmailsStatement(claim, now), 2, func(values []string) {
+		due = append(due, dueEmail{id: values[0], recorded: values[1] == "1"})
+	})
+
+	return due, err
+}
+
+// dueEmailsStatement builds the statement dueEmails runs: three disjoint
+// branches, each driving from the table an index of its own covers, so that a
+// pass costs what the claim window holds rather than what the table holds.
+//
+//	branch 1  a notification that qualifies and has no delivery record
+//	branch 2  a send left in doubt, whatever the notification's state now is
+//	branch 3  a due CLAIMED or RETRY record whose notification still qualifies
+//
+// Each row is a notification identifier and "1" when it already has a delivery
+// record, "0" when not. Each branch takes the claim's limit and the union takes
+// it again, so the result is the same oldest-first page one query over the
+// disjunction returned. Every branch is a derived table because SQLite allows
+// no LIMIT on the branches of a compound select, and the delivery-driven
+// branches inner-join the notification so that a record whose notification is
+// gone is never returned.
+func (s *Store) dueEmailsStatement(claim ntfy.EmailClaim, now time.Time) sqlkit.Statement {
 	n := func(name string) string { return "n." + s.quote(name) }
 	d := func(name string) string { return "d." + s.quote(name) }
+	as := func(expression, name string) string { return expression + " AS " + s.quote(name) }
 
 	instant := sqlkit.EncodeTime(s.dialect, &now)
 	createdUntil := sqlkit.NormalizeTime(claim.CreatedUntil)
 	createdFrom := sqlkit.NormalizeTime(claim.CreatedFrom)
+	limit := " LIMIT " + strconv.Itoa(claim.Limit)
 
-	qualifies := func(w *sqlkit.Writer) {
+	w := sqlkit.NewWriter(s.dialect)
+
+	// qualifies is the notification side of a claim. Branch 2 omits it on
+	// purpose: a send in doubt is settled whatever became of its notification.
+	qualifies := func() {
 		w.Write(n("state"), " = ", w.Bind(string(ntfy.StateActive)),
 			" AND ", n("created_at"), " <= ", w.Bind(sqlkit.EncodeTime(s.dialect, &createdUntil)),
 			" AND ", n("created_at"), " >= ", w.Bind(sqlkit.EncodeTime(s.dialect, &createdFrom)))
 	}
 
-	w := sqlkit.NewWriter(s.dialect)
-	w.Write("SELECT ", n("id"), ", COALESCE(", d("notification_id"), ", '')",
-		" FROM ", s.notificationsTable(), " n LEFT JOIN ", s.emailTable(), " d ON ", d("notification_id"), " = ", n("id"),
-		" WHERE (", d("notification_id"), " IS NULL AND ")
-	qualifies(w)
-	w.Write(") OR (", d("status"), " = ", w.Bind(string(ntfy.EmailStatusSending)), " AND ")
-	s.writeLapsed(w, d, instant)
-	w.Write(") OR (", d("status"), " <> ", w.Bind(string(ntfy.EmailStatusSending)), " AND ")
-	s.writeLapsed(w, d, instant)
-	w.Write(" AND ")
-	qualifies(w)
-	w.Write(") ORDER BY ", n("created_at"), ", ", n("id"), " LIMIT ", strconv.Itoa(claim.Limit))
+	// branch writes one branch: the oldest of what where selects, at most the
+	// claim's limit, with recorded as a literal.
+	branch := func(alias, recorded, from string, where func()) {
+		w.Write("SELECT ", as(alias+"."+s.quote("id"), "id"), ", ", as(alias+"."+s.quote("created_at"), "created_at"),
+			", ", as(alias+"."+s.quote("recorded"), "recorded"),
+			" FROM (SELECT ", as(n("id"), "id"), ", ", as(n("created_at"), "created_at"), ", ", as(recorded, "recorded"),
+			" FROM ", from, " WHERE ")
+		where()
+		w.Write(" ORDER BY ", n("created_at"), ", ", n("id"), limit, ") ", alias)
+	}
 
-	var due []dueEmail
+	joined := s.emailTable() + " d JOIN " + s.notificationsTable() + " n ON " + n("id") + " = " + d("notification_id")
 
-	err := s.queryTexts(ctx, w.Done(), 2, func(values []string) {
-		due = append(due, dueEmail{id: values[0], recorded: values[1] != ""})
+	w.Write("SELECT due.", s.quote("id"), ", due.", s.quote("recorded"), " FROM (")
+
+	branch("b1", "'0'", s.notificationsTable()+" n", func() {
+		qualifies()
+		w.Write(" AND NOT EXISTS (SELECT 1 FROM ", s.emailTable(), " d WHERE ", d("notification_id"), " = ", n("id"), ")")
+	})
+	w.Write(" UNION ALL ")
+	branch("b2", "'1'", joined, func() { s.writeInDoubt(w, d, instant) })
+	w.Write(" UNION ALL ")
+	branch("b3", "'1'", joined, func() {
+		s.writeDueRetry(w, d, instant)
+		w.Write(" AND ")
+		qualifies()
 	})
 
-	return due, err
+	w.Write(") due ORDER BY due.", s.quote("created_at"), ", due.", s.quote("id"), limit)
+
+	return w.Done()
 }
 
 // insertDeliveries writes CLAIMED delivery records leased to owner for
