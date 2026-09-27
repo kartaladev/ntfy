@@ -125,8 +125,14 @@ type CloseRequest struct {
 }
 
 // Validate reports every problem with the request as a [ValidationError], or
-// nil.
-func (r CloseRequest) Validate() error {
+// nil. It validates the successor's content against [DefaultLimits];
+// [CloseRequest.ValidateWithin] validates against a service's configured
+// limits.
+func (r CloseRequest) Validate() error { return r.ValidateWithin(Limits{}) }
+
+// ValidateWithin reports every problem with the request, bounding its
+// successor's content by limits. An unset limit keeps its default.
+func (r CloseRequest) ValidateWithin(limits Limits) error {
 	issues := validateIdentifier("/subject", r.Subject)
 
 	if r.Version < 0 {
@@ -150,8 +156,9 @@ func (r CloseRequest) Validate() error {
 
 	if s := r.Successor; s != nil {
 		for _, issue := range validateContent(content{
-			sourceID: s.SourceID, kind: s.Kind, subjectVersion: s.SubjectVersion, data: s.Data,
-		}, false, Limits{}) {
+			sourceID: s.SourceID, kind: s.Kind, subjectVersion: s.SubjectVersion,
+			title: s.Title, links: s.Links, data: s.Data,
+		}, false, limits) {
 			issue.Pointer = "/successor" + issue.Pointer
 			issues = append(issues, issue)
 		}

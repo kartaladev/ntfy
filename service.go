@@ -196,7 +196,7 @@ func (s *Service) Publish(ctx context.Context, drafts ...Draft) (PublishResult, 
 // in one store transaction. It signals a close to every recipient closed and a
 // creation to every recipient given a successor.
 func (s *Service) Close(ctx context.Context, req CloseRequest) (CloseResult, error) {
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateWithin(s.limits); err != nil {
 		return CloseResult{}, err
 	}
 
