@@ -26,7 +26,7 @@
 
 | File | Create/Modify | Responsibility |
 | --- | --- | --- |
-| `websocket/authority_test.go` | Create | Both authority tests: the escalation (`TestMarkOnFollowedConnection`) and the cross-transport guard (`TestTransportsGrantTheSameAuthority`), plus the HTTP mark helper they share. Kept out of `readloop_test.go` because that file covers the protocol's happy path, while this file exists to pin *who may write*. |
+| `websocket/authority_test.go` | Create | Both authority tests: the escalation (`TestMarkOnFollowedConnection`) and the cross-transport guard (`TestTransportsGrantTheSameAuthority`), plus the helpers the cross-transport test uses: `markReadOverHTTP`, `followOverStream` and `unchanged`. Kept out of `readloop_test.go` because that file covers the protocol's happy path, while this file exists to pin *who may write*. |
 | `websocket/handler.go` | Modify `:260`, `:286`, `:295`, `:364`, `:372`, `:403-435`, `:437-451` | Thread the actor through `serve`/`read`/`answer`; refuse a mark on a followed connection; map the refusal to the forbidden code. |
 | `websocket/helpers_test.go` | Modify `:36-41`, `:61` | `serverConfig` gains an `sse` field so a test can give both transports the same subscription policy. |
 | `authorize.go` | Modify `:8-19`, `:31-34`, `:36-41` | Godoc: a subscription policy grants following only. |
@@ -56,7 +56,6 @@ Create `websocket/authority_test.go`:
 package websocket_test
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -106,11 +105,7 @@ func TestMarkOnFollowedConnection(t *testing.T) {
 			require.NoError(t, err)
 
 			send(t, d.conn, tc.message(t, s))
-
-			assert.JSONEq(t,
-				`{"type":"error","ref":"r2","code":"forbidden",`+
-					`"message":"ntfy: unauthorized: a connection following another recipient may not mark notifications read"}`,
-				string(readRaw(t, d.conn)))
+			reply := string(readRaw(t, d.conn))
 
 			bob, err := s.svc.CountActive(t.Context(), "bob")
 			require.NoError(t, err)
@@ -119,6 +114,11 @@ func TestMarkOnFollowedConnection(t *testing.T) {
 			alice, err := s.svc.CountActive(t.Context(), "alice")
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, alice, "the acting user's own notifications are not marked instead")
+
+			assert.JSONEq(t,
+				`{"type":"error","ref":"r2","code":"forbidden",`+
+					`"message":"ntfy: unauthorized: a connection following another recipient may not mark notifications read"}`,
+				reply)
 
 			// The subscription was legitimately authorized, so the connection
 			// stays open and keeps delivering the followed recipient's signals.
@@ -129,7 +129,7 @@ func TestMarkOnFollowedConnection(t *testing.T) {
 }
 ```
 
-`net/http` is imported here for Task 2's helper; if the linter objects before Task 2 lands, add it in Step 1 of Task 2 instead.
+`net/http`, `net/url` and `context` are not imported yet: Go refuses to compile an unused import, which would make the red run fail for the wrong reason. Task 2 Step 2 adds them with the code that uses them.
 
 - [ ] **Step 2: Run the test and confirm it fails for the right reason**
 
@@ -306,7 +306,7 @@ Implements the spec scenario "Both transports grant the same authority"; `design
 
 **Interfaces:**
 - Consumes: everything Task 1 produced, plus the existing fixtures `refused(status int, code string) func(t *testing.T, d dialed, err error)`, `upgraded(t *testing.T, d dialed, err error)` and `supervisorPolicy ntfy.SubscriptionAuthorizer` (all in `websocket/refusal_test.go`), and `actorHeader = "X-Actor"` (`websocket/helpers_test.go:22`).
-- Produces: `serverConfig.sse []ntfy.HandlerOption`; `func (s *server) markReadOverHTTP(t *testing.T, actor, id string) int`.
+- Produces: `serverConfig.sse []ntfy.HandlerOption`; `func (s *server) markReadOverHTTP(t *testing.T, actor, id string) int`; `func (s *server) followOverStream(t *testing.T, actor, recipient string) int`; `func unchanged(t *testing.T, s *server, recipients ...string)`.
 
 - [ ] **Step 1: Let a test give both transports the same policy**
 
@@ -331,7 +331,7 @@ and pass it when building the SSE handler (`:61`):
 
 - [ ] **Step 2: Write the cross-transport authority test**
 
-Append to `websocket/authority_test.go`:
+Add `"context"`, `"net/http"` and `"net/url"` to the imports of `websocket/authority_test.go`, then append to it. Each case carries an `assert` closure over an `outcome`, per the `table-test` skill, rather than a `follows bool` field:
 
 ```go
 // TestTransportsGrantTheSameAuthority holds the two transports of one contract
@@ -346,18 +346,61 @@ Append to `websocket/authority_test.go`:
 func TestTransportsGrantTheSameAuthority(t *testing.T) {
 	t.Parallel()
 
+	// outcome is what both transports answered actor following bob, after the
+	// HTTP contract has refused to mark bob's notification read.
+	type outcome struct {
+		s     *server
+		actor string
+		bobs  string
+		// stream is the status the stream transport answered the follow with.
+		stream int
+		// d and err are the WebSocket transport's answer to the same follow.
+		d   dialed
+		err error
+	}
+
 	type testCase struct {
 		name   string
 		policy ntfy.SubscriptionAuthorizer
 		actor  string
-		// follows reports whether the policy lets actor follow bob at all.
-		follows bool
+		assert func(t *testing.T, o outcome)
+	}
+
+	// permitsFollowingOnly asserts that both transports let actor follow bob,
+	// that the WebSocket connection refuses to mark bob's notification, and
+	// that the connection stays open and keeps delivering bob's signals.
+	permitsFollowingOnly := func(t *testing.T, o outcome) {
+		t.Helper()
+
+		assert.Equal(t, http.StatusOK, o.stream, "the stream transport permits following bob")
+		upgraded(t, o.d, o.err)
+
+		send(t, o.d.conn, `{"type":"mark-read","ref":"r1","ids":["`+o.bobs+`"]}`)
+		assert.JSONEq(t,
+			`{"type":"error","ref":"r1","code":"forbidden",`+
+				`"message":"ntfy: unauthorized: a connection following another recipient may not mark notifications read"}`,
+			string(readRaw(t, o.d.conn)), "the WebSocket transport refuses the same mark")
+
+		unchanged(t, o.s, "bob", o.actor)
+
+		o.s.publish(t, "bob", "event-3")
+		assert.Equal(t, string(ntfy.ChangeCreated), readFrame(t, o.d.conn)["change"],
+			"the connection still delivers bob's signals")
 	}
 
 	cases := []testCase{
-		{name: "the default policy follows nobody else", policy: ntfy.SelfOnly, actor: "alice", follows: false},
-		{name: "every subscription permitted", policy: ntfy.AllowAll, actor: "alice", follows: true},
-		{name: "a supervisor policy", policy: supervisorPolicy, actor: "sup", follows: true},
+		{
+			name:   "the default policy follows nobody else",
+			policy: ntfy.SelfOnly,
+			actor:  "alice",
+			assert: func(t *testing.T, o outcome) {
+				assert.Equal(t, http.StatusForbidden, o.stream, "the stream transport refuses following bob")
+				refused(http.StatusForbidden, "forbidden")(t, o.d, o.err)
+				unchanged(t, o.s, "bob", o.actor)
+			},
+		},
+		{name: "every subscription permitted", policy: ntfy.AllowAll, actor: "alice", assert: permitsFollowingOnly},
+		{name: "a supervisor policy", policy: supervisorPolicy, actor: "sup", assert: permitsFollowingOnly},
 	}
 
 	for _, tc := range cases {
@@ -372,33 +415,55 @@ func TestTransportsGrantTheSameAuthority(t *testing.T) {
 			s.publish(t, "bob", "event-1")
 			s.publish(t, tc.actor, "event-2")
 
-			bobs := s.idOf(t, "bob")
+			o := outcome{s: s, actor: tc.actor, bobs: s.idOf(t, "bob")}
 
-			// The HTTP transport: mark bob's notification, named over the contract.
-			assert.Equal(t, http.StatusNotFound, s.markReadOverHTTP(t, tc.actor, bobs),
-				"the HTTP transport refuses to mark another recipient's notification")
+			// The HTTP contract: mark bob's notification, named over the contract.
+			assert.Equal(t, http.StatusNotFound, s.markReadOverHTTP(t, tc.actor, o.bobs),
+				"the HTTP contract refuses to mark another recipient's notification")
 
-			// The WebSocket transport: the same mark, over a connection that
-			// follows bob as far as the policy allows.
-			d, err := s.dial(t, dialRequest{actor: tc.actor, recipient: "bob"})
+			// Both realtime transports: follow bob as far as the policy allows.
+			o.stream = s.followOverStream(t, tc.actor, "bob")
+			o.d, o.err = s.dial(t, dialRequest{actor: tc.actor, recipient: "bob"})
 
-			if tc.follows {
-				upgraded(t, d, err)
-
-				send(t, d.conn, `{"type":"mark-read","ref":"r1","ids":["`+bobs+`"]}`)
-				assert.Equal(t, "forbidden", readFrame(t, d.conn)["code"],
-					"the WebSocket transport refuses the same mark")
-			} else {
-				refused(http.StatusForbidden, "forbidden")(t, d, err)
-			}
-
-			for _, recipient := range []string{"bob", tc.actor} {
-				count, err := s.svc.CountActive(t.Context(), recipient)
-				require.NoError(t, err)
-				assert.EqualValues(t, 1, count, "%s's notifications are unchanged", recipient)
-			}
+			tc.assert(t, o)
 		})
 	}
+}
+
+// unchanged asserts that each recipient still has its one active notification.
+func unchanged(t *testing.T, s *server, recipients ...string) {
+	t.Helper()
+
+	for _, recipient := range recipients {
+		count, err := s.svc.CountActive(t.Context(), recipient)
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, count, "%s's notifications are unchanged", recipient)
+	}
+}
+
+// followOverStream opens actor's server-sent event stream of recipient's
+// signals, keeps it open until the test ends, and returns the status the
+// stream transport answered with.
+func (s *server) followOverStream(t *testing.T, actor, recipient string) int {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		s.url+"/v1/notifications/stream?recipient="+url.QueryEscape(recipient), http.NoBody)
+	require.NoError(t, err)
+
+	req.Header.Set(actorHeader, actor)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		cancel()
+		_ = resp.Body.Close()
+	})
+
+	return resp.StatusCode
 }
 
 // markReadOverHTTP marks a notification read over the HTTP contract as actor,
@@ -446,6 +511,8 @@ A regression test that has never failed proves nothing (`.claude/rules/prove-err
 Run: `cd websocket && GOTOOLCHAIN=go1.26.8 go test -run 'TestTransportsGrantTheSameAuthority' -count=1 ./...`
 
 Expected: FAIL on `every subscription permitted` and `a supervisor policy`, reporting `bob's notifications are unchanged` with actual `0`. Then restore all three lines exactly as Task 1 Step 4 wrote them and re-run to confirm PASS.
+
+Then confirm the stream half is live too: delete the `sse:` line from the `startServer` call and re-run. Expected: FAIL on the same two subtests with `the stream transport permits following bob`, because the stream falls back to `SelfOnly` while the WebSocket side follows. Restore the line and re-run to confirm PASS.
 
 - [ ] **Step 5: Run the whole module with the race detector**
 
@@ -521,7 +588,9 @@ and at `authorize.go:36-38`:
 //
 // It grants no authority to change anything. An acting user following another
 // recipient under this policy still cannot mark that recipient's notifications
-// read: such a request is refused as forbidden. A host that needs one user to
+// read: a mark request over a WebSocket connection that follows them is refused
+// as forbidden, and over the HTTP contract their notifications are not found,
+// exactly like ones that do not exist. A host that needs one user to
 // mark another's notifications read does that over the HTTP contract, behind its
 // own authorization.
 var AllowAll SubscriptionAuthorizer = SubscriptionAuthorizerFunc(func(context.Context, string, string) error {
@@ -547,8 +616,9 @@ In `docs/realtime-operations.md`, replace lines 105-108:
 Both authorize the subscription with the same policy (`ntfy.SelfOnly` by
 default), refuse while the hub is not running, and count against the same
 per-recipient cap of 8 connections per instance. The policy grants following
-only: a WebSocket client can also mark notifications read over its connection,
-and that always acts on the acting user, never on a followed recipient:
+only: a WebSocket client can also mark the acting user's own notifications read
+over a connection opened for the acting user, and a connection that follows
+anyone else refuses mark requests altogether:
 ```
 
 Add a row after line 116, the last row of the message table:
@@ -674,5 +744,7 @@ If `git status --porcelain` is empty, skip this step — the change is complete.
 **Placeholder scan.** No TBD, no "add error handling", no "similar to Task N". Every code step carries the full replacement text, every run step the exact command and the expected output. The one judgement call left to the executor is flagged inline (the `net/http` import in Task 1 Step 1, which Task 2 needs) with its resolution.
 
 **Type consistency.** Fixed and checked against the source: `serve(requestCtx context.Context, conn *cws.Conn, subscription *ntfy.Subscription, actor, recipient string)`, `read(ctx context.Context, conn *cws.Conn, actor, recipient string, replies chan<- any)`, `answer(ctx context.Context, actor, recipient string, data []byte) any`, `errorReply(ref string, err error) errorFrame`, `errFollowedConnection`. Test fixtures are used under their real names — `startServer`, `serverConfig`, `dialRequest`, `dialed`, `(*server).dial`, `(*server).publish`, `(*server).idOf`, `send`, `readRaw`, `readFrame`, `refused`, `upgraded`, `supervisorPolicy`, `actorHeader` — verified against `websocket/helpers_test.go`, `readloop_test.go`, `writeloop_test.go` and `refusal_test.go`. `ntfy.HandlerOption` is the core handler's option type, matching `ntfy.NewHandler`'s signature.
+
+**Fixed during code review:** the first cross-transport test configured the stream's policy but never opened a stream, so it did not guard the stream half of "both permit or both refuse"; it now follows over both transports and asserts the full refusal frame and continued delivery for every permitting policy. The `AllowAll` godoc and the guide's lead sentence were corrected: over HTTP a follower's mark is not found, not forbidden, and a followed connection marks nothing at all.
 
 **Fixed during review:** the escalation test originally asserted the reply frame before the stored state, which would have made the red run report a frame mismatch rather than the escalation; the state assertions now carry messages that name the defect, and Task 1 Step 2 tells the executor which failure line is decisive and to stop if it does not appear.

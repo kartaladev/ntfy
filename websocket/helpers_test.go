@@ -37,6 +37,7 @@ type serverConfig struct {
 	stopped bool
 	hub     []ntfy.HubOption
 	ws      []websocket.Option
+	sse     []ntfy.HandlerOption
 	service []ntfy.Option
 }
 
@@ -58,7 +59,7 @@ func startServer(t *testing.T, cfg serverConfig) *server {
 	wsHandler, err := websocket.NewHandler(svc, hub, append([]websocket.Option{websocket.WithActor(headerActor)}, cfg.ws...)...)
 	require.NoError(t, err)
 
-	sseHandler, err := ntfy.NewHandler(svc, hub, ntfy.WithActor(headerActor))
+	sseHandler, err := ntfy.NewHandler(svc, hub, append([]ntfy.HandlerOption{ntfy.WithActor(headerActor)}, cfg.sse...)...)
 	require.NoError(t, err)
 
 	mux := http.NewServeMux()
