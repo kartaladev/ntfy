@@ -9,6 +9,12 @@
 -- retention leaves behind.
 --
 -- Instants are TEXT in the one fixed encoding the notification store uses.
+--
+-- One index here belongs to the notifications table rather than the email
+-- table: ntfy_notifications_email_idx lets a dispatcher claim the notifications
+-- no delivery record covers without scanning the whole table. It lives in this
+-- document because only a host that emails needs it; a host that does not never
+-- pays for it on every publish.
 
 CREATE TABLE IF NOT EXISTS "ntfy_email_deliveries" (
     "notification_id"  TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
@@ -31,3 +37,7 @@ CREATE INDEX IF NOT EXISTS "ntfy_email_deliveries_lease_idx"
 -- Finding retries that are due.
 CREATE INDEX IF NOT EXISTS "ntfy_email_deliveries_retry_idx"
     ON "ntfy_email_deliveries" ("status", "next_attempt_at");
+
+-- Claiming the notifications no delivery record covers yet, oldest first.
+CREATE INDEX IF NOT EXISTS "ntfy_notifications_email_idx"
+    ON "ntfy_notifications" ("state", "created_at", "id");

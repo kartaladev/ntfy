@@ -22,6 +22,18 @@ comments. `Store.Schema()` returns the store's document with its table prefix
 applied, ready to hand to a migration tool. Every statement is `CREATE ... IF NOT
 EXISTS`, so applying it to an existing schema changes nothing.
 
+A host that emails notifications also applies the email schema,
+`ntfy/sqlstore/ddl/email/<dialect>.sql`, returned by `Store.EmailSchema()`.
+It indexes the notifications table, so it is applied after this document,
+never before. It
+holds the same promise, with **one stated exception**. On MySQL, the email
+document's `CREATE INDEX` for `ntfy_notifications_email_idx` is not
+idempotent. The index belongs to a table that already exists, so it cannot be
+declared inside a `CREATE TABLE`, and MySQL has no `CREATE INDEX IF NOT
+EXISTS`. Re-applying the MySQL email document to a database that already has
+the index fails with error 1061. See [Adding the email claim index to an
+existing host](#adding-the-email-claim-index-to-an-existing-host).
+
 Nothing in normal operation changes the schema. `Store.Migrate(ctx)` applies it
 directly, and exists for tests and development only.
 
@@ -80,6 +92,12 @@ statement fail; it makes it read the whole table.
 | `ntfy_notifications_subject_idx` | `subject`, `kind`, `state` | closing by subject and kind; coalescing |
 | `ntfy_notifications_inactive_idx` | `state`, `inactive_at` | the age bound |
 | `ntfy_watermarks_updated_idx` | `updated_at` | expiring close records |
+| `ntfy_notifications_email_idx` | `state`, `created_at`, `id` | the email claim reaching notifications no delivery record covers; **email schema only** |
+
+`ntfy_notifications_email_idx` is on the notifications table, but the email
+schema declares it and only `Store.VerifyEmailSchema` requires it.
+`Store.VerifySchema` does not, so a host that never emails neither carries it
+nor fails startup over it.
 
 ## Dialect choices
 
@@ -145,8 +163,40 @@ publishing is idempotent, so a shared transaction would buy nothing.
 On SQLite, a caller holding its own write transaction blocks the store's until
 the busy timeout, because SQLite has one writer. Publish after committing.
 
+## Adding the email claim index to an existing host
+
+A host whose email schema predates `ntfy_notifications_email_idx` fails
+`Store.VerifyEmailSchema` at startup until the index exists. Add it once,
+before deploying the upgrade, with the table prefix in place of `app_`:
+
+- **PostgreSQL and SQLite:** re-apply the email document, which is idempotent,
+  or run its one new statement:
+
+  ```sql
+  CREATE INDEX IF NOT EXISTS "app_ntfy_notifications_email_idx"
+      ON "app_ntfy_notifications" ("state", "created_at", "id");
+  ```
+
+- **MySQL:** run this, and do **not** re-apply the email document:
+
+  ```sql
+  ALTER TABLE `app_ntfy_notifications` ADD KEY `app_ntfy_notifications_email_idx` (`state`, `created_at`, `id`);
+  ```
+
+A host that does not email does nothing.
+
 ## Rolling back
 
 The schema is additive. To remove it, stop running the pruner, hub and handlers,
 then drop `ntfy_notifications` and `ntfy_watermarks`. Nothing else depends on
 them.
+
+To remove only the email schema, stop the email dispatcher, drop
+`ntfy_email_deliveries`, and then drop `ntfy_notifications_email_idx`. That
+index lives on the notifications table, which outlives the email table:
+
+- PostgreSQL and SQLite: `DROP INDEX "app_ntfy_notifications_email_idx";`
+- MySQL: ``DROP INDEX `app_ntfy_notifications_email_idx` ON `app_ntfy_notifications`;``
+
+Rolling the code back while keeping the index is also safe: the older claim
+query ignores it.
