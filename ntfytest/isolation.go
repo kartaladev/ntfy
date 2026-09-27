@@ -136,4 +136,40 @@ func runIsolation(t *testing.T, factory Factory) {
 		assert.JSONEq(t, `{"by":"carol"}`, string(result.Created[1].Data))
 		assert.Equal(t, "/hijacked", result.Created[0].Links["task"], "the mutated copy did change")
 	})
+
+	parallel(t, "a notification read twice is independent between reads", func(t *testing.T) {
+		e := newEnv(t, factory)
+
+		n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
+		n.Links, n.Data = isolationContent()
+		e.insert(false, n)
+
+		first := e.get("alice", n.ID)
+		first.Links["task"] = "/hijacked"
+		first.Data[2] = 'X'
+
+		second := e.get("alice", n.ID)
+		assert.Equal(t, "/v1/tasks/task-1", second.Links["task"], "a later read carries what was stored")
+		assert.JSONEq(t, `{"by":"carol"}`, string(second.Data))
+		assert.Equal(t, "/hijacked", first.Links["task"], "the mutated copy did change")
+	})
+
+	parallel(t, "a listed notification is independent of a read", func(t *testing.T) {
+		e := newEnv(t, factory)
+
+		n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
+		n.Links, n.Data = isolationContent()
+		e.insert(false, n)
+
+		page := e.list(ntfy.ListQuery{Recipient: "alice"})
+		require.Len(t, page.Notifications, 1)
+
+		page.Notifications[0].Links["task"] = "/hijacked"
+		page.Notifications[0].Data[2] = 'X'
+
+		read := e.get("alice", n.ID)
+		assert.Equal(t, "/v1/tasks/task-1", read.Links["task"], "a read carries what was stored")
+		assert.JSONEq(t, `{"by":"carol"}`, string(read.Data))
+		assert.Equal(t, "/hijacked", page.Notifications[0].Links["task"], "the mutated copy did change")
+	})
 }

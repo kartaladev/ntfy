@@ -2,6 +2,7 @@ package ntfy_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"sync"
@@ -100,6 +101,13 @@ func TestServicePublish(t *testing.T) {
 		expect func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster)
 		assert func(t *testing.T, result ntfy.PublishResult, err error, handled []error)
 	}
+
+	// publishedLinks and publishedData belong to the isolation case below: it
+	// mutates them after Publish returns, so the insertion the store was handed
+	// must already be a copy.
+	publishedLinks := map[string]string{"task": "/v1/tasks/task-1"}
+	publishedData := json.RawMessage(`{"by":"carol"}`)
+	published := new([]ntfy.Insertion)
 
 	cases := []testCase{
 		{
@@ -242,6 +250,35 @@ func TestServicePublish(t *testing.T) {
 			assert: func(t *testing.T, result ntfy.PublishResult, err error, _ []error) {
 				assert.ErrorContains(t, err, "connection reset")
 				assert.Len(t, result.Created, 1, "what was written before the failure is reported")
+			},
+		},
+		{
+			name: "a draft mutated after publishing does not change what the store was handed",
+			drafts: []ntfy.Draft{{
+				Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer",
+				Links: publishedLinks, Data: publishedData,
+			}},
+			expect: func(t *testing.T, store *ntfy.MockStore, broadcaster *ntfy.MockBroadcaster) {
+				store.EXPECT().Insert(gomock.Any(), "task-1", gomock.Any()).DoAndReturn(
+					func(_ context.Context, _ string, insertions []ntfy.Insertion) (ntfy.InsertResult, error) {
+						*published = insertions
+
+						return createAll(insertions), nil
+					})
+				broadcaster.EXPECT().Broadcast(gomock.Any(), gomock.Any()).Return(nil)
+			},
+			assert: func(t *testing.T, result ntfy.PublishResult, err error, _ []error) {
+				require.NoError(t, err)
+				require.Len(t, result.Created, 1)
+
+				publishedLinks["task"] = "/hijacked"
+				publishedData[2] = 'X'
+
+				require.Len(t, *published, 1)
+				assert.Equal(t, "/v1/tasks/task-1", (*published)[0].Notification.Links["task"],
+					"the store was handed a copy of the draft's links")
+				assert.JSONEq(t, `{"by":"carol"}`, string((*published)[0].Notification.Data))
+				assert.Equal(t, "/hijacked", publishedLinks["task"], "the caller's own map did change")
 			},
 		},
 	}

@@ -24,6 +24,14 @@ import (
 // holds for other data. Callers are the [Service] and the [Pruner]: requests
 // reach a store already validated, and notifications reach Insert already
 // stamped.
+//
+// A store shares no memory with its caller. It copies what it retains, so that
+// a caller mutating a link map or payload afterwards cannot change what is
+// stored, and what it returns shares nothing with its own state, with the
+// caller's request, or with another notification returned by the same call.
+// [Notification.Clone] is the mechanism, and ntfytest asserts the invariant on
+// every store. A store whose results are decoded afresh from its backing
+// storage satisfies it without copying.
 type Store interface {
 	// Insert publishes notifications that all share one subject, applying, in
 	// the subject's serialised write: watermark suppression, coalescing, and
