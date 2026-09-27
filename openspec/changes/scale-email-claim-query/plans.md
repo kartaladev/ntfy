@@ -483,6 +483,8 @@ Add to the same test, after the empty-pass timings:
 Run: the same command.
 Expected: the second median is materially larger than the first, even though nothing new became claimable. That is threshold 2 failing today, and it is the defect in one number.
 
+**This is part of the stop gate.** If the second median is within noise of the first on every dialect, stop, even if Step 6's plans showed a scan. A scan that costs nothing measurable at this size is not the defect this change claims. Record both medians in `measurements.md` (Step 8) under a heading "Does not reproduce", commit only the measurement file, and report the change as parked. Do not raise the row count until it happens to fail.
+
 - [ ] **Step 8: Write the baseline into the change directory**
 
 Create `openspec/changes/scale-email-claim-query/measurements.md` with: the machine (CPU, RAM, OS, Docker version), the seed shape, the three plans verbatim, the empty-pass medians before and after the extra rows, and the date. Leave an "After" section empty for Task 9.

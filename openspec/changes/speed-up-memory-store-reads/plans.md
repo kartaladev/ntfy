@@ -235,7 +235,19 @@ Run: `GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStore' -benc
 
 Expected: all four benchmarks report, and per-operation cost tracks store size roughly tenfold — the audit measured `CountActive` 4.79 ms, `List` 7.60 ms and `MarkAllRead` 5.26 ms at 200k/2000, and the parallel benchmark achieved about 222 operations per second in total (roughly 4.5 ms/op) across 32 goroutines. Exact figures will differ by machine; the **shape** (200k roughly 10× the cost of 20k) is what matters. Keep the raw output for the next step.
 
-- [ ] **Step 5: Record the evidence**
+- [ ] **Step 5: STOP GATE — decide whether the change proceeds**
+
+This change rests on an unproven claim: an audit's measurement on another machine. If this run does **not** reproduce it, stop here. Do not implement the index.
+
+The claim is refuted if both of these hold:
+- For each of `CountActive`, `List` and `MarkAllRead`, the cost at 200k/2000 is within `design.md` D6's 2× gate of the cost at 20k/200. That means reads do not scale with store size.
+- The parallel benchmark reports thousands of operations per second, not hundreds.
+
+In that case, still write `evidence.md` (next step) with the numbers, under a heading "Does not reproduce". Commit only that file and the benchmark file, and report the change as parked. `.claude/rules/prove-errors-with-tests.md` forbids justifying the change on an unreproduced claim, and a threshold lowered until it fails proves nothing.
+
+If the shape does reproduce, continue.
+
+- [ ] **Step 6: Record the evidence**
 
 Create `openspec/changes/speed-up-memory-store-reads/evidence.md`:
 
@@ -269,12 +281,12 @@ process across all goroutines.
 <filled in by Task 6>
 ```
 
-- [ ] **Step 6: Verify the file builds under both tag states**
+- [ ] **Step 7: Verify the file builds under both tag states**
 
 Run: `GOTOOLCHAIN=go1.26.8 go vet ./... && GOTOOLCHAIN=go1.26.8 go vet -race ./...`
 Expected: both clean. The second proves the `!race` constraint excludes the file rather than breaking the race build.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add memory_bench_test.go openspec/changes/speed-up-memory-store-reads/evidence.md
@@ -663,7 +675,7 @@ func TestMemoryStoreReadsDoNotScaleWithStoreSize(t *testing.T) {
 - [ ] **Step 3: Run the gate to verify it fails on the ratio**
 
 Run: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 -v .`
-Expected: FAIL on all three subtests, with messages of the shape `CountActive cost grew with store size: 480µs at 20k, 4.8ms at 200k (ratio 10.0)`. Confirm the failure is the ratio assertion, not a seeding error. This run takes a few seconds and allocates roughly 150 MB for the two fixtures — expected, and it drops to milliseconds once the index is read.
+Expected: FAIL on all three subtests, with messages of the shape `CountActive cost grew with store size: 480µs at 20k, 4.8ms at 200k (ratio 10.0)`. Confirm the failure is the ratio assertion, not a seeding error. **If the gate passes** against the code as it stands, stop. The cliff does not reproduce on this machine even though Task 1's benchmarks suggested it did. Record both runs in `evidence.md` and report the change as parked rather than continuing. This run takes a few seconds and allocates roughly 150 MB for the two fixtures — expected, and it drops to milliseconds once the index is read.
 
 - [ ] **Step 4: Read `CountActive` through the index**
 
