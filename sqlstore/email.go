@@ -123,7 +123,7 @@ func (s *Store) indexExists(ctx context.Context, table, index string) (bool, err
 // host that emails calls it at startup, alongside [Store.VerifySchema], which
 // does not require the email table.
 func (s *Store) VerifyEmailSchema(ctx context.Context) error {
-	return sqlkit.VerifySchema(s.own(ctx), s.querier, verifyDialect{s.dialect}, s.prefix, emailSchemaExpectation)
+	return s.verify(ctx, emailSchemaExpectation)
 }
 
 // emailTable is the email deliveries table's quoted, prefixed name.

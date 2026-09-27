@@ -193,37 +193,43 @@ func TestVerifySchemaOnSQLite(t *testing.T) {
 }
 
 // TestVerifySchemaRequiresByteExactIdentifiersOnMySQL is separate from
-// runVerifySchema because only MySQL can declare an identifier column whose
-// comparison depends on a collation; the other dialects have no such column to
-// break. The cases do not vary context, so the table has no ctx field.
+// runVerifySchema because only MySQL can declare an identifier column that does
+// not compare byte for byte; the other dialects have no such column to break.
+// The cases do not vary context, so the table has no ctx field.
 func TestVerifySchemaRequiresByteExactIdentifiersOnMySQL(t *testing.T) {
 	t.Parallel()
 
 	executor := stdsqlExecutor(t, openSQL(t, "mysql", sqlkittest.RunTestMySQL(t)), sqlkit.MySQL)
 
 	type testCase struct {
-		name      string
-		collation string
-		assert    func(t *testing.T, store *sqlstore.Store, err error)
+		name   string
+		column string // the recipient column's new definition
+		assert func(t *testing.T, store *sqlstore.Store, err error)
 	}
 
-	reportsTheRecipient := func(collation string) func(t *testing.T, store *sqlstore.Store, err error) {
+	reportsTheRecipient := func(declared string) func(t *testing.T, store *sqlstore.Store, err error) {
 		return func(t *testing.T, store *sqlstore.Store, err error) {
-			assert.Contains(t, issues(t, err),
-				store.Tables()[0]+`.recipient: collation is "`+collation+`" but must be "binary"`)
+			listed := issues(t, err)
+			assert.Contains(t, listed, store.Tables()[0]+`.recipient: type is `+declared+` but must be VARBINARY`)
+			assert.NotContains(t, listed, "case-insensitively", "the issue says what is actually wrong")
 		}
 	}
 
 	cases := []testCase{
 		{
-			name:      "a collation that ignores code points and normalisation is reported",
-			collation: "utf8mb4_0900_as_cs",
-			assert:    reportsTheRecipient("utf8mb4_0900_as_cs"),
+			name:   "a collation that ignores code points and normalisation is reported",
+			column: "VARCHAR(255) COLLATE utf8mb4_0900_as_cs",
+			assert: reportsTheRecipient(`"varchar(255)" collated "utf8mb4_0900_as_cs"`),
 		},
 		{
-			name:      "even a byte-exact collation is reported, since identifiers are binary strings",
-			collation: "utf8mb4_0900_bin",
-			assert:    reportsTheRecipient("utf8mb4_0900_bin"),
+			name:   "even a byte-exact collation is reported, since identifiers are binary strings",
+			column: "VARCHAR(255) COLLATE utf8mb4_0900_bin",
+			assert: reportsTheRecipient(`"varchar(255)" collated "utf8mb4_0900_bin"`),
+		},
+		{
+			name:   "a fixed-width binary string, which pads with NUL, is reported",
+			column: "BINARY(255)",
+			assert: reportsTheRecipient(`"binary(255)"`),
 		},
 	}
 
@@ -232,8 +238,7 @@ func TestVerifySchemaRequiresByteExactIdentifiersOnMySQL(t *testing.T) {
 			t.Parallel()
 
 			store := harness.NewStore(t, executor)
-			exec(t, executor, "ALTER TABLE `"+store.Tables()[0]+"` MODIFY `recipient` VARCHAR(255) COLLATE "+
-				tc.collation+" NOT NULL")
+			exec(t, executor, "ALTER TABLE `"+store.Tables()[0]+"` MODIFY `recipient` "+tc.column+" NOT NULL")
 
 			tc.assert(t, store, store.VerifySchema(t.Context()))
 		})

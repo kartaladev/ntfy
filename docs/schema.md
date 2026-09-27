@@ -111,14 +111,15 @@ nor fails startup over it.
 - **Identifiers compare byte for byte and sort in byte order** on every
   dialect: case, trailing spaces, code points such as U+200B, and the Unicode
   normalisation form all count. On MySQL they are binary strings rather than
-  text under a collation. The server default collation folds case,
-  `utf8mb4_0900_as_cs` ignores U+200B and equates `é` with `e` and a combining
-  accent, and `utf8mb4_bin` ignores trailing spaces; any of them would deliver
-  one recipient's notifications to another. `utf8mb4_0900_bin` would not, but
-  it needs MySQL 8.0.17, and binary strings need nothing newer than the store
-  already does. Their lengths are bytes, as the library's limits are. A
-  locale-aware collation can also sort identifiers so that keyset paging skips
-  or repeats rows.
+  text under a collation. The server default collation folds case;
+  `utf8mb4_0900_as_cs` ignores U+200B and equates a precomposed `é` (U+00E9)
+  with `e` followed by a combining acute accent (U+0301); and `utf8mb4_bin`
+  ignores trailing spaces. Any of them would deliver one recipient's
+  notifications to another. `utf8mb4_0900_bin` would not, but it needs MySQL
+  8.0.17, and binary strings need nothing newer than the store already does.
+  Their lengths are bytes, as the library's limits are. A locale-aware
+  collation can also sort identifiers so that keyset paging skips or repeats
+  rows.
 - **Payloads are text, never a native JSON type.** PostgreSQL's `jsonb` and
   MySQL's `JSON` reorder keys and rewrite number literals, and the store returns a
   payload exactly as it was published.
@@ -208,14 +209,22 @@ MySQL rebuilds each table to change a column's type, and writes to the table
 wait until it finishes. Run it in a maintenance window, or with an online
 schema-change tool.
 
+Each `ALTER TABLE` commits on its own, because MySQL cannot roll a schema change
+back. If one is refused, the tables altered before it stay converted and the
+rest do not: `Store.VerifySchema` or `Store.VerifyEmailSchema` then names what
+is left. Fix the cause and run the statements again. Re-running one that already
+succeeded is harmless: it
+redeclares the columns as they already are.
+
+
 ### Checking before upgrading
 
-The binary columns hold at most as many bytes as the library accepts: 255 for
-an identifier, 100 for a kind. An identifier the library wrote is never longer.
-This query lists any row written around the library that is. MySQL's default
-strict mode refuses the upgrade for such a row and changes nothing; with strict
-mode off it would truncate the identifier, so run this first and fix what it
-finds.
+The binary columns hold at most as many bytes as the library accepts: 64 for
+a notification's identifier, 255 for a recipient, source or subject, 100 for a
+kind. An identifier the library wrote is never longer. These queries list any
+row written around the library that is. Run them first and fix what they find:
+MySQL's default strict mode refuses the `ALTER` for a table holding such a row,
+and with strict mode off it would truncate the identifier instead.
 
 ```sql
 SELECT `id` FROM `app_ntfy_notifications`
@@ -224,6 +233,11 @@ SELECT `id` FROM `app_ntfy_notifications`
 
 SELECT `subject` FROM `app_ntfy_watermarks`
     WHERE LENGTH(`subject`) > 255 OR LENGTH(`kind`) > 100;
+
+-- Only a host that emails has this table.
+SELECT `notification_id` FROM `app_ntfy_email_deliveries`
+    WHERE LENGTH(`notification_id`) > 64 OR LENGTH(`recipient`) > 255 OR LENGTH(`status`) > 16
+       OR LENGTH(`batch_id`) > 64 OR LENGTH(`owner`) > 255;
 ```
 
 ### Upgrading

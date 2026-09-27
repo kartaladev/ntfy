@@ -165,26 +165,9 @@ func TestVerifyEmailSchemaOnSQLite(t *testing.T) {
 	runVerifyEmailSchema(t, stdsqlExecutor(t, db, sqlkit.SQLite))
 }
 
-// documentedStatement reads the SQL statement docs/schema.md gives on the line
-// starting with a keyword, with the documented app_ prefix replaced by the
-// store's.
-func documentedStatement(t *testing.T, keyword, prefix string) string {
-	t.Helper()
-
-	raw, err := os.ReadFile(filepath.Join("..", "docs", "schema.md"))
-	require.NoError(t, err)
-
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, keyword) {
-			return strings.TrimSuffix(strings.ReplaceAll(line, "app_", prefix), ";")
-		}
-	}
-
-	t.Fatalf("docs/schema.md gives no statement starting with %q", keyword)
-
-	return ""
-}
+// mysqlClaimIndexLine is the line of docs/schema.md that introduces the MySQL
+// statement adding the email claim index to an existing host.
+const mysqlClaimIndexLine = "- **MySQL:** run this, and do **not** re-apply the email document:"
 
 // TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex applies the email schema
 // as it stood before the claim index, then the upgrade docs/schema.md gives for
@@ -199,17 +182,19 @@ func TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex(t *testing.T) {
 	dropEmailIndex(t, executor, store, index)
 	require.Error(t, store.VerifyEmailSchema(t.Context()), "an email schema from before the index does not verify")
 
-	exec(t, executor, documentedStatement(t, "ALTER TABLE", prefixOf(store)))
+	for _, statement := range documentedBlock(t, mysqlClaimIndexLine, prefixOf(store)) {
+		exec(t, executor, statement)
+	}
 
 	assert.NoError(t, store.VerifyEmailSchema(t.Context()))
 	assert.NoError(t, store.MigrateEmail(t.Context()), "and the development path stays re-runnable")
 }
 
-// documentedBlock reads the statements of the first fenced sql block under a
-// heading line of docs/schema.md, comment lines dropped and the documented app_
-// prefix replaced by the store's, so that the upgrade a host runs is the one
-// the test ran.
-func documentedBlock(t *testing.T, heading, prefix string) []string {
+// documentedBlock reads the statements of the first fenced sql block after a
+// line of docs/schema.md, such as a heading, with comment lines dropped and the
+// documented app_ prefix replaced by the store's, so that the SQL a host runs is
+// the SQL the test ran.
+func documentedBlock(t *testing.T, line, prefix string) []string {
 	t.Helper()
 
 	raw, err := os.ReadFile(filepath.Join("..", "docs", "schema.md"))
@@ -217,24 +202,25 @@ func documentedBlock(t *testing.T, heading, prefix string) []string {
 
 	document := string(raw)
 
-	start := strings.Index(document, "\n"+heading+"\n")
-	require.GreaterOrEqualf(t, start, 0, "docs/schema.md has the heading %q", heading)
+	start := strings.Index(document, "\n"+line+"\n")
+	require.GreaterOrEqualf(t, start, 0, "docs/schema.md has the line %q", line)
 
 	body := document[start:]
 
 	open := strings.Index(body, "```sql\n")
-	require.GreaterOrEqualf(t, open, 0, "%q is followed by an sql block", heading)
+	require.GreaterOrEqualf(t, open, 0, "%q is followed by an sql block", line)
 
 	body = body[open+len("```sql\n"):]
 
-	end := strings.Index(body, "\n```")
-	require.GreaterOrEqualf(t, end, 0, "the sql block under %q is closed", heading)
+	// The closing fence may be indented, as it is under a list item.
+	end := strings.Index(body, "```")
+	require.GreaterOrEqualf(t, end, 0, "the sql block under %q is closed", line)
 
 	var kept []string
 
-	for line := range strings.SplitSeq(body[:end], "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), "--") {
-			kept = append(kept, line)
+	for sql := range strings.SplitSeq(body[:end], "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(sql), "--") {
+			kept = append(kept, sql)
 		}
 	}
 
@@ -246,7 +232,7 @@ func documentedBlock(t *testing.T, heading, prefix string) []string {
 		}
 	}
 
-	require.NotEmptyf(t, statements, "the sql block under %q holds statements", heading)
+	require.NotEmptyf(t, statements, "the sql block under %q holds statements", line)
 
 	return statements
 }
@@ -275,10 +261,10 @@ func TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes(t *testing.T) {
 	}
 
 	assert.Contains(t, issues(t, store.VerifySchema(t.Context())),
-		prefix+`ntfy_notifications.recipient: collation is "utf8mb4_0900_as_cs" but must be "binary"`,
+		prefix+`ntfy_notifications.recipient: type is "varchar(255)" collated "utf8mb4_0900_as_cs" but must be VARBINARY`,
 		"the old columns fail verification")
 	assert.Contains(t, issues(t, store.VerifyEmailSchema(t.Context())),
-		prefix+`ntfy_email_deliveries.owner: collation is "utf8mb4_0900_as_cs" but must be "binary"`)
+		prefix+`ntfy_email_deliveries.owner: type is "varchar(255)" collated "utf8mb4_0900_as_cs" but must be VARBINARY`)
 
 	for _, check := range documentedBlock(t, "### Checking before upgrading", prefix) {
 		rows, err := db.QueryContext(t.Context(), check)
@@ -301,4 +287,102 @@ func TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes(t *testing.T) {
 	got, err := store.Get(t.Context(), "alice", "n-1")
 	require.NoError(t, err, "the upgrade keeps alice's notification")
 	assert.Equal(t, "alice", got.Recipient)
+}
+
+// TestTheDocumentedMySQLPreCheckFindsOverLongIdentifiers puts a schema back on
+// the old, character-counted columns and plants, in each table, an identifier
+// that fits there but not in its VARBINARY column. The documented pre-check
+// must list every one, so that no ALTER of the upgrade is refused, or with
+// strict mode off truncates, part way through. The cases do not vary context,
+// so the table has no ctx field.
+func TestTheDocumentedMySQLPreCheckFindsOverLongIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	db := openSQL(t, "mysql", sqlkittest.RunTestMySQL(t))
+	executor := stdsqlExecutor(t, db, sqlkit.MySQL)
+
+	// 200 characters fit VARCHAR(255); their 400 bytes do not fit VARBINARY(255).
+	long := strings.Repeat("\u00e9", 200)
+
+	type testCase struct {
+		name   string
+		plant  func(t *testing.T, prefix string) string // returns the key the pre-check lists
+		assert func(t *testing.T, key string, found []string)
+	}
+
+	listed := func(t *testing.T, key string, found []string) {
+		assert.Contains(t, found, key, "the pre-check lists the row the upgrade would refuse")
+	}
+
+	cases := []testCase{
+		{
+			name: "a notification's recipient",
+			plant: func(t *testing.T, prefix string) string {
+				_, err := db.ExecContext(t.Context(), "INSERT INTO `"+prefix+"ntfy_notifications` "+
+					"(`id`, `recipient`, `source_id`, `subject`, `subject_version`, `kind`, `state`, `created_at`) "+
+					"VALUES ('n-long', ?, 'event-1', 'task-1', 1, 'offer', 'ACTIVE', NOW(6))", long)
+				require.NoError(t, err)
+
+				return "n-long"
+			},
+			assert: listed,
+		},
+		{
+			name: "a close record's subject",
+			plant: func(t *testing.T, prefix string) string {
+				_, err := db.ExecContext(t.Context(), "INSERT INTO `"+prefix+"ntfy_watermarks` "+
+					"(`subject`, `kind`, `version`, `updated_at`) VALUES (?, '*', 1, NOW(6))", long)
+				require.NoError(t, err)
+
+				return long
+			},
+			assert: listed,
+		},
+		{
+			name: "an email delivery's owner",
+			plant: func(t *testing.T, prefix string) string {
+				_, err := db.ExecContext(t.Context(), "INSERT INTO `"+prefix+"ntfy_email_deliveries` "+
+					"(`notification_id`, `recipient`, `status`, `owner`, `attempts`, `updated_at`) "+
+					"VALUES ('n-long', 'alice', 'SENDING', ?, 0, NOW(6))", long)
+				require.NoError(t, err)
+
+				return "n-long"
+			},
+			assert: listed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := harness.NewEmailStore(t, executor)
+			prefix := prefixOf(store)
+
+			for _, statement := range documentedBlock(t, "### Rolling the upgrade back", prefix) {
+				exec(t, executor, statement)
+			}
+
+			key := tc.plant(t, prefix)
+
+			var found []string
+
+			for _, check := range documentedBlock(t, "### Checking before upgrading", prefix) {
+				rows, err := db.QueryContext(t.Context(), check)
+				require.NoErrorf(t, err, "run the documented pre-check %q", check)
+
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+
+					found = append(found, value)
+				}
+
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+			}
+
+			tc.assert(t, key, found)
+		})
+	}
 }
