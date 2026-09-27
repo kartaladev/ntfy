@@ -577,6 +577,150 @@ Expected: `Change 'stop-store-aliasing-caller-data' is valid`, and every scenari
 
 ---
 
+### Task 5: Close the gaps code review found
+
+Tasks 1–3 as written leave four gaps, found in review after they were executed. This task is the final shape of `ntfytest/isolation.go`; where it differs from the code blocks in Tasks 1–3, **this task wins**.
+
+**Files:**
+- Modify: `ntfytest/isolation.go`
+- Modify: `store.go` (`SuccessorInsertions` godoc)
+
+**Interfaces:**
+- Consumes: the `env` helpers, plus `(*env).markRead(recipient string, when time.Time, ids ...string) ntfy.MarkResult` and `sameInstant(t *testing.T, want time.Time, got *time.Time, what string)` from `ntfytest/suite.go`.
+- Produces (package-private): `func hijack(t *testing.T, links map[string]string, data json.RawMessage)`, `func hijacked(t *testing.T, links map[string]string, data json.RawMessage)`, `func intact(t *testing.T, what string, links map[string]string, data json.RawMessage)`.
+
+The gaps:
+
+1. **A store's own copy was never compared with what it returned.** A `MemoryStore.insert` changed to `c := n.Clone(); s.put(c); result.Created = append(result.Created, c)` passed every case. So the `Store` godoc's "shares nothing with its own state" went unasserted, and "Successors to different recipients are independent" never re-read alice's successor, which the spec requires.
+2. **Mutating a missing map or a short payload panicked**, which aborts a host's whole test binary rather than failing a case.
+3. **Only the first case checked that the `Data` mutation took effect** (design D2 and task 4.2 ask for every case).
+4. **The two read-path cases were copies differing in their first read**, not a table (task 4.1, and the `table-test` skill).
+
+- [x] **Step 1: Route every mutation through `hijack`, `hijacked` and `intact`**
+
+`hijack` requires links and at least three payload bytes before it writes, so a store that drops content fails with a message. `hijacked` asserts both mutations landed. `intact` asserts both the links and the payload are unchanged:
+
+```go
+func hijack(t *testing.T, links map[string]string, data json.RawMessage) {
+	t.Helper()
+
+	require.NotNil(t, links, "the notification carries its links")
+	require.GreaterOrEqual(t, len(data), 3, "the notification carries its payload")
+
+	links["task"] = "/hijacked"
+	data[2] = 'X'
+}
+
+func hijacked(t *testing.T, links map[string]string, data json.RawMessage) {
+	t.Helper()
+
+	assert.Equal(t, "/hijacked", links["task"], "the mutated links did change")
+	assert.JSONEq(t, `{"Xy":"carol"}`, string(data), "the mutated payload did change")
+}
+
+func intact(t *testing.T, what string, links map[string]string, data json.RawMessage) {
+	t.Helper()
+
+	assert.Equal(t, "/v1/tasks/task-1", links["task"], "%s keeps its links", what)
+	assert.JSONEq(t, `{"by":"carol"}`, string(data), "%s keeps its payload", what)
+}
+```
+
+- [x] **Step 2: Re-read what the store keeps after mutating what it reported**
+
+In "successors to different recipients are independent", after `hijack(t, alice.Links, alice.Data)`, also assert alice's stored successor:
+
+```go
+		storedAlice := e.get("alice", alice.ID)
+		intact(t, "alice's stored successor", storedAlice.Links, storedAlice.Data)
+```
+
+Rename the Insert sibling case to "a reported notification is independent of the store and of its siblings" and, after mutating `result.Created[0]`, assert the stored copy:
+
+```go
+		stored := e.get(first.Recipient, first.ID)
+		intact(t, "the stored copy of the mutated notification", stored.Links, stored.Data)
+```
+
+- [x] **Step 3: Fold the read paths into one table, and cover the read-at pointer**
+
+```go
+	type readCase struct {
+		name string
+		// read is the first read, whose result the case mutates.
+		read func(t *testing.T, e *env, n ntfy.Notification) ntfy.Notification
+	}
+
+	reads := []readCase{
+		{
+			name: "a notification read twice is independent between reads",
+			read: func(_ *testing.T, e *env, n ntfy.Notification) ntfy.Notification {
+				return e.get(n.Recipient, n.ID)
+			},
+		},
+		{
+			name: "a listed notification is independent of a read",
+			read: func(t *testing.T, e *env, n ntfy.Notification) ntfy.Notification {
+				page := e.list(ntfy.ListQuery{Recipient: n.Recipient})
+				require.Len(t, page.Notifications, 1)
+
+				return page.Notifications[0]
+			},
+		},
+	}
+
+	for _, rc := range reads {
+		parallel(t, rc.name, func(t *testing.T) {
+			e := newEnv(t, factory)
+
+			n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
+			n.Links, n.Data = isolationContent()
+			e.insert(false, n)
+			e.markRead("alice", at(1), n.ID)
+
+			first := rc.read(t, e, n)
+			hijack(t, first.Links, first.Data)
+			require.NotNil(t, first.ReadAt, "a read notification carries when it was read")
+			*first.ReadAt = at(99)
+
+			second := e.get("alice", n.ID)
+			intact(t, "a later read", second.Links, second.Data)
+			sameInstant(t, at(1), second.ReadAt, "a later read's read-at")
+
+			hijacked(t, first.Links, first.Data)
+		})
+	}
+```
+
+- [x] **Step 4: Prove each new assertion against a store that breaks it**
+
+Change `memory.go`'s insert to store and return one clone (`c := n.Clone(); s.put(c); result.Created = append(result.Created, c)`) and run:
+
+Run: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreConformance/isolation' -count=1 -v .`
+Expected: FAIL on "successors to different recipients are independent" (`alice's stored successor keeps its links`) and "a reported notification is independent of the store and of its siblings" (`the stored copy of the mutated notification keeps its links`). Restore with `git checkout -- memory.go`.
+
+Change `memory.go`'s `Get` to `c := n.Clone(); c.ReadAt = n.ReadAt; return c, nil` and re-run.
+Expected: FAIL on "a notification read twice is independent between reads" with `a later read's read-at is 2026-03-01 09:00:01 +0000 UTC, got 2026-03-01 09:01:39 +0000 UTC`. Restore with `git checkout -- memory.go`.
+
+- [x] **Step 5: Reword the `SuccessorInsertions` godoc**
+
+"so a store may keep what it is given. A store must not rely on that" contradicted itself. Replace it with:
+
+```go
+// Every insertion it returns shares no links or payload with the request or
+// with the other insertions. A store still copies what it retains, as [Store]
+// requires: its insert path has other callers, which make no such promise.
+```
+
+- [x] **Step 6: Re-run the gate and the matrix**
+
+Run: `make all && make store-matrix`
+Expected: `0 issues.` for all six modules, and every test and matrix entry `ok`.
+
+Not changed, with reasons: extra clones on the close and publish paths (a performance claim with no measurement, and the design chose defensive clones deliberately), and reading a published notification back from a real store (the `TestServicePublish` row pins `Publish`'s clone, and the insertion case pins every store's).
+
+---
+
 ## Plan self-review
 
 **Spec coverage.** All five scenarios in `specs/notification-inbox/spec.md` map to a step: "Mutating a published payload does not change what is stored" → Task 3 Step 4; "Mutating a close request does not change its successors" → Task 1 Step 1 (first case); "Successors to different recipients are independent" → Task 1 Step 1 (second case); "A returned notification is independent of the store" → Task 3 Step 1 (both cases); "Every store is held to this" → Task 4 Step 3.
