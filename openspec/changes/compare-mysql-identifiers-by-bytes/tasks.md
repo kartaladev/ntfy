@@ -79,3 +79,16 @@
   - the `sqlkittest` MySQL fixtures move to `VARBINARY`.
 
   Filing it is the maintainer's call. Verify that the text is in the plan's execution record.
+
+## 7. Answer the code review
+
+> Added 2026-09-28, from the `/code-review high` findings. Each was checked against the code before being accepted. The maintainer chose to fix #2 and #6 in this change rather than defer them.
+
+- [x] 7.1 (#6) Refuse an identifier the ID generator mints if it is empty or longer than a new `MaxIDBytes` = 64, with a `ConfigurationError`, before anything is written. This covers publish, close successors and email batch identifiers, all of which mint through the service. Verify with `go test -run 'TestServiceRefusesIdentifiersNoStoreCanHold' -count=1 .`: red first on the over-long and empty cases, then green, and `go test -race ./...` in the root.
+- [x] 7.2 (#2, #3, #8) On MySQL, make `VerifySchema` and `VerifyEmailSchema` require every identifier column's type to be `VARBINARY`, with sqlstore's own `information_schema` query. sqlkit is asked nothing about those columns' collation, and the `verifyDialect` wrapper is deleted. Both methods go through one `Store.verify`. The issue names the column's declared type and collation, never "case-insensitively". Verify with `cd sqlstore && go test -run 'TestVerifySchemaRequiresByteExactIdentifiersOnMySQL' -count=1 .`: red first on a `BINARY(255)` row and on the wording, then green. Both documented-upgrade tests must also pass with the new wording.
+- [x] 7.3 (#1) Add `ntfy_email_deliveries` to the documented pre-check, and say that the upgrade's statements commit one at a time, so a refusal can leave earlier tables converted. Verify with a new `TestTheDocumentedMySQLPreCheckFindsOverLongIdentifiers`: red while the pre-check skips the email table, then green.
+- [x] 7.4 (#4) Add a folding store that normalises NFD to NFC. Make each "rejected" row require an `identity/` row to have failed in the child's output, so a child failing for an unrelated reason no longer counts. Verify with `cd ntfytest && go test -run 'TestIdentityRejectsFoldingStores' -count=1 .`: red first on the normalising store, then green.
+- [x] 7.5 (#5) Extend the identity group to filter by the byte-different identifier: list by subject, close by subject and by kind, `Except`, `SuccessorSkip` and `MarkAllRead`. Add a test store that folds only those arguments. Verify that `TestIdentityRejectsFoldingStores` rejects it: red before the extension, green after.
+- [x] 7.6 (#7) Replace `documentedStatement` with `documentedBlock`, keyed by the claim-index section's MySQL line. Verify that `TestTheDocumentedMySQLUpgrade` passes (a refactor under green).
+- [x] 7.7 (#9) Correct `docs/schema.md`: precomposed `é` equals `e` followed by U+0301; `é` does not equal `e`. Verify by re-reading.
+- [ ] 7.8 Update the sqlkit issue text in `plans.md` so it asks for a type check and the reworded issue. Then run `make all`, `make store-matrix` and `make sqlkit-copy-check`, and record the results.

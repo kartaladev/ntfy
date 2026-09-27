@@ -18,8 +18,8 @@ import (
 	"github.com/kartaladev/ntfy/ntfytest"
 )
 
-// identityChildEnv names the fold a child process applies, and marks a process
-// as a child.
+// identityChildEnv names the fold a child process applies and where, as
+// "<fold>/<scope>", and marks a process as a child.
 const identityChildEnv = "NTFYTEST_IDENTITY_CHILD"
 
 // folds are the ways a store can merge identifiers that differ in their bytes.
@@ -27,13 +27,28 @@ var folds = map[string]func(string) string{
 	"lower-casing":                strings.ToLower,
 	"trimming trailing spaces":    func(s string) string { return strings.TrimRight(s, " ") },
 	"stripping zero-width spaces": func(s string) string { return strings.ReplaceAll(s, "\u200b", "") },
+	// The one canonical composition the suite's variants use, which is what a
+	// collation equating NFC with NFD does to them.
+	"normalising to NFC": func(s string) string { return strings.ReplaceAll(s, "e\u0301", "\u00e9") },
 }
 
-// foldingStore is a memory store that folds every identifier it is given, the
-// way a database column with the wrong collation compares them.
+// The scopes a fold is applied in.
+const (
+	// everywhere folds every identifier the store is given.
+	everywhere = "everywhere"
+	// filtersOnly folds only what a store is asked to match against, and stores
+	// what it is given as it is: the subject and kind filters of a listing, a
+	// close's subject, kinds, exception and successor skips, and mark-all-read's
+	// recipient.
+	filtersOnly = "filters only"
+)
+
+// foldingStore is a memory store that folds identifiers, the way a database
+// column with the wrong collation compares them.
 type foldingStore struct {
 	ntfy.Store
-	fold func(string) string
+	fold        func(string) string
+	filtersOnly bool
 }
 
 func (s foldingStore) all(values []string) []string {
@@ -45,15 +60,26 @@ func (s foldingStore) all(values []string) []string {
 	return out
 }
 
+// stored folds an identifier the store keeps or looks up by key, which a
+// filters-only store leaves alone.
+func (s foldingStore) stored(value string) string {
+	if s.filtersOnly {
+		return value
+	}
+
+	return s.fold(value)
+}
+
 func (s foldingStore) Insert(ctx context.Context, subject string, in []ntfy.Insertion) (ntfy.InsertResult, error) {
 	out := make([]ntfy.Insertion, len(in))
 	for i, insertion := range in {
 		n := &insertion.Notification
-		n.Recipient, n.SourceID, n.Subject, n.Kind = s.fold(n.Recipient), s.fold(n.SourceID), s.fold(n.Subject), s.fold(n.Kind)
+		n.Recipient, n.SourceID = s.stored(n.Recipient), s.stored(n.SourceID)
+		n.Subject, n.Kind = s.stored(n.Subject), s.stored(n.Kind)
 		out[i] = insertion
 	}
 
-	return s.Store.Insert(ctx, s.fold(subject), out)
+	return s.Store.Insert(ctx, s.stored(subject), out)
 }
 
 func (s foldingStore) Close(ctx context.Context, req ntfy.CloseRequest, at time.Time, ids ntfy.IDGenerator) (ntfy.CloseResult, error) {
@@ -64,21 +90,21 @@ func (s foldingStore) Close(ctx context.Context, req ntfy.CloseRequest, at time.
 }
 
 func (s foldingStore) Get(ctx context.Context, recipient, id string) (ntfy.Notification, error) {
-	return s.Store.Get(ctx, s.fold(recipient), id)
+	return s.Store.Get(ctx, s.stored(recipient), id)
 }
 
 func (s foldingStore) List(ctx context.Context, q ntfy.ListQuery) (ntfy.Page, error) {
-	q.Recipient, q.Subject, q.Kinds = s.fold(q.Recipient), s.fold(q.Subject), s.all(q.Kinds)
+	q.Recipient, q.Subject, q.Kinds = s.stored(q.Recipient), s.fold(q.Subject), s.all(q.Kinds)
 
 	return s.Store.List(ctx, q)
 }
 
 func (s foldingStore) CountActive(ctx context.Context, recipient string) (int64, error) {
-	return s.Store.CountActive(ctx, s.fold(recipient))
+	return s.Store.CountActive(ctx, s.stored(recipient))
 }
 
 func (s foldingStore) MarkRead(ctx context.Context, recipient string, ids []string, at time.Time) (ntfy.MarkResult, error) {
-	return s.Store.MarkRead(ctx, s.fold(recipient), ids, at)
+	return s.Store.MarkRead(ctx, s.stored(recipient), ids, at)
 }
 
 func (s foldingStore) MarkAllRead(ctx context.Context, recipient string, through, at time.Time) (ntfy.MarkResult, error) {
@@ -93,9 +119,11 @@ func TestIdentityChild(t *testing.T) {
 		t.Skip("runs only as a child of TestIdentityRejectsFoldingStores")
 	}
 
+	name, scope, _ := strings.Cut(mode, "/")
+
 	ntfytest.Run(t, func(*testing.T) ntfy.Store {
-		if fold, folding := folds[mode]; folding {
-			return foldingStore{Store: ntfy.NewMemoryStore(), fold: fold}
+		if fold, folding := folds[name]; folding {
+			return foldingStore{Store: ntfy.NewMemoryStore(), fold: fold, filtersOnly: scope == filtersOnly}
 		}
 
 		return ntfy.NewMemoryStore()
@@ -115,8 +143,8 @@ func runIdentityChild(t *testing.T, mode string) (passed bool, output string) {
 }
 
 // TestIdentityRejectsFoldingStores proves the identity group fails a store that
-// merges identifiers, and passes one that does not. The cases do not vary
-// context, so the table has no ctx field.
+// merges identifiers, wherever it merges them, and passes one that does not.
+// The cases do not vary context, so the table has no ctx field.
 func TestIdentityRejectsFoldingStores(t *testing.T) {
 	t.Parallel()
 
@@ -126,8 +154,12 @@ func TestIdentityRejectsFoldingStores(t *testing.T) {
 		assert func(t *testing.T, passed bool, output string)
 	}
 
+	// rejected requires an identity case itself to have failed, so that a child
+	// failing for any other reason, such as a panic, is not taken for one.
 	rejected := func(t *testing.T, passed bool, output string) {
 		assert.Falsef(t, passed, "ntfytest.Run accepted a store that folds identifiers:\n%s", output)
+		assert.Containsf(t, output, "--- FAIL: TestIdentityChild/identity/",
+			"an identity case, not something else, rejected the store:\n%s", output)
 	}
 
 	cases := []testCase{
@@ -142,8 +174,12 @@ func TestIdentityRejectsFoldingStores(t *testing.T) {
 		},
 	}
 
-	for mode := range folds {
-		cases = append(cases, testCase{name: "a store " + mode + " fails", mode: mode, assert: rejected})
+	for name := range folds {
+		for _, scope := range []string{everywhere, filtersOnly} {
+			cases = append(cases, testCase{
+				name: "a store " + name + " " + scope + " fails", mode: name + "/" + scope, assert: rejected,
+			})
+		}
 	}
 
 	for _, tc := range cases {

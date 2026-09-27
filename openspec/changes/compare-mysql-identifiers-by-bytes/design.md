@@ -61,43 +61,42 @@ Observed on MySQL 8.4.6 on 2026-09-28, with a throwaway probe test:
 
 **Default:** MySQL identifier columns are `VARBINARY`. **Override:** none. Byte identity is a guarantee the library makes across stores (rule 4: stated, not silently relaxed). A host that wants case-insensitive recipients normalises the recipient before it reaches ntfy (rule 5). Needing no newer server is what makes a no-override default acceptable under rule 1.
 
-### D2. Verification expects binary columns, through an override in sqlstore
+### D2. Verification checks MySQL identifier columns' type, in sqlstore
 
-sqlkit's check accepts a column that reports no collation, and flags one whose collation differs from `IdentifierCollation()`. So verification needs an expected value that no character-set collation can equal.
+> **Revised after code review.** The first version overrode the collation sqlkit expects on MySQL (`verifyDialect`, returning `binary`). The review showed two problems with it:
+> - sqlkit accepts any column that reports no collation, so `BINARY(n)` and `BLOB` passed. `BINARY` pads with NUL, so a stored identifier stops matching the one it was stored as.
+> - sqlkit's issue text says "or identifiers will compare case-insensitively", which is wrong for these columns.
+>
+> The maintainer chose to fix both here rather than wait for sqlkit.
 
-sqlstore passes `sqlkit.VerifySchema` a wrapper whose MySQL answer is `binary`, the name MySQL gives the binary character set's collation:
+On MySQL, `Store.verify` splits the work in two:
 
-```go
-// verifyDialect is the dialect schema verification checks against. On MySQL
-// it expects binary identifier columns, which report no collation, so any
-// character-set collation is named; the vendored sqlkit still expects
-// utf8mb4_0900_as_cs. It goes once sqlkit's MySQL dialect expects binary
-// identifier columns itself.
-type verifyDialect struct{ sqlkit.Dialect }
+1. **sqlkit checks everything except identifier collation.** It is handed a copy of the expectation with `IdentifierColumns` cleared: tables, columns and indexes, as before.
+2. **sqlstore checks identifier columns' type.** It reads `DATA_TYPE`, `COLUMN_TYPE` and `COLLATION_NAME` from `information_schema.COLUMNS` for the expected tables. It reports each present identifier column whose `DATA_TYPE` is not `varbinary` as `type is "varchar(255)" collated "utf8mb4_0900_as_cs" but must be VARBINARY, or identifiers will not compare byte for byte`.
 
-func (d verifyDialect) IdentifierCollation() string {
-	if d.Name() == sqlkit.MySQL.Name() {
-		return mysqlIdentifierCollation // "binary"
-	}
+Both lists are merged into one `*sqlkit.SchemaError`, so startup still reports every discrepancy at once. A missing table or column is left to sqlkit, so nothing is reported twice. PostgreSQL and SQLite go straight to sqlkit, unchanged.
 
-	return d.Dialect.IdentifierCollation()
-}
-```
-
-- A `VARBINARY` column reports NULL. sqlkit reads that as `""` and accepts it.
-- A `VARCHAR` column under any collation (`utf8mb4_0900_as_cs`, `utf8mb4_bin`, even `utf8mb4_0900_bin`) is reported as `collation is "<c>" but must be "binary"`.
-
-The wrapper is used only at the two `VerifySchema` call sites. The store's statements keep the executor's dialect.
+`VerifySchema` and `VerifyEmailSchema` both call `verify`, so no future verification call can bypass the check (code-review finding #8).
 
 *Alternatives considered:*
 
-- **Fix sqlkit first.** That blocks a cross-user data leak on another repository. Rejected by the maintainer in favour of landing now plus a follow-up.
-- **Stop verifying MySQL identifiers.** Rejected. Rule 6: a wrong schema should fail at startup, not in traffic.
-- **Check `DATA_TYPE` = `varbinary`.** That is more direct, but sqlkit's query does not read `DATA_TYPE`, and duplicating its introspection in sqlstore would fork sqlkit's job. Deferred to the upstream fix.
+- **The collation override (the first version).** Rejected after review, for the two reasons above.
+- **Fix sqlkit first.** That would block a cross-user data leak on another repository.
+- **Stop verifying MySQL identifiers.** Rule 6: a wrong schema should fail at startup.
 
-*Known wart:* sqlkit's issue text ends "or identifiers will compare case-insensitively", which is inaccurate for these columns. It still names the right column and says `must be "binary"`, which is what an operator acts on. The rewording belongs upstream.
+*Tripwire:* `TestSQLKitStillExpectsTheOldMySQLCollation` asserts that the vendored sqlkit still expects `utf8mb4_0900_as_cs`. When a refreshed copy changes, it fails. The reader then checks whether sqlkit now verifies MySQL identifier columns as binary strings, and if so hands the job back to it.
 
-**Default:** verification requires binary identifier columns on MySQL; PostgreSQL and SQLite are unchanged. **Override:** none, as today. A host that skips `VerifySchema` skips it for everything.
+**Default:** verification requires `VARBINARY` identifier columns on MySQL; PostgreSQL and SQLite are unchanged. **Override:** none, as today. A host that skips `VerifySchema` skips it for everything.
+
+### D2a. Identifiers minted by an ID generator are bounded
+
+> **Added after code review (#6).** `id` and `batch_id` became `VARBINARY(64)`, a byte length. Before, they were `VARCHAR(64)`, which counts characters. Nothing validated an ID's length, so a host generator minting long non-ASCII IDs would be refused by MySQL in strict mode, or truncated without it. Truncated IDs could collide.
+
+The service wraps whatever generator it is given in `boundedIDs`. An identifier that is empty or longer than `MaxIDBytes` (64, beside `MaxIdentifierBytes` and `MaxKindBytes`) fails the write that asked for it with a `ConfigurationError`, before anything is stored. It fails the same way on every store. Every identifier the library mints goes through the service's generator: publish, close successors, email batches and the dispatcher's owner.
+
+The check runs per identifier. It does not probe once at construction, because minting an identifier just to look at it would spend a value of a host generator backed by a sequence. This is the stated exception to rule 6.
+
+**Default:** UUIDv7, 36 bytes, always within the bound. **Override:** `WithIDGenerator`, held to 1–`MaxIDBytes` bytes.
 
 ### D3. The upgrade is a documented `ALTER TABLE ... MODIFY`, proved by a test
 
@@ -143,7 +142,7 @@ A test proves both blocks, in the pattern of `TestTheDocumentedMySQLUpgradeAddsT
 
 ### D5. Email-table identifier columns become binary too
 
-`notification_id` (64), `recipient` (255), `status` (16), `batch_id` (64) and `owner` (255) become `VARBINARY`, and `VerifyEmailSchema` requires it through the same wrapper.
+`notification_id` (64), `recipient` (255), `status` (16), `batch_id` (64) and `owner` (255) become `VARBINARY`, and `VerifyEmailSchema` requires it through the same type check (D2).
 
 - `owner` is compared by the lease check (`RecordEmails`, `sqlstore/email.go:498`). Owner strings that differ only by an ignorable code point would otherwise share a lease.
 - The others move so that "identifier column" means one thing in every table.
@@ -159,7 +158,7 @@ A test proves both blocks, in the pattern of `TestTheDocumentedMySQLUpgradeAddsT
 - **[A unique key collides during the upgrade]** → It cannot. Rows distinct under `0900_as_cs` stay distinct under byte comparison, which only splits values the old collation merged. The upgrade test runs against a table with rows.
 - **[Existing keyset cursors move across the upgrade]** → Page order is `(created_at, id)`. Default UUIDv7 identifiers are lowercase hex and hyphens, which order the same under both. A custom `IDGenerator` producing mixed-case identifiers could see one page repeat or skip an item across the upgrade. The docs say so.
 - **[Invalid UTF-8 is now storable on MySQL]** → It already was on memory and SQLite, and finding 10's change validates it on every store. The proposal names the dependency.
-- **[The override outlives its reason]** → `TestSQLKitStillExpectsTheOldMySQLCollation` asserts that the vendored sqlkit still expects `utf8mb4_0900_as_cs`. A refreshed copy with the upstream fix fails it, and the failure says to delete the wrapper.
+- **[The type check outlives its reason]** → `TestSQLKitStillExpectsTheOldMySQLCollation` fails when a refreshed sqlkit changes its MySQL expectation, and its message says to revisit `Store.verify` (D2).
 - **[A host's own store folds identifiers on purpose]** → It now fails `ntfytest.Run`. That is the point (D4).
 
 ## Migration Plan

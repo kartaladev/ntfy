@@ -7,7 +7,7 @@
 **Architecture:**
 - The MySQL DDL changes every identifier column from `VARCHAR(n) COLLATE utf8mb4_0900_as_cs` to `VARBINARY(n)`: binary strings, compared and sorted by bytes on every MySQL the library supports, with no newer server needed. Lengths become bytes, matching the core's `MaxIdentifierBytes` (255) and `MaxKindBytes` (100).
 - A new `identity` conformance group in `ntfytest` fails any store that folds case, pads, strips ignorable code points or normalises.
-- `pkg/sqlkit` is a vendored copy that must not be edited, so sqlstore hands `sqlkit.VerifySchema` a small `verifyDialect` wrapper. The wrapper expects the collation `binary` on MySQL only. A binary column reports no collation, which sqlkit accepts. Any character-set column reports one, which is then named.
+- `pkg/sqlkit` is a vendored copy that must not be edited, so sqlstore hands `sqlkit.VerifySchema` a small `verifyDialect` wrapper. The wrapper expects the collation `binary` on MySQL only. A binary column reports no collation, which sqlkit accepts. Any character-set column reports one, which is then named. **Superseded by Task 6:** the wrapper still let `BINARY(n)` through and kept sqlkit's misleading wording, so `Store.verify` now checks MySQL identifier columns' type itself, and the wrapper is deleted.
 
 > **Revised 2026-09-28, during Task 1:** the first version of this plan used `utf8mb4_0900_bin`, which needs MySQL 8.0.17. The maintainer ruled that a library cannot make its hosts upgrade their database, so this revision uses `VARBINARY` (`design.md` D1). Steps 1–4 were done before the revision and are unchanged; everything after them is revised.
 - Existing MySQL hosts get a documented `ALTER TABLE` upgrade. A test reads that SQL from the doc and applies it.
@@ -73,6 +73,7 @@
 | Task 3: the documented upgrade | 4.1, 4.2 |
 | Task 4: documentation of the guarantee | 5.1, 5.2 |
 | Task 5: verify and hand off | 6.1, 6.2 |
+| Task 6: answer the code review | 7.1–7.8 |
 
 Task 1 gathers eight `tasks.md` items into one commit, because none of them can land green alone:
 - The new DDL fails the existing `TestVerifySchemaOnMySQL` until `verifyDialect` exists.
@@ -1233,17 +1234,21 @@ VARBINARY (binary strings: byte comparison, no padding, no collation), rather
 than utf8mb4_0900_bin, which needs 8.0.17.
 
 Asked for:
-1. The MySQL dialect expects binary identifier columns. Either
-   `IdentifierCollation()` returns `binary` and verification keeps accepting
-   the NULL collation a VARBINARY column reports, or verification checks
-   `DATA_TYPE` for `varbinary` directly.
-2. `columnIssues`' detail says identifiers "will not compare byte for byte",
-   rather than "will compare case-insensitively".
+1. MySQL identifier columns are checked by type: `DATA_TYPE` must be
+   `varbinary`. Checking collation cannot do it. A binary string reports no
+   collation, and today any column reporting none passes, including `BINARY(n)`,
+   which pads with NUL so a stored identifier stops matching, and `BLOB`.
+2. The issue for a wrong identifier column names its declared type and
+   collation, and says identifiers "will not compare byte for byte" rather than
+   "will compare case-insensitively", which is wrong for every case-sensitive
+   collation.
 3. The `sqlkittest` MySQL fixtures declare identifier columns VARBINARY.
 
-Once released and copied into ntfy's `pkg/sqlkit`, ntfy deletes
-`verifyDialect` and `TestSQLKitStillExpectsTheOldMySQLCollation`; the tripwire
-fails first.
+ntfy carries this today as `Store.verify` in `sqlstore/verify.go`. It asks
+sqlkit nothing about MySQL identifier collation, and reads the columns' types
+itself. Once a sqlkit release with the above is copied into ntfy's
+`pkg/sqlkit`, ntfy hands the check back and deletes its own; the tripwire
+`TestSQLKitStillExpectsTheOldMySQLCollation` fails first.
 ```
 
 - [x] **Step 3: Tick `tasks.md` and commit**
@@ -1259,6 +1264,957 @@ Claude-Session: https://claude.ai/code/session_01RJafobH6gZay9kpSiSAS6A"
 ```
 
 Then continue with `.claude/rules/development-workflow.md` step 5: `/code-review`, then `/opsx:archive compare-mysql-identifiers-by-bytes`.
+
+### Task 6: Answer the code review (tasks 7.1–7.8)
+
+> Added 2026-09-28, after `/code-review high` returned nine findings. Each was checked against the code before being accepted (`superpowers:receiving-code-review`). The maintainer chose to fix #2 (column types) and #6 (identifier length) here rather than defer them. #8 is resolved by #2's design. #3 is resolved for MySQL by #2, with the rest going to the sqlkit issue.
+
+**Files:**
+- Create: `sqlstore/verify.go`
+- Modify: `id.go`, `notification.go`, `service.go`, `service_test.go`, `sqlstore/store.go`, `sqlstore/email.go`, `sqlstore/verify_test.go`, `sqlstore/verify_internal_test.go`, `sqlstore/email_verify_test.go`, `ntfytest/identity.go`, `ntfytest/identity_test.go`, `docs/schema.md`
+- Delete: `verifyDialect` and `TestVerifyDialect` (from Task 1), and `documentedStatement`
+
+**Interfaces:**
+- Produces:
+  - `ntfy.MaxIDBytes = 64`;
+  - unexported `boundedIDs struct{ IDGenerator }`, which the service wraps around every generator;
+  - `func (s *Store) verify(ctx context.Context, expectation sqlkit.SchemaExpectation) error`, which both verification methods call;
+  - `const mysqlIdentifierType = "varbinary"`;
+  - `func documentedBlock(t *testing.T, line, prefix string) []string`, keyed by any line of `docs/schema.md`;
+  - `const mysqlClaimIndexLine`.
+- Consumes: `sqlkit.NewWriter`, `(*sqlkit.Writer).Write/BindAll/Done`, `sqlkit.Querier.QueryStatement`, `sqlkit.DecodeString`, `sqlkit.SchemaError`, `sqlkit.SchemaIssue`.
+
+- [x] **Step 1: Prove an over-long or empty generated identifier is accepted (7.1, red)**
+
+Append to `service_test.go`, adding `"strings"` to its imports:
+
+```go
+// TestServiceRefusesIdentifiersNoStoreCanHold holds a host's IDGenerator to
+// what every store can hold: an identifier of 1 to MaxIDBytes bytes. The cases
+// do not vary context, so the table has no ctx field.
+func TestServiceRefusesIdentifiersNoStoreCanHold(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		id     string
+		seeded bool // alice already has a notification on task-1, minted soundly
+		act    func(t *testing.T, svc *ntfy.Service) error
+		assert func(t *testing.T, store ntfy.Store, err error)
+	}
+
+	publish := func(t *testing.T, svc *ntfy.Service) error {
+		_, err := svc.Publish(t.Context(), ntfy.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer"})
+
+		return err
+	}
+
+	// closeWithSuccessor closes task-1 with a successor, whose identifier the
+	// service under test mints.
+	closeWithSuccessor := func(t *testing.T, svc *ntfy.Service) error {
+		_, err := svc.Close(t.Context(), ntfy.CloseRequest{
+			Subject: "task-1", Version: 5, Reason: "taken",
+			Successor: &ntfy.Successor{SourceID: "event-5", Kind: "taken", SubjectVersion: 5},
+		})
+
+		return err
+	}
+
+	refused := func(t *testing.T, store ntfy.Store, err error) {
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
+		assert.ErrorContains(t, err, "ID generator")
+
+		page, err := store.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+		require.NoError(t, err)
+		assert.Empty(t, page.Notifications, "nothing is written under an identifier no store can hold")
+	}
+
+	cases := []testCase{
+		{name: "an identifier one byte too long is refused", id: strings.Repeat("x", ntfy.MaxIDBytes+1), act: publish, assert: refused},
+		{name: "an empty identifier is refused", id: "", act: publish, assert: refused},
+		{
+			name: "an identifier of exactly the limit is stored",
+			id:   strings.Repeat("x", ntfy.MaxIDBytes),
+			act:  publish,
+			assert: func(t *testing.T, store ntfy.Store, err error) {
+				require.NoError(t, err)
+
+				got, err := store.Get(t.Context(), "alice", strings.Repeat("x", ntfy.MaxIDBytes))
+				require.NoError(t, err)
+				assert.Equal(t, "alice", got.Recipient)
+			},
+		},
+		{
+			name:   "a successor's identifier is held to the limit too",
+			id:     strings.Repeat("x", ntfy.MaxIDBytes+1),
+			seeded: true,
+			act:    closeWithSuccessor,
+			assert: func(t *testing.T, _ ntfy.Store, err error) {
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
+				assert.ErrorContains(t, err, "ID generator")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := ntfy.NewMemoryStore()
+
+			if tc.seeded {
+				seed, err := ntfy.New(store)
+				require.NoError(t, err)
+
+				_, err = seed.Publish(t.Context(),
+					ntfy.Draft{Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer", SubjectVersion: 1})
+				require.NoError(t, err)
+			}
+
+			svc, err := ntfy.New(store, ntfy.WithIDGenerator(ntfy.IDGeneratorFunc(func() (string, error) { return tc.id, nil })))
+			require.NoError(t, err)
+
+			tc.assert(t, store, tc.act(t, svc))
+		})
+	}
+}
+```
+
+Add to the identifier limits in `notification.go`, so the test compiles and fails on behaviour:
+
+```go
+	// MaxIDBytes is the longest notification identifier an [IDGenerator] may
+	// mint.
+	MaxIDBytes = 64
+```
+
+Run: `GOTOOLCHAIN=go1.26.8 go test -run 'TestServiceRefusesIdentifiersNoStoreCanHold' -count=1 .`
+Observed: FAIL on the too-long, empty and successor rows, with `Expected error with "ntfy: invalid configuration" in chain but got nil`. The exact-limit row passes.
+
+- [x] **Step 2: Bound every generated identifier (7.1, green)**
+
+Append to `id.go`:
+
+```go
+// boundedIDs holds a generator to what every store can hold. An identifier
+// that is empty or longer than [MaxIDBytes] would be truncated by one database
+// and refused by another; it fails the write that asked for it instead, the
+// same way on every store.
+type boundedIDs struct{ IDGenerator }
+
+// NewID implements [IDGenerator].
+func (g boundedIDs) NewID() (string, error) {
+	id, err := g.IDGenerator.NewID()
+	if err != nil {
+		return "", err
+	}
+
+	if id == "" || len(id) > MaxIDBytes {
+		return "", &ConfigurationError{Detail: fmt.Sprintf(
+			"the ID generator minted an identifier of %d bytes; it must be 1 to %d", len(id), MaxIDBytes)}
+	}
+
+	return id, nil
+}
+```
+
+```go
+// NewID implements [IDGenerator].
+func (g boundedIDs) NewID() (string, error) {
+	id, err := g.IDGenerator.NewID()
+	if err != nil {
+		return "", err
+	}
+
+	if id == "" || len(id) > MaxIDBytes {
+		return "", &ConfigurationError{Detail: fmt.Sprintf(
+			"the ID generator minted an identifier of %d bytes; it must be 1 to %d", len(id), MaxIDBytes)}
+	}
+
+	return id, nil
+}
+```
+
+In `New` (`service.go`), after the limits are validated:
+
+```go
+	// Checked per identifier rather than probed here: minting one to look at
+	// would spend a value of a host generator backed by a sequence.
+	svc.ids = boundedIDs{svc.ids}
+```
+
+`WithIDGenerator`'s godoc and `IDGenerator.NewID`'s doc now state the 1–`MaxIDBytes` bound and the `ConfigurationError`.
+
+Run `go test -race -count=1 ./...` in the root. Observed: `ok`.
+
+- [x] **Step 3: Prove verification accepts `BINARY(n)` and misreports (7.2, red)**
+
+Replace `TestVerifySchemaRequiresByteExactIdentifiersOnMySQL` in `sqlstore/verify_test.go` with:
+
+```go
+// TestVerifySchemaRequiresByteExactIdentifiersOnMySQL is separate from
+// runVerifySchema because only MySQL can declare an identifier column that does
+// not compare byte for byte; the other dialects have no such column to break.
+// The cases do not vary context, so the table has no ctx field.
+func TestVerifySchemaRequiresByteExactIdentifiersOnMySQL(t *testing.T) {
+	t.Parallel()
+
+	executor := stdsqlExecutor(t, openSQL(t, "mysql", sqlkittest.RunTestMySQL(t)), sqlkit.MySQL)
+
+	type testCase struct {
+		name   string
+		column string // the recipient column's new definition
+		assert func(t *testing.T, store *sqlstore.Store, err error)
+	}
+
+	reportsTheRecipient := func(declared string) func(t *testing.T, store *sqlstore.Store, err error) {
+		return func(t *testing.T, store *sqlstore.Store, err error) {
+			listed := issues(t, err)
+			assert.Contains(t, listed, store.Tables()[0]+`.recipient: type is `+declared+` but must be VARBINARY`)
+			assert.NotContains(t, listed, "case-insensitively", "the issue says what is actually wrong")
+		}
+	}
+
+	cases := []testCase{
+		{
+			name:   "a collation that ignores code points and normalisation is reported",
+			column: "VARCHAR(255) COLLATE utf8mb4_0900_as_cs",
+			assert: reportsTheRecipient(`"varchar(255)" collated "utf8mb4_0900_as_cs"`),
+		},
+		{
+			name:   "even a byte-exact collation is reported, since identifiers are binary strings",
+			column: "VARCHAR(255) COLLATE utf8mb4_0900_bin",
+			assert: reportsTheRecipient(`"varchar(255)" collated "utf8mb4_0900_bin"`),
+		},
+		{
+			name:   "a fixed-width binary string, which pads with NUL, is reported",
+			column: "BINARY(255)",
+			assert: reportsTheRecipient(`"binary(255)"`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := harness.NewStore(t, executor)
+			exec(t, executor, "ALTER TABLE `"+store.Tables()[0]+"` MODIFY `recipient` "+tc.column+" NOT NULL")
+
+			tc.assert(t, store, store.VerifySchema(t.Context()))
+		})
+	}
+}
+```
+
+Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestVerifySchemaRequiresByteExactIdentifiersOnMySQL' -count=1 .`
+Observed:
+- the `BINARY(255)` row fails with `An error is expected but got nil`;
+- both `VARCHAR` rows fail with `... collation is "utf8mb4_0900_as_cs" but must be "binary", or identifiers will compare case-insensitively" does not contain "... type is \"varchar(255)\" ..."` and `should not contain "case-insensitively"`.
+
+- [x] **Step 4: Check MySQL identifier columns' type in sqlstore (7.2, green)**
+
+Create `sqlstore/verify.go`:
+
+```go
+package sqlstore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+
+	"github.com/kartaladev/sqlkit"
+)
+
+// mysqlIdentifierType is the only type a MySQL identifier column may have.
+// VARBINARY compares and sorts by bytes and pads nothing, on every supported
+// server. A character-set column compares by collation, and even a byte-exact
+// collation such as utf8mb4_0900_bin needs MySQL 8.0.17; BINARY pads with NUL,
+// so a stored identifier stops matching the one it was stored as.
+const mysqlIdentifierType = "varbinary"
+
+// verify compares the live schema with an expectation, reporting every
+// discrepancy in one [*sqlkit.SchemaError].
+//
+// On MySQL, sqlkit cannot judge identifier columns: it checks their collation,
+// which a binary string does not have and which cannot tell VARBINARY from
+// BINARY or BLOB, and it still expects utf8mb4_0900_as_cs. So sqlkit checks
+// everything else, and the store checks the identifier columns' type itself.
+// That split goes once sqlkit checks MySQL identifier columns as binary strings;
+// the tripwire TestSQLKitStillExpectsTheOldMySQLCollation says when to look.
+func (s *Store) verify(ctx context.Context, expectation sqlkit.SchemaExpectation) error {
+	ctx = s.own(ctx)
+
+	if s.dialect.Name() != sqlkit.MySQL.Name() {
+		return sqlkit.VerifySchema(ctx, s.querier, s.dialect, s.prefix, expectation)
+	}
+
+	err := sqlkit.VerifySchema(ctx, s.querier, s.dialect, s.prefix, withoutIdentifierColumns(expectation))
+
+	var schema *sqlkit.SchemaError
+	if err != nil && !errors.As(err, &schema) {
+		return err
+	}
+
+	typed, typeErr := s.identifierTypeIssues(ctx, expectation)
+	if typeErr != nil {
+		return typeErr
+	}
+
+	if len(typed) == 0 {
+		return err
+	}
+
+	if schema == nil {
+		schema = &sqlkit.SchemaError{Dialect: s.dialect.Name()}
+	}
+
+	schema.Issues = append(typed, schema.Issues...)
+
+	return schema
+}
+
+// withoutIdentifierColumns returns an expectation that asks sqlkit nothing about
+// identifier columns' collation, and everything else unchanged.
+func withoutIdentifierColumns(expectation sqlkit.SchemaExpectation) sqlkit.SchemaExpectation {
+	out := make(sqlkit.SchemaExpectation, len(expectation))
+	for table, expected := range expectation {
+		expected.IdentifierColumns = nil
+		out[table] = expected
+	}
+
+	return out
+}
+
+// identifierTypeIssues reports each present MySQL identifier column whose type
+// is not VARBINARY. A missing table or column is sqlkit's to report.
+func (s *Store) identifierTypeIssues(
+	ctx context.Context, expectation sqlkit.SchemaExpectation,
+) ([]sqlkit.SchemaIssue, error) {
+	names := slices.Sorted(maps.Keys(expectation))
+
+	identifiers := make(map[string][]string, len(names))
+	tables := make([]any, 0, len(names))
+
+	for _, name := range names {
+		identifiers[s.prefix+name] = expectation[name].IdentifierColumns
+		tables = append(tables, s.prefix+name)
+	}
+
+	w := sqlkit.NewWriter(s.dialect)
+	w.Write("SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, COALESCE(COLLATION_NAME, '') ")
+	w.Write("FROM information_schema.COLUMNS ")
+	w.Write("WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (", w.BindAll(tables...), ") ")
+	w.Write("ORDER BY TABLE_NAME, ORDINAL_POSITION")
+	statement := w.Done()
+
+	rows, err := s.querier.QueryStatement(ctx, statement.SQL, statement.Args...)
+	if err != nil {
+		return nil, fmt.Errorf("sqlstore: read the live identifier column types: %w", err)
+	}
+
+	var (
+		issues []sqlkit.SchemaIssue
+		raw    = make([]any, 5)
+		dest   = make([]any, 5)
+		values = make([]string, 5)
+	)
+
+	for i := range raw {
+		dest[i] = &raw[i]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(dest...); err != nil {
+			return nil, fmt.Errorf("sqlstore: scan an identifier column type: %w", err)
+		}
+
+		for i, value := range raw {
+			if values[i], err = sqlkit.DecodeString(value); err != nil {
+				return nil, err
+			}
+		}
+
+		table, column, dataType, columnType, collation := values[0], values[1], values[2], values[3], values[4]
+		if dataType == mysqlIdentifierType || !slices.Contains(identifiers[table], column) {
+			continue
+		}
+
+		declared := fmt.Sprintf("%q", columnType)
+		if collation != "" {
+			declared += fmt.Sprintf(" collated %q", collation)
+		}
+
+		issues = append(issues, sqlkit.SchemaIssue{
+			Table: table, Column: column,
+			Detail: "type is " + declared + " but must be VARBINARY, or identifiers will not compare byte for byte",
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlstore: read the identifier column types: %w", err)
+	}
+
+	return issues, nil
+}
+```
+
+Delete `mysqlIdentifierCollation`, `verifyDialect` and its method from `sqlstore/store.go`. Make both verification methods call `verify`:
+
+```go
+func (s *Store) VerifySchema(ctx context.Context) error {
+	return s.verify(ctx, schemaExpectation)
+}
+```
+
+```go
+func (s *Store) VerifyEmailSchema(ctx context.Context) error {
+	return s.verify(ctx, emailSchemaExpectation)
+}
+```
+
+Replace `sqlstore/verify_internal_test.go` with only the tripwire, reworded:
+
+```go
+
+// TestSQLKitStillExpectsTheOldMySQLCollation is a tripwire, not a behaviour
+// test. The store checks MySQL identifier columns' type itself, in verify,
+// only because the vendored sqlkit expects utf8mb4_0900_as_cs of them. Once a
+// refreshed copy expects something else, this fails: see whether sqlkit now
+// checks MySQL identifier columns as binary strings, and if so hand that back
+// to it and delete this test.
+func TestSQLKitStillExpectsTheOldMySQLCollation(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "utf8mb4_0900_as_cs", sqlkit.MySQL.IdentifierCollation(),
+		"the vendored sqlkit changed what it expects of MySQL identifier columns: revisit Store.verify and this test")
+}
+```
+
+In `TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes`, expect the new wording: `ntfy_notifications.recipient: type is "varchar(255)" collated "utf8mb4_0900_as_cs" but must be VARBINARY`, and the same for `ntfy_email_deliveries.owner`.
+
+Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestVerifySchemaRequiresByteExactIdentifiersOnMySQL|TestSQLKitStill|TestVerifySchemaOn|TestVerifyEmailSchemaOn|TestTheDocumentedMySQL' -count=1 .`
+Observed: `ok`.
+
+- [x] **Step 5: Prove the pre-check misses the email table (7.3, red)**
+
+Append to `sqlstore/email_verify_test.go`:
+
+```go
+// TestTheDocumentedMySQLPreCheckFindsOverLongIdentifiers puts a schema back on
+// the old, character-counted columns and plants, in each table, an identifier
+// that fits there but not in its VARBINARY column. The documented pre-check
+// must list every one, so that no ALTER of the upgrade is refused, or with
+// strict mode off truncates, part way through. The cases do not vary context,
+// so the table has no ctx field.
+func TestTheDocumentedMySQLPreCheckFindsOverLongIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	db := openSQL(t, "mysql", sqlkittest.RunTestMySQL(t))
+	executor := stdsqlExecutor(t, db, sqlkit.MySQL)
+
+	// 200 characters fit VARCHAR(255); their 400 bytes do not fit VARBINARY(255).
+	long := strings.Repeat("\u00e9", 200)
+
+	type testCase struct {
+		name   string
+		plant  func(t *testing.T, prefix string) string // returns the key the pre-check lists
+		assert func(t *testing.T, key string, found []string)
+	}
+
+	listed := func(t *testing.T, key string, found []string) {
+		assert.Contains(t, found, key, "the pre-check lists the row the upgrade would refuse")
+	}
+
+	cases := []testCase{
+		{
+			name: "a notification's recipient",
+			plant: func(t *testing.T, prefix string) string {
+				_, err := db.ExecContext(t.Context(), "INSERT INTO `"+prefix+"ntfy_notifications` "+
+					"(`id`, `recipient`, `source_id`, `subject`, `subject_version`, `kind`, `state`, `created_at`) "+
+					"VALUES ('n-long', ?, 'event-1', 'task-1', 1, 'offer', 'ACTIVE', NOW(6))", long)
+				require.NoError(t, err)
+
+				return "n-long"
+			},
+			assert: listed,
+		},
+		{
+			name: "a close record's subject",
+			plant: func(t *testing.T, prefix string) string {
+				_, err := db.ExecContext(t.Context(), "INSERT INTO `"+prefix+"ntfy_watermarks` "+
+					"(`subject`, `kind`, `version`, `updated_at`) VALUES (?, '*', 1, NOW(6))", long)
+				require.NoError(t, err)
+
+				return long
+			},
+			assert: listed,
+		},
+		{
+			name: "an email delivery's owner",
+			plant: func(t *testing.T, prefix string) string {
+				_, err := db.ExecContext(t.Context(), "INSERT INTO `"+prefix+"ntfy_email_deliveries` "+
+					"(`notification_id`, `recipient`, `status`, `owner`, `attempts`, `updated_at`) "+
+					"VALUES ('n-long', 'alice', 'SENDING', ?, 0, NOW(6))", long)
+				require.NoError(t, err)
+
+				return "n-long"
+			},
+			assert: listed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := harness.NewEmailStore(t, executor)
+			prefix := prefixOf(store)
+
+			for _, statement := range documentedBlock(t, "### Rolling the upgrade back", prefix) {
+				exec(t, executor, statement)
+			}
+
+			key := tc.plant(t, prefix)
+
+			var found []string
+
+			for _, check := range documentedBlock(t, "### Checking before upgrading", prefix) {
+				rows, err := db.QueryContext(t.Context(), check)
+				require.NoErrorf(t, err, "run the documented pre-check %q", check)
+
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+
+					found = append(found, value)
+				}
+
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+			}
+
+			tc.assert(t, key, found)
+		})
+	}
+}
+```
+
+Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestTheDocumentedMySQLPreCheckFindsOverLongIdentifiers' -count=1 .`
+Observed: FAIL only on `an email delivery's owner`, with `[]string(nil) does not contain "n-long"`.
+
+- [x] **Step 6: Complete the pre-check and state that statements commit one by one (7.3, green)**
+
+In `docs/schema.md`, under "Comparing identifiers byte for byte on an existing MySQL host":
+- add after the rebuild paragraph:
+
+```markdown
+Each `ALTER TABLE` commits on its own, because MySQL cannot roll a schema change
+back. If one is refused, the tables altered before it stay converted and the
+rest do not: `Store.VerifySchema` or `Store.VerifyEmailSchema` then names what
+is left. Fix the cause and run the statements again. Re-running one that already
+succeeded is harmless: it
+redeclares the columns as they already are.
+```
+
+- rewrite the pre-check's opening paragraph to name all three limits, 64, 255 and 100;
+- add to its `sql` block:
+
+```sql
+-- Only a host that emails has this table.
+SELECT `notification_id` FROM `app_ntfy_email_deliveries`
+    WHERE LENGTH(`notification_id`) > 64 OR LENGTH(`recipient`) > 255 OR LENGTH(`status`) > 16
+       OR LENGTH(`batch_id`) > 64 OR LENGTH(`owner`) > 255;
+```
+
+Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestTheDocumentedMySQL' -count=1 -v .`
+Observed: all three documented-SQL tests pass.
+
+- [x] **Step 7: One helper for documented SQL (7.6, refactor under green)**
+
+Delete `documentedStatement`. Key the claim-index test on its MySQL line:
+
+```go
+// mysqlClaimIndexLine is the line of docs/schema.md that introduces the MySQL
+// statement adding the email claim index to an existing host.
+const mysqlClaimIndexLine = "- **MySQL:** run this, and do **not** re-apply the email document:"
+```
+
+```go
+	for _, statement := range documentedBlock(t, mysqlClaimIndexLine, prefixOf(store)) {
+		exec(t, executor, statement)
+	}
+```
+
+`documentedBlock` now takes any line (the parameter is renamed `line`), and finds the closing fence even when it is indented under a list item:
+
+```go
+// documentedBlock reads the statements of the first fenced sql block after a
+// line of docs/schema.md, such as a heading, with comment lines dropped and the
+// documented app_ prefix replaced by the store's, so that the SQL a host runs is
+// the SQL the test ran.
+func documentedBlock(t *testing.T, line, prefix string) []string {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join("..", "docs", "schema.md"))
+	require.NoError(t, err)
+
+	document := string(raw)
+
+	start := strings.Index(document, "\n"+line+"\n")
+	require.GreaterOrEqualf(t, start, 0, "docs/schema.md has the line %q", line)
+
+	body := document[start:]
+
+	open := strings.Index(body, "```sql\n")
+	require.GreaterOrEqualf(t, open, 0, "%q is followed by an sql block", line)
+
+	body = body[open+len("```sql\n"):]
+
+	// The closing fence may be indented, as it is under a list item.
+	end := strings.Index(body, "```")
+	require.GreaterOrEqualf(t, end, 0, "the sql block under %q is closed", line)
+
+	var kept []string
+
+	for sql := range strings.SplitSeq(body[:end], "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(sql), "--") {
+			kept = append(kept, sql)
+		}
+	}
+
+	var statements []string
+
+	for statement := range strings.SplitSeq(strings.Join(kept, "\n"), ";") {
+		if statement = strings.TrimSpace(statement); statement != "" {
+			statements = append(statements, strings.ReplaceAll(statement, "app_", prefix))
+		}
+	}
+
+	require.NotEmptyf(t, statements, "the sql block under %q holds statements", line)
+
+	return statements
+}
+```
+
+Run the Step 6 command. Observed: pass. Lint: `0 issues.`
+
+- [x] **Step 8: Correct the normalisation wording (7.7)**
+
+In `docs/schema.md`, the "Identifiers compare byte for byte" bullet now says that `utf8mb4_0900_as_cs` "equates a precomposed `é` (U+00E9) with `e` followed by a combining acute accent (U+0301)". It no longer says it equates `é` with `e`.
+
+- [x] **Step 9: Prove the suite misses stores folding only their filters (7.4, 7.5, red)**
+
+Replace `ntfytest/identity_test.go` with:
+
+```go
+package ntfytest_test
+
+// The conformance suite fails its own test when a store breaks it, so the only
+// way to assert that it rejects a store is to run it in a child process and
+// watch that process fail.
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/kartaladev/ntfy"
+	"github.com/kartaladev/ntfy/ntfytest"
+)
+
+// identityChildEnv names the fold a child process applies and where, as
+// "<fold>/<scope>", and marks a process as a child.
+const identityChildEnv = "NTFYTEST_IDENTITY_CHILD"
+
+// folds are the ways a store can merge identifiers that differ in their bytes.
+var folds = map[string]func(string) string{
+	"lower-casing":                strings.ToLower,
+	"trimming trailing spaces":    func(s string) string { return strings.TrimRight(s, " ") },
+	"stripping zero-width spaces": func(s string) string { return strings.ReplaceAll(s, "\u200b", "") },
+	// The one canonical composition the suite's variants use, which is what a
+	// collation equating NFC with NFD does to them.
+	"normalising to NFC": func(s string) string { return strings.ReplaceAll(s, "e\u0301", "\u00e9") },
+}
+
+// The scopes a fold is applied in.
+const (
+	// everywhere folds every identifier the store is given.
+	everywhere = "everywhere"
+	// filtersOnly folds only what a store is asked to match against, and stores
+	// what it is given as it is: the subject and kind filters of a listing, a
+	// close's subject, kinds, exception and successor skips, and mark-all-read's
+	// recipient.
+	filtersOnly = "filters only"
+)
+
+// foldingStore is a memory store that folds identifiers, the way a database
+// column with the wrong collation compares them.
+type foldingStore struct {
+	ntfy.Store
+	fold        func(string) string
+	filtersOnly bool
+}
+
+func (s foldingStore) all(values []string) []string {
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = s.fold(value)
+	}
+
+	return out
+}
+
+// stored folds an identifier the store keeps or looks up by key, which a
+// filters-only store leaves alone.
+func (s foldingStore) stored(value string) string {
+	if s.filtersOnly {
+		return value
+	}
+
+	return s.fold(value)
+}
+
+func (s foldingStore) Insert(ctx context.Context, subject string, in []ntfy.Insertion) (ntfy.InsertResult, error) {
+	out := make([]ntfy.Insertion, len(in))
+	for i, insertion := range in {
+		n := &insertion.Notification
+		n.Recipient, n.SourceID = s.stored(n.Recipient), s.stored(n.SourceID)
+		n.Subject, n.Kind = s.stored(n.Subject), s.stored(n.Kind)
+		out[i] = insertion
+	}
+
+	return s.Store.Insert(ctx, s.stored(subject), out)
+}
+
+func (s foldingStore) Close(ctx context.Context, req ntfy.CloseRequest, at time.Time, ids ntfy.IDGenerator) (ntfy.CloseResult, error) {
+	req.Subject, req.Except = s.fold(req.Subject), s.fold(req.Except)
+	req.Kinds, req.SuccessorSkip = s.all(req.Kinds), s.all(req.SuccessorSkip)
+
+	return s.Store.Close(ctx, req, at, ids)
+}
+
+func (s foldingStore) Get(ctx context.Context, recipient, id string) (ntfy.Notification, error) {
+	return s.Store.Get(ctx, s.stored(recipient), id)
+}
+
+func (s foldingStore) List(ctx context.Context, q ntfy.ListQuery) (ntfy.Page, error) {
+	q.Recipient, q.Subject, q.Kinds = s.stored(q.Recipient), s.fold(q.Subject), s.all(q.Kinds)
+
+	return s.Store.List(ctx, q)
+}
+
+func (s foldingStore) CountActive(ctx context.Context, recipient string) (int64, error) {
+	return s.Store.CountActive(ctx, s.stored(recipient))
+}
+
+func (s foldingStore) MarkRead(ctx context.Context, recipient string, ids []string, at time.Time) (ntfy.MarkResult, error) {
+	return s.Store.MarkRead(ctx, s.stored(recipient), ids, at)
+}
+
+func (s foldingStore) MarkAllRead(ctx context.Context, recipient string, through, at time.Time) (ntfy.MarkResult, error) {
+	return s.Store.MarkAllRead(ctx, s.fold(recipient), through, at)
+}
+
+// TestIdentityChild runs the identity group against the store its environment
+// names. It does nothing unless TestIdentityRejectsFoldingStores started it.
+func TestIdentityChild(t *testing.T) {
+	mode, ok := os.LookupEnv(identityChildEnv)
+	if !ok {
+		t.Skip("runs only as a child of TestIdentityRejectsFoldingStores")
+	}
+
+	name, scope, _ := strings.Cut(mode, "/")
+
+	ntfytest.Run(t, func(*testing.T) ntfy.Store {
+		if fold, folding := folds[name]; folding {
+			return foldingStore{Store: ntfy.NewMemoryStore(), fold: fold, filtersOnly: scope == filtersOnly}
+		}
+
+		return ntfy.NewMemoryStore()
+	})
+}
+
+// runIdentityChild runs the identity group in a child process folding by mode,
+// and reports whether it passed and what it printed.
+func runIdentityChild(t *testing.T, mode string) (passed bool, output string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run", "^TestIdentityChild$/^identity$", "-test.count=1", "-test.v")
+	cmd.Env = append(os.Environ(), identityChildEnv+"="+mode)
+	out, err := cmd.CombinedOutput()
+
+	return err == nil, string(out)
+}
+
+// TestIdentityRejectsFoldingStores proves the identity group fails a store that
+// merges identifiers, wherever it merges them, and passes one that does not.
+// The cases do not vary context, so the table has no ctx field.
+func TestIdentityRejectsFoldingStores(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		mode   string
+		assert func(t *testing.T, passed bool, output string)
+	}
+
+	// rejected requires an identity case itself to have failed, so that a child
+	// failing for any other reason, such as a panic, is not taken for one.
+	rejected := func(t *testing.T, passed bool, output string) {
+		assert.Falsef(t, passed, "ntfytest.Run accepted a store that folds identifiers:\n%s", output)
+		assert.Containsf(t, output, "--- FAIL: TestIdentityChild/identity/",
+			"an identity case, not something else, rejected the store:\n%s", output)
+	}
+
+	cases := []testCase{
+		{
+			name: "a sound store passes",
+			mode: "sound",
+			assert: func(t *testing.T, passed bool, output string) {
+				assert.Truef(t, passed, "ntfytest.Run failed the memory store:\n%s", output)
+				assert.Contains(t, output, "--- PASS: TestIdentityChild/identity/alice_differing_in_case",
+					"the child ran the identity group, so passing is not vacuous")
+			},
+		},
+	}
+
+	for name := range folds {
+		for _, scope := range []string{everywhere, filtersOnly} {
+			cases = append(cases, testCase{
+				name: "a store " + name + " " + scope + " fails", mode: name + "/" + scope, assert: rejected,
+			})
+		}
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			passed, output := runIdentityChild(t, tc.mode)
+			tc.assert(t, passed, output)
+		})
+	}
+}
+```
+
+Run: `cd ntfytest && GOTOOLCHAIN=go1.26.8 go test -run 'TestIdentityRejectsFoldingStores' -count=1 -v .`
+Observed: FAIL on all four `filters only` rows. The four `everywhere` rows, including the new NFC store, and the sound control pass.
+
+- [x] **Step 10: Filter by the byte-different identifier (7.5, green)**
+
+Replace `recipientIsItsBytes`, `subjectIsItsBytes` and `kindIsItsBytes` in `ntfytest/identity.go` with:
+
+```go
+// recipientIsItsBytes: another recipient reads, lists, counts and marks
+// nothing of the published recipient's, and a close that names the other
+// recipient to spare or to skip a successor spares or skips nothing of theirs.
+func recipientIsItsBytes(t *testing.T, e *env, v identityVariant) {
+	t.Helper()
+
+	published := e.note(v.of, "event-1", "task-1", "offer", 1, at(0))
+	e.insert(false, published)
+
+	_, err := e.store.Get(t.Context(), v.other, published.ID)
+	require.ErrorIsf(t, err, ntfy.ErrNotFound, "reading as %+q finds %+q's notification", v.other, v.of)
+
+	assert.Emptyf(t, e.list(ntfy.ListQuery{Recipient: v.other}).Notifications, "%+q lists %+q's notification", v.other, v.of)
+	assert.Zerof(t, e.count(v.other), "%+q counts %+q's notification", v.other, v.of)
+
+	_, err = e.store.MarkRead(t.Context(), v.other, []string{published.ID}, at(1))
+	require.ErrorIsf(t, err, ntfy.ErrNotFound, "%+q marks %+q's notification read", v.other, v.of)
+
+	marked, err := e.store.MarkAllRead(t.Context(), v.other, at(1), at(1))
+	require.NoError(t, err)
+	assert.Zerof(t, marked.Marked, "marking all of %+q's read marks %+q's", v.other, v.of)
+
+	stored := e.get(v.of, published.ID)
+	assert.Equal(t, ntfy.StateActive, stored.State, "the published recipient's notification is untouched")
+	assert.Equal(t, v.of, stored.Recipient, "the recipient is returned exactly as published")
+
+	closed := e.close(ntfy.CloseRequest{
+		Subject: "task-1", Version: 5, Reason: "taken", Except: v.other,
+		Successor:     &ntfy.Successor{SourceID: "event-5", Kind: "taken", SubjectVersion: 5},
+		SuccessorSkip: []string{v.other},
+	}, at(2))
+
+	assert.Equalf(t, ntfy.StateClosed, e.get(v.of, published.ID).State, "sparing %+q spared %+q", v.other, v.of)
+	require.Lenf(t, closed.Successors, 1, "skipping %+q's successor skipped %+q's", v.other, v.of)
+	assert.Equal(t, v.of, closed.Successors[0].Recipient)
+}
+```
+
+```go
+// subjectIsItsBytes: listing or closing one subject reaches nothing on another
+// differing only in its bytes, in either direction, and closing one does not
+// suppress a later publish on the other.
+func subjectIsItsBytes(t *testing.T, e *env, v identityVariant) {
+	t.Helper()
+
+	closing := e.note("alice", "event-1", v.of, "offer", 1, at(0))
+	open := e.note("alice", "event-2", v.other, "offer", 1, at(1))
+	e.insert(false, closing)
+	e.insert(false, open)
+
+	listed := e.list(ntfy.ListQuery{Recipient: "alice", Subject: v.other}).Notifications
+	assert.Equalf(t, []string{open.ID}, idsOf(listed), "listing %+q returned %+q's notifications too", v.other, v.of)
+
+	e.close(ntfy.CloseRequest{Subject: v.of, Version: 5, Reason: "done"}, at(2))
+
+	assert.Equal(t, ntfy.StateClosed, e.get("alice", closing.ID).State)
+	assert.Equalf(t, ntfy.StateActive, e.get("alice", open.ID).State, "closing %+q closed %+q", v.of, v.other)
+
+	late := e.insert(false, e.note("alice", "event-3", v.other, "offer", 2, at(3)))
+	assert.Lenf(t, late.Created, 1, "closing %+q suppressed a publish on %+q", v.of, v.other)
+	assert.Zero(t, late.Suppressed)
+
+	// The other way round: closing the byte-different subject leaves one that
+	// was never named alone.
+	untouched := e.note("alice", "event-4", "untouched-"+v.of, "offer", 1, at(4))
+	e.insert(false, untouched)
+	e.close(ntfy.CloseRequest{Subject: "untouched-" + v.other, Version: 5, Reason: "done"}, at(5))
+
+	assert.Equalf(t, ntfy.StateActive, e.get("alice", untouched.ID).State,
+		"closing %+q closed %+q", "untouched-"+v.other, "untouched-"+v.of)
+}
+```
+
+```go
+// kindIsItsBytes: a kind filter, or a close by kind, reaches its kind exactly.
+func kindIsItsBytes(t *testing.T, e *env, v identityVariant) {
+	t.Helper()
+
+	wanted := e.note("alice", "event-1", "task-1", v.of, 1, at(0))
+	e.insert(false, wanted, e.note("alice", "event-2", "task-1", v.other, 1, at(1)))
+
+	listed := e.list(ntfy.ListQuery{Recipient: "alice", Kinds: []string{v.of}}).Notifications
+	assert.Equalf(t, []string{wanted.ID}, idsOf(listed), "a filter on %+q returned %+q too", v.of, v.other)
+
+	unnamed := e.note("alice", "event-3", "task-2", v.of, 1, at(2))
+	e.insert(false, unnamed)
+	e.close(ntfy.CloseRequest{Subject: "task-2", Kinds: []string{v.other}, Version: 5, Reason: "done"}, at(3))
+
+	assert.Equalf(t, ntfy.StateActive, e.get("alice", unnamed.ID).State, "closing kind %+q closed %+q", v.other, v.of)
+}
+```
+
+Run the Step 9 command. Observed: all nine rows pass.
+Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestStoreOn.*/identity' -count=1 -v .`
+Observed: 64 identity rows pass across PostgreSQL (database/sql and pgx), MySQL and SQLite.
+Inversion: with the "in another normalisation form" variant temporarily removed, exactly the two NFC rows fail; restored, they pass.
+
+- [ ] **Step 11: Update the sqlkit issue text, run the gates, commit (7.8)**
+
+The issue text under Task 5 Step 2 now asks for a type check and names `BINARY`/`BLOB`. Run `make all`, `make store-matrix` and `make sqlkit-copy-check`, and record the results in the execution record below. Commit the root, sqlstore and ntfytest changes, each with the tests that drove it.
+
+---
 
 ## Execution record
 

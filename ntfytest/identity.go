@@ -63,7 +63,8 @@ func runIdentity(t *testing.T, factory Factory) {
 }
 
 // recipientIsItsBytes: another recipient reads, lists, counts and marks
-// nothing of the published recipient's.
+// nothing of the published recipient's, and a close that names the other
+// recipient to spare or to skip a successor spares or skips nothing of theirs.
 func recipientIsItsBytes(t *testing.T, e *env, v identityVariant) {
 	t.Helper()
 
@@ -79,9 +80,23 @@ func recipientIsItsBytes(t *testing.T, e *env, v identityVariant) {
 	_, err = e.store.MarkRead(t.Context(), v.other, []string{published.ID}, at(1))
 	require.ErrorIsf(t, err, ntfy.ErrNotFound, "%+q marks %+q's notification read", v.other, v.of)
 
+	marked, err := e.store.MarkAllRead(t.Context(), v.other, at(1), at(1))
+	require.NoError(t, err)
+	assert.Zerof(t, marked.Marked, "marking all of %+q's read marks %+q's", v.other, v.of)
+
 	stored := e.get(v.of, published.ID)
 	assert.Equal(t, ntfy.StateActive, stored.State, "the published recipient's notification is untouched")
 	assert.Equal(t, v.of, stored.Recipient, "the recipient is returned exactly as published")
+
+	closed := e.close(ntfy.CloseRequest{
+		Subject: "task-1", Version: 5, Reason: "taken", Except: v.other,
+		Successor:     &ntfy.Successor{SourceID: "event-5", Kind: "taken", SubjectVersion: 5},
+		SuccessorSkip: []string{v.other},
+	}, at(2))
+
+	assert.Equalf(t, ntfy.StateClosed, e.get(v.of, published.ID).State, "sparing %+q spared %+q", v.other, v.of)
+	require.Lenf(t, closed.Successors, 1, "skipping %+q's successor skipped %+q's", v.other, v.of)
+	assert.Equal(t, v.of, closed.Successors[0].Recipient)
 }
 
 // sourceIsItsBytes: a source differing only in its bytes is a new source, not
@@ -96,8 +111,9 @@ func sourceIsItsBytes(t *testing.T, e *env, v identityVariant) {
 	assert.Zero(t, result.Duplicates)
 }
 
-// subjectIsItsBytes: closing a subject leaves the one differing only in its
-// bytes open, and does not suppress a later publish on it.
+// subjectIsItsBytes: listing or closing one subject reaches nothing on another
+// differing only in its bytes, in either direction, and closing one does not
+// suppress a later publish on the other.
 func subjectIsItsBytes(t *testing.T, e *env, v identityVariant) {
 	t.Helper()
 
@@ -105,6 +121,9 @@ func subjectIsItsBytes(t *testing.T, e *env, v identityVariant) {
 	open := e.note("alice", "event-2", v.other, "offer", 1, at(1))
 	e.insert(false, closing)
 	e.insert(false, open)
+
+	listed := e.list(ntfy.ListQuery{Recipient: "alice", Subject: v.other}).Notifications
+	assert.Equalf(t, []string{open.ID}, idsOf(listed), "listing %+q returned %+q's notifications too", v.other, v.of)
 
 	e.close(ntfy.CloseRequest{Subject: v.of, Version: 5, Reason: "done"}, at(2))
 
@@ -114,9 +133,18 @@ func subjectIsItsBytes(t *testing.T, e *env, v identityVariant) {
 	late := e.insert(false, e.note("alice", "event-3", v.other, "offer", 2, at(3)))
 	assert.Lenf(t, late.Created, 1, "closing %+q suppressed a publish on %+q", v.of, v.other)
 	assert.Zero(t, late.Suppressed)
+
+	// The other way round: closing the byte-different subject leaves one that
+	// was never named alone.
+	untouched := e.note("alice", "event-4", "untouched-"+v.of, "offer", 1, at(4))
+	e.insert(false, untouched)
+	e.close(ntfy.CloseRequest{Subject: "untouched-" + v.other, Version: 5, Reason: "done"}, at(5))
+
+	assert.Equalf(t, ntfy.StateActive, e.get("alice", untouched.ID).State,
+		"closing %+q closed %+q", "untouched-"+v.other, "untouched-"+v.of)
 }
 
-// kindIsItsBytes: a kind filter matches its kind exactly.
+// kindIsItsBytes: a kind filter, or a close by kind, reaches its kind exactly.
 func kindIsItsBytes(t *testing.T, e *env, v identityVariant) {
 	t.Helper()
 
@@ -125,4 +153,10 @@ func kindIsItsBytes(t *testing.T, e *env, v identityVariant) {
 
 	listed := e.list(ntfy.ListQuery{Recipient: "alice", Kinds: []string{v.of}}).Notifications
 	assert.Equalf(t, []string{wanted.ID}, idsOf(listed), "a filter on %+q returned %+q too", v.of, v.other)
+
+	unnamed := e.note("alice", "event-3", "task-2", v.of, 1, at(2))
+	e.insert(false, unnamed)
+	e.close(ntfy.CloseRequest{Subject: "task-2", Kinds: []string{v.other}, Version: 5, Reason: "done"}, at(3))
+
+	assert.Equalf(t, ntfy.StateActive, e.get("alice", unnamed.ID).State, "closing kind %+q closed %+q", v.other, v.of)
 }
