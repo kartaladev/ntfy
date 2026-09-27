@@ -19,6 +19,16 @@ const allKinds = "*"
 // passes the same conformance suite as the SQL store. A MemoryStore is safe for
 // concurrent use; every method runs under one lock, which is the whole of its
 // serialisation.
+//
+// Listing a recipient's notifications, counting them and marking them all read
+// cost what that recipient holds, because notifications are indexed by
+// recipient. The periodic passes are not scoped to a recipient: pruning by age
+// and claiming emails visit every notification in the store, and the count
+// bound visits every recipient. The host drives them on an interval, and each
+// holds the lock while it runs, so their cost grows with the whole store.
+//
+// Nothing here survives a restart, and nothing is shared between processes. A
+// host that needs either uses ntfy/sqlstore.
 type MemoryStore struct {
 	mu            sync.Mutex
 	notifications map[string]Notification
@@ -29,6 +39,11 @@ type MemoryStore struct {
 	// coalescing and expiring watermarks touch one subject's notifications
 	// rather than every notification.
 	subjects map[string]map[string]struct{}
+	// recipients indexes notification identifiers by recipient, so that
+	// listing, counting, marking all read and the count bound touch one
+	// recipient's notifications rather than every notification. Membership
+	// changes only in put and remove.
+	recipients map[string]map[string]struct{}
 	// deliveries holds email delivery state by notification identifier.
 	deliveries map[string]emailDelivery
 }
@@ -63,6 +78,7 @@ func NewMemoryStore() *MemoryStore {
 		watermarks:    make(map[watermarkKey]watermark),
 		sources:       make(map[sourceKey]string),
 		subjects:      make(map[string]map[string]struct{}),
+		recipients:    make(map[string]map[string]struct{}),
 		deliveries:    make(map[string]emailDelivery),
 	}
 }
@@ -111,18 +127,19 @@ func (s *MemoryStore) insert(subject string, insertions []Insertion) InsertResul
 	return result
 }
 
-// put stores a notification and indexes it. The caller holds the lock.
+// put stores a notification and indexes it. A notification already stored
+// under the same identifier is removed first, with its index entries, so that
+// no index keeps pointing its recipient or subject at the replacement. The
+// caller holds the lock.
 func (s *MemoryStore) put(n Notification) {
-	s.notifications[n.ID] = n
-	s.sources[sourceKey{source: n.SourceID, recipient: n.Recipient}] = n.ID
-
-	ids := s.subjects[n.Subject]
-	if ids == nil {
-		ids = make(map[string]struct{})
-		s.subjects[n.Subject] = ids
+	if old, ok := s.notifications[n.ID]; ok {
+		s.remove(old)
 	}
 
-	ids[n.ID] = struct{}{}
+	s.notifications[n.ID] = n
+	s.sources[sourceKey{source: n.SourceID, recipient: n.Recipient}] = n.ID
+	indexAdd(s.subjects, n.Subject, n.ID)
+	indexAdd(s.recipients, n.Recipient, n.ID)
 }
 
 // remove deletes a notification and its index entries. The caller holds the
@@ -130,12 +147,29 @@ func (s *MemoryStore) put(n Notification) {
 func (s *MemoryStore) remove(n Notification) {
 	delete(s.notifications, n.ID)
 	delete(s.sources, sourceKey{source: n.SourceID, recipient: n.Recipient})
+	indexRemove(s.subjects, n.Subject, n.ID)
+	indexRemove(s.recipients, n.Recipient, n.ID)
+}
 
-	ids := s.subjects[n.Subject]
-	delete(ids, n.ID)
+// indexAdd adds id to key's set in index, creating the set if key has none.
+func indexAdd(index map[string]map[string]struct{}, key, id string) {
+	ids := index[key]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		index[key] = ids
+	}
+
+	ids[id] = struct{}{}
+}
+
+// indexRemove removes id from key's set in index, dropping the set once it is
+// empty so that an index never holds a key with nothing under it.
+func indexRemove(index map[string]map[string]struct{}, key, id string) {
+	ids := index[key]
+	delete(ids, id)
 
 	if len(ids) == 0 {
-		delete(s.subjects, n.Subject)
+		delete(index, key)
 	}
 }
 
@@ -270,7 +304,9 @@ func (s *MemoryStore) List(_ context.Context, q ListQuery) (Page, error) {
 
 	var matched []Notification
 
-	for _, n := range s.notifications {
+	for id := range s.recipients[q.Recipient] {
+		n := s.notifications[id]
+
 		if !matches(n, q) {
 			continue
 		}
@@ -344,8 +380,8 @@ func (s *MemoryStore) CountActive(_ context.Context, recipient string) (int64, e
 
 	var count int64
 
-	for _, n := range s.notifications {
-		if n.Recipient == recipient && n.State == StateActive {
+	for id := range s.recipients[recipient] {
+		if s.notifications[id].State == StateActive {
 			count++
 		}
 	}
@@ -399,8 +435,10 @@ func (s *MemoryStore) MarkAllRead(_ context.Context, recipient string, through, 
 
 	var result MarkResult
 
-	for id, n := range s.notifications {
-		if n.Recipient != recipient || n.State != StateActive || n.CreatedAt.After(through) {
+	for id := range s.recipients[recipient] {
+		n := s.notifications[id]
+
+		if n.State != StateActive || n.CreatedAt.After(through) {
 			continue
 		}
 
@@ -446,17 +484,27 @@ func (s *MemoryStore) Prune(_ context.Context, req PruneRequest) (PruneResult, e
 // pruneCount brings each recipient within the count bound, inactive
 // notifications first. The caller holds the lock.
 func (s *MemoryStore) pruneCount(req PruneRequest, result *PruneResult) {
-	byRecipient := make(map[string][]Notification)
-	for _, n := range s.notifications {
-		byRecipient[n.Recipient] = append(byRecipient[n.Recipient], n)
+	// Only recipients over the bound are collected, so a pass that finds
+	// everyone within it, the steady state, allocates nothing. Collecting
+	// before evicting also keeps eviction from disturbing the iteration, and
+	// sorting keeps Recipients in a stable order.
+	var over []string
+
+	for recipient, ids := range s.recipients {
+		if len(ids) > req.MaxPerRecipient {
+			over = append(over, recipient)
+		}
 	}
 
-	for _, recipient := range slices.Sorted(maps.Keys(byRecipient)) {
-		held := byRecipient[recipient]
-		excess := len(held) - req.MaxPerRecipient
+	slices.Sort(over)
 
-		if excess <= 0 {
-			continue
+	for _, recipient := range over {
+		ids := s.recipients[recipient]
+		excess := len(ids) - req.MaxPerRecipient
+
+		held := make([]Notification, 0, len(ids))
+		for id := range ids {
+			held = append(held, s.notifications[id])
 		}
 
 		slices.SortFunc(held, oldestFirst)

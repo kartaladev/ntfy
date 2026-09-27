@@ -30,20 +30,43 @@
 | File | Responsibility |
 | --- | --- |
 | `memory.go` (modify) | The index field and its initialisation; `put`/`remove` maintain it; `CountActive`, `List`, `MarkAllRead`, `pruneCount` read through it; the doc comment's stated limits. |
-| `memory_bench_test.go` (create, `package ntfy_test`) | The measurement harness: the seeding helper, the reporting benchmarks, the timing helper, and the scaling gate test. |
-| `memory_index_test.go` (create, `package ntfy`) | The index invariant: every stored notification is indexed under its own recipient, and the index holds nothing else. Internal because the invariant is about unexported state. |
+| `memory_bench_test.go` (create, `package ntfy_test`) | The measurement harness: the seeding helper, the opt-in switch, the reporting benchmarks, the timing helper, the scaling gate test and the prune allocation gate. |
+| `.github/workflows/ci.yml` (modify) | A unit-job step that runs the gate tests without `-race`, with `NTFY_MEASURE_MEMORY=1`. |
+| `memory_index_test.go` (create, `package ntfy`) | The index invariant: every stored notification is indexed under its own recipient, the index holds nothing else, and a reused identifier leaves no stale entry. Internal because the invariant is about unexported state. |
 | `openspec/changes/speed-up-memory-store-reads/evidence.md` (create) | The recorded before/after measurements — the proof `.claude/rules/prove-errors-with-tests.md` requires, kept with the change rather than in a terminal scrollback. |
 
-**Why `memory_bench_test.go` carries a `//go:build !race` constraint.** Under the race detector every wall-clock measurement is meaningless (roughly an order of magnitude slower, unevenly), and `make test-race` runs the whole suite. `-race` sets the `race` build tag, so `//go:build !race` excludes the file there while `make all`'s ordinary `go test ./...` still enforces the gate. The Makefile's note that integration tests deliberately carry no build tag is about provisioning containers, not about timing; state that rationale in the file's comment.
+**Why `memory_bench_test.go` carries a `//go:build !race` constraint.** Under the race detector every wall-clock measurement is meaningless (roughly an order of magnitude slower, unevenly), and `make test-race` runs the whole suite. `-race` sets the `race` build tag, so `//go:build !race` excludes the file there. The gate tests are also opt-in through `NTFY_MEASURE_MEMORY`, because they seed 220,000 notifications each and time microsecond operations. CI's unit job runs `-race`, so it runs them in a step of its own, without `-race`, with the variable set; `make all` does not run them. The Makefile's note that integration tests deliberately carry no build tag is about provisioning containers, not about timing; state that rationale in the file's comment.
 
 **Benchmark convention this plan establishes.** The repository has no benchmarks today (`rg 'func Benchmark'` finds none across all six modules), so this change sets the shape:
 
 1. Measurement lives in `<area>_bench_test.go`, guarded `//go:build !race`.
 2. A `seed<Area>(tb testing.TB, ...)` helper builds the fixture and takes `testing.TB` so tests and benchmarks share it.
 3. `BenchmarkXxx` functions **report** numbers for humans and `benchstat`; they assert nothing.
-4. One ordinary `TestXxx` **gates** the property in CI, asserting a ratio between two fixture sizes rather than a wall-clock number, so it holds on any machine.
+4. An ordinary `TestXxx` **gates** the property, asserting a ratio between two fixture sizes, or an invariant such as zero allocations, rather than a wall-clock number, so it holds on any machine.
+5. Gate tests that seed large fixtures are opt-in through an `NTFY_MEASURE_*` variable, and CI runs them in a step of their own.
 
 The change `scale-email-claim-query` also adds measurement. This plan assumes the convention above; if that change lands first with a different one, follow theirs and note the deviation in `evidence.md`.
+
+---
+
+## Revision: corrected to the code as built
+
+On 2026-09-27, after implementation and review, every code block below was
+replaced with the code as committed, and the prose around each was corrected
+to match. `evidence.md` records the measurements, and what the review changed.
+In summary:
+
+- The scaling gate does not call `t.Parallel()`. Each cost is the least of 5
+  interleaved rounds, because a single mean flaked under full CPU load.
+- The gates are opt-in through `NTFY_MEASURE_MEMORY` and run in their own
+  non-race CI step. CI's unit job runs `-race`, which excludes this file.
+- `put` removes any notification already stored under the same identifier, so
+  a reused identifier cannot leave another recipient's index pointing at it.
+- `put` and `remove` share the `indexAdd` and `indexRemove` helpers.
+- The prune measurement uses the within-bound steady state and gates on zero
+  allocations. `pruneCount` collects and sorts only the recipients over the
+  bound.
+- Task 7 did not run. The gate passed with the index, so `design.md` D5 stands.
 
 ---
 
@@ -62,21 +85,77 @@ The change `scale-email-claim-query` also adds measurement. This plan assumes th
 ```go
 //go:build !race
 
-// Measurement for the memory store. The race detector distorts wall-clock
-// timing beyond usefulness, so this file is excluded under -race; make all's
-// ordinary `go test ./...` is what enforces the gate.
+// Measurement for the memory store: benchmarks that report, and two gate tests
+// that fail when a recipient's reads, or the count bound's pass, grow with the
+// store's total size.
+//
+// Two gates keep it out of the default test run's way:
+//
+//   - The build constraint excludes the file under -race, which distorts
+//     wall-clock timing beyond usefulness.
+//   - The gate tests seed 220,000 notifications each and time microsecond
+//     operations, so they run only when NTFY_MEASURE_MEMORY is set. CI's unit
+//     job runs them in a step of their own, without -race:
+//
+//	NTFY_MEASURE_MEMORY=1 go test -count=1 -run 'TestMemoryStore(ReadsDoNotScale|PruneCountWithinBound)' .
 
 package ntfy_test
 
 import (
+	"math"
+	"os"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/kartaladev/ntfy"
 )
+
+// The fixture sizes design.md D6 names: the recipient read holds 100
+// notifications at both, well inside DefaultMaxPerRecipient = 500, so only the
+// store's total size differs.
+//
+// Indicative figures, one machine only (Apple M4 Pro, go1.26.8, 2026-09-27),
+// never thresholds; the gates below assert a ratio and an invariant. At 200k,
+// before the recipient index and after it:
+//
+//	CountActive               5.48 ms  ->  5.8 µs
+//	List (50 rows)            9.77 ms  ->   25 µs
+//	MarkAllRead               5.78 ms  ->  2.2 µs
+//	CountActive, 32 callers   ~180 ops/s  ->  ~185,000 ops/s
+//	Prune, within the bound   130 MB, 34-54 ms  ->  0 B, 15 µs
+//
+// openspec/changes/speed-up-memory-store-reads/evidence.md has the runs.
+const (
+	smallNotifications, smallRecipients = 20_000, 200
+	largeNotifications, largeRecipients = 200_000, 2_000
+)
+
+// benchmarkSizes pairs each fixture size with the name its sub-benchmark
+// reports under, so every benchmark measures the same two points.
+var benchmarkSizes = []struct {
+	name                      string
+	notifications, recipients int
+}{
+	{"20k", smallNotifications, smallRecipients},
+	{"200k", largeNotifications, largeRecipients},
+}
+
+// measureEnv opts in to the gate tests. See the file comment.
+const measureEnv = "NTFY_MEASURE_MEMORY"
+
+// requireMeasurement skips a gate test unless measureEnv is set.
+func requireMeasurement(t *testing.T) {
+	t.Helper()
+
+	if os.Getenv(measureEnv) == "" {
+		t.Skipf("set %s=1 to run the memory store's measurement gates", measureEnv)
+	}
+}
 
 // seedStart is when the first seeded notification was created. Later ones are
 // one millisecond apart, so every creation time is distinct and ordering is
@@ -87,13 +166,13 @@ var seedStart = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 // recipients, one subject per recipient, and returns it with the recipient the
 // measurements read. Insertions are batched per recipient so that seeding is
 // the fixture's cost, not the measurement's.
-func seedMemoryStore(tb testing.TB, notifications, recipients int) (*ntfy.MemoryStore, string) {
+func seedMemoryStore(tb testing.TB, notifications, recipients int) (store *ntfy.MemoryStore, read string) {
 	tb.Helper()
 
 	require.Zerof(tb, notifications%recipients,
 		"fixture sizes must divide evenly: %d notifications over %d recipients", notifications, recipients)
 
-	store := ntfy.NewMemoryStore()
+	store = ntfy.NewMemoryStore()
 	ids := ntfy.NewUUIDv7Generator()
 	perRecipient := notifications / recipients
 
@@ -131,31 +210,11 @@ func seedMemoryStore(tb testing.TB, notifications, recipients int) (*ntfy.Memory
 - [ ] **Step 2: Add the three read benchmarks at both fixture sizes**
 
 ```go
-// The fixture sizes design.md D6 names: the recipient read holds 100
-// notifications at both, well inside DefaultMaxPerRecipient = 500, so only the
-// store's total size differs.
-const (
-	smallNotifications, smallRecipients = 20_000, 200
-	largeNotifications, largeRecipients = 200_000, 2_000
-)
-
-// benchmarkSizes pairs each fixture size with the name its sub-benchmark
-// reports under, so every benchmark measures the same two points.
-var benchmarkSizes = []struct {
-	name                      string
-	notifications, recipients int
-}{
-	{"20k", smallNotifications, smallRecipients},
-	{"200k", largeNotifications, largeRecipients},
-}
-
 func BenchmarkMemoryStoreCountActive(b *testing.B) {
 	for _, size := range benchmarkSizes {
 		b.Run(size.name, func(b *testing.B) {
 			store, recipient := seedMemoryStore(b, size.notifications, size.recipients)
 			ctx := b.Context()
-
-			b.ResetTimer()
 
 			for b.Loop() {
 				if _, err := store.CountActive(ctx, recipient); err != nil {
@@ -172,8 +231,6 @@ func BenchmarkMemoryStoreList(b *testing.B) {
 			store, recipient := seedMemoryStore(b, size.notifications, size.recipients)
 			ctx := b.Context()
 			query := ntfy.ListQuery{Recipient: recipient, Limit: 50}
-
-			b.ResetTimer()
 
 			for b.Loop() {
 				if _, err := store.List(ctx, query); err != nil {
@@ -195,8 +252,6 @@ func BenchmarkMemoryStoreMarkAllRead(b *testing.B) {
 			through := seedStart.Add(-time.Hour)
 			at := seedStart.Add(time.Hour)
 
-			b.ResetTimer()
-
 			for b.Loop() {
 				if _, err := store.MarkAllRead(ctx, recipient, through, at); err != nil {
 					b.Fatal(err)
@@ -212,20 +267,29 @@ func BenchmarkMemoryStoreMarkAllRead(b *testing.B) {
 ```go
 // BenchmarkMemoryStoreCountActiveParallel measures whole-process throughput:
 // the scan holds the one mutex, so adding goroutines cannot add throughput
-// until the scan is gone.
+// until the scan is gone. It runs at least 32 goroutines, the concurrency the
+// audit measured, whatever GOMAXPROCS is, and reports ops/s for the whole
+// process.
 func BenchmarkMemoryStoreCountActiveParallel(b *testing.B) {
+	const goroutines = 32
+
 	store, recipient := seedMemoryStore(b, largeNotifications, largeRecipients)
 	ctx := b.Context()
 
+	b.SetParallelism((goroutines + runtime.GOMAXPROCS(0) - 1) / runtime.GOMAXPROCS(0))
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			if _, err := store.CountActive(ctx, recipient); err != nil {
-				b.Fatal(err)
+				b.Error(err)
+
+				return
 			}
 		}
 	})
+
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "ops/s")
 }
 ```
 
@@ -307,7 +371,7 @@ git commit -m "Add memory store read benchmarks and record the scan cliff"
 
 - [ ] **Step 1: Write the invariant test**
 
-Create `memory_index_test.go`. It is internal (`package ntfy`) because the invariant is about unexported state, and it runs the four operation shapes that change membership.
+Create `memory_index_test.go`. It is internal (`package ntfy`) because the invariant is about unexported state, and it runs the six operation shapes that touch membership. The last one reuses an identifier for another recipient. It stays red after Step 6 until `put` removes the notification it replaces, which is the code in Step 5.
 
 ```go
 package ntfy
@@ -417,6 +481,51 @@ func TestMemoryStoreRecipientIndexMirrorsTheStore(t *testing.T) {
 				assert.NotContains(t, s.recipients, "bob", "an emptied recipient keeps no index entry")
 			},
 		},
+		{
+			name: "after the count bound evicts part of a recipient's notifications",
+			operate: func(t *testing.T, s *MemoryStore) {
+				_, err := s.Prune(t.Context(), PruneRequest{
+					Now: at.Add(time.Hour), MaxPerRecipient: 1, Strategy: EvictOldestActive,
+				})
+				require.NoError(t, err)
+			},
+			assert: func(t *testing.T, s *MemoryStore) {
+				assert.Len(t, s.recipients["alice"], 1)
+				assert.Contains(t, s.recipients["alice"], "id-c", "the newest survives the count bound")
+				assert.Len(t, s.recipients["bob"], 1)
+			},
+		},
+		{
+			// The IDGenerator is the consumer's to replace, and the memory
+			// store has no primary key to reject a repeat. The later
+			// notification replaces the earlier, as it always has, and no index
+			// may keep pointing the earlier recipient at it.
+			name: "after an identifier is reused for another recipient",
+			operate: func(t *testing.T, s *MemoryStore) {
+				_, err := s.Insert(t.Context(), "task-2", []Insertion{{Notification: Notification{
+					ID: "id-a", Recipient: "carol", SourceID: "evt-reused", Subject: "task-2",
+					Kind: "offer", State: StateActive, CreatedAt: at.Add(time.Hour),
+				}}})
+				require.NoError(t, err)
+			},
+			assert: func(t *testing.T, s *MemoryStore) {
+				assert.NotContains(t, s.recipients["alice"], "id-a", "alice keeps no entry for carol's notification")
+				assert.NotContains(t, s.subjects["task-1"], "id-a", "task-1 keeps no entry for carol's notification")
+				assert.NotContains(t, s.sources, sourceKey{source: "evt-id-a", recipient: "alice"})
+
+				count, err := s.CountActive(t.Context(), "alice")
+				require.NoError(t, err)
+				assert.Equal(t, int64(1), count, "alice counts only her own notification")
+
+				marked, err := s.MarkAllRead(t.Context(), "alice", at.Add(2*time.Hour), at.Add(2*time.Hour))
+				require.NoError(t, err)
+				assert.Equal(t, int64(1), marked.Marked, "alice marks only her own notification")
+
+				carol, err := s.Get(t.Context(), "carol", "id-a")
+				require.NoError(t, err)
+				assert.Equal(t, StateActive, carol.State, "carol's notification is untouched by alice")
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -467,32 +576,25 @@ Expected: FAIL with `index holds 0 identifiers, the store holds 3 notifications`
 Replace `put` (`memory.go:114-126`) with:
 
 ```go
-// put stores a notification and indexes it. The caller holds the lock.
+// put stores a notification and indexes it. A notification already stored
+// under the same identifier is removed first, with its index entries, so that
+// no index keeps pointing its recipient or subject at the replacement. The
+// caller holds the lock.
 func (s *MemoryStore) put(n Notification) {
+	if old, ok := s.notifications[n.ID]; ok {
+		s.remove(old)
+	}
+
 	s.notifications[n.ID] = n
 	s.sources[sourceKey{source: n.SourceID, recipient: n.Recipient}] = n.ID
-
-	ids := s.subjects[n.Subject]
-	if ids == nil {
-		ids = make(map[string]struct{})
-		s.subjects[n.Subject] = ids
-	}
-
-	ids[n.ID] = struct{}{}
-
-	held := s.recipients[n.Recipient]
-	if held == nil {
-		held = make(map[string]struct{})
-		s.recipients[n.Recipient] = held
-	}
-
-	held[n.ID] = struct{}{}
+	indexAdd(s.subjects, n.Subject, n.ID)
+	indexAdd(s.recipients, n.Recipient, n.ID)
 }
 ```
 
 - [ ] **Step 6: Maintain the index in `remove`**
 
-Replace `remove` (`memory.go:128-140`) with:
+Replace `remove` (`memory.go:128-140`) with the following, and add the two set-index helpers after it. `put` (Step 5) uses them too:
 
 ```go
 // remove deletes a notification and its index entries. The caller holds the
@@ -500,19 +602,29 @@ Replace `remove` (`memory.go:128-140`) with:
 func (s *MemoryStore) remove(n Notification) {
 	delete(s.notifications, n.ID)
 	delete(s.sources, sourceKey{source: n.SourceID, recipient: n.Recipient})
+	indexRemove(s.subjects, n.Subject, n.ID)
+	indexRemove(s.recipients, n.Recipient, n.ID)
+}
 
-	ids := s.subjects[n.Subject]
-	delete(ids, n.ID)
-
-	if len(ids) == 0 {
-		delete(s.subjects, n.Subject)
+// indexAdd adds id to key's set in index, creating the set if key has none.
+func indexAdd(index map[string]map[string]struct{}, key, id string) {
+	ids := index[key]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		index[key] = ids
 	}
 
-	held := s.recipients[n.Recipient]
-	delete(held, n.ID)
+	ids[id] = struct{}{}
+}
 
-	if len(held) == 0 {
-		delete(s.recipients, n.Recipient)
+// indexRemove removes id from key's set in index, dropping the set once it is
+// empty so that an index never holds a key with nothing under it.
+func indexRemove(index map[string]map[string]struct{}, key, id string) {
+	ids := index[key]
+	delete(ids, id)
+
+	if len(ids) == 0 {
+		delete(index, key)
 	}
 }
 ```
@@ -520,7 +632,7 @@ func (s *MemoryStore) remove(n Notification) {
 - [ ] **Step 7: Run the test to verify it passes**
 
 Run: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreRecipientIndexMirrorsTheStore' -count=1 -v .`
-Expected: PASS, all four subtests.
+Expected: PASS, all six subtests.
 
 - [ ] **Step 8: Verify design.md D2's load-bearing claim mechanically**
 
@@ -585,10 +697,17 @@ func timePerOp(tb testing.TB, iterations int, op func(tb testing.TB)) time.Durat
 // so a read whose cost tracks the store's total size is the defect. The gate
 // is a ratio, not a wall-clock number, because a shared CI runner will not
 // reproduce anyone's absolute figures.
+//
+// It deliberately does not call t.Parallel: a sequential test runs while the
+// package's parallel tests are paused, so it does not measure their load.
+// Each cost is the least of several rounds, interleaved between the two
+// sizes, because interference from the rest of the machine only ever adds
+// time.
 func TestMemoryStoreReadsDoNotScaleWithStoreSize(t *testing.T) {
-	t.Parallel()
+	requireMeasurement(t)
 
 	const (
+		rounds     = 5
 		iterations = 200
 		ratioLimit = 2.0
 	)
@@ -663,8 +782,13 @@ func TestMemoryStoreReadsDoNotScaleWithStoreSize(t *testing.T) {
 		// others' contention. The ratio would survive it; the figures in the
 		// failure message would not.
 		t.Run(tc.name, func(t *testing.T) {
-			smallCost := timePerOp(t, iterations, tc.op(small, smallRecipient))
-			largeCost := timePerOp(t, iterations, tc.op(large, largeRecipient))
+			smallOp, largeOp := tc.op(small, smallRecipient), tc.op(large, largeRecipient)
+			smallCost, largeCost := time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
+
+			for range rounds {
+				smallCost = min(smallCost, timePerOp(t, iterations, smallOp))
+				largeCost = min(largeCost, timePerOp(t, iterations, largeOp))
+			}
 
 			tc.assert(t, float64(largeCost)/float64(smallCost), smallCost, largeCost)
 		})
@@ -674,7 +798,7 @@ func TestMemoryStoreReadsDoNotScaleWithStoreSize(t *testing.T) {
 
 - [ ] **Step 3: Run the gate to verify it fails on the ratio**
 
-Run: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 -v .`
+Run: `NTFY_MEASURE_MEMORY=1 GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 -v .`
 Expected: FAIL on all three subtests, with messages of the shape `CountActive cost grew with store size: 480µs at 20k, 4.8ms at 200k (ratio 10.0)`. Confirm the failure is the ratio assertion, not a seeding error. **If the gate passes** against the code as it stands, stop. The cliff does not reproduce on this machine even though Task 1's benchmarks suggested it did. Record both runs in `evidence.md` and report the change as parked rather than continuing. This run takes a few seconds and allocates roughly 150 MB for the two fixtures — expected, and it drops to milliseconds once the index is read.
 
 - [ ] **Step 4: Read `CountActive` through the index**
@@ -749,7 +873,7 @@ The recipient check is now the index lookup. Writing `s.notifications` while ran
 
 - [ ] **Step 7: Run the gate to verify it passes**
 
-Run: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 -v .`
+Run: `NTFY_MEASURE_MEMORY=1 GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 -v .`
 Expected: PASS, all three subtests, with both costs in the same order of magnitude (ratio near 1.0).
 
 **If the gate still fails**, stop and go to Task 7 rather than widening `ratioLimit`. A threshold tuned until it passes proves nothing.
@@ -772,35 +896,73 @@ git commit -m "Read the memory store through its recipient index"
 
 **Files:**
 - Modify: `memory.go:446-473` (`pruneCount`)
-- Modify: `memory_bench_test.go` (add the prune benchmark)
+- Modify: `memory_bench_test.go` (add the prune benchmark and its allocation gate)
 
 **Interfaces:**
 - Consumes: the `recipients` index from Task 2; `seedMemoryStore` from Task 1.
-- Produces: `BenchmarkMemoryStorePruneCount`. `pruneCount(req PruneRequest, result *PruneResult)` keeps its signature; `evict` and the strategy logic are untouched.
+- Produces: `func withinBound() ntfy.PruneRequest`, `BenchmarkMemoryStorePruneCount` and `TestMemoryStorePruneCountWithinBoundAllocatesNothing`. `pruneCount(req PruneRequest, result *PruneResult)` keeps its signature; `evict` and the strategy logic are untouched.
 
 - [ ] **Step 1: Add the prune benchmark**
 
 ```go
-// BenchmarkMemoryStorePruneCount measures the count bound's pass. Seeding is
-// excluded from both the timer and the allocation counters, so B/op is the
-// pass's own cost — which today includes copying every notification in the
-// store into a per-recipient map.
+// withinBound is a count-bound pass in which no seeded recipient exceeds the
+// bound, the steady state of a host running the pruner with the default. It
+// removes nothing, so one seeded store serves every call.
+func withinBound() ntfy.PruneRequest {
+	return ntfy.PruneRequest{
+		Now: seedStart.Add(48 * time.Hour), MaxPerRecipient: ntfy.DefaultMaxPerRecipient, Strategy: ntfy.EvictOldestActive,
+	}
+}
+
+// BenchmarkMemoryStorePruneCount measures the count bound's pass when every
+// recipient is within it, so B/op and allocs/op are what the pass costs merely
+// to find that out.
 func BenchmarkMemoryStorePruneCount(b *testing.B) {
-	ctx := b.Context()
-	now := seedStart.Add(48 * time.Hour)
+	for _, size := range benchmarkSizes {
+		b.Run(size.name, func(b *testing.B) {
+			store, _ := seedMemoryStore(b, size.notifications, size.recipients)
+			ctx := b.Context()
+			req := withinBound()
 
-	for b.Loop() {
-		b.StopTimer()
+			for b.Loop() {
+				if _, err := store.Prune(ctx, req); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
-		store, _ := seedMemoryStore(b, smallNotifications, smallRecipients)
+// TestMemoryStorePruneCountWithinBoundAllocatesNothing gates the count bound's
+// pass on allocations rather than time: a pass that finds every recipient
+// within the bound, the steady state, must not allocate at all, at either
+// store size. Zero allocations is zero bytes, so it also catches a regression
+// that adds a single allocation sized to the whole store, which a ratio of
+// allocation counts would not. Allocation counts do not depend on the
+// machine's load.
+func TestMemoryStorePruneCountWithinBoundAllocatesNothing(t *testing.T) {
+	requireMeasurement(t)
 
-		b.StartTimer()
+	const runs = 5
 
-		if _, err := store.Prune(ctx, ntfy.PruneRequest{
-			Now: now, MaxPerRecipient: 50, Strategy: ntfy.EvictOldestActive,
-		}); err != nil {
-			b.Fatal(err)
-		}
+	for _, size := range benchmarkSizes {
+		t.Run(size.name, func(t *testing.T) {
+			store, _ := seedMemoryStore(t, size.notifications, size.recipients)
+			req := withinBound()
+
+			var (
+				result ntfy.PruneResult
+				err    error
+			)
+
+			allocs := testing.AllocsPerRun(runs, func() {
+				result, err = store.Prune(t.Context(), req)
+			})
+
+			require.NoError(t, err)
+			require.Zero(t, result.DeletedForCount+result.EvictedActive, "the fixture must stay within the bound")
+			assert.Zerof(t, allocs, "a within-bound count pass allocated %.0f times at %s", allocs, size.name)
+		})
 	}
 }
 ```
@@ -808,7 +970,9 @@ func BenchmarkMemoryStorePruneCount(b *testing.B) {
 - [ ] **Step 2: Run it and record the allocation figure**
 
 Run: `GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStorePruneCount' -benchmem -benchtime 10x .`
-Expected: B/op in the megabytes — the pass copies all 20,000 `Notification` values into `byRecipient` before doing any per-recipient work. Note the figure; Step 5 compares against it.
+Also run the gate: `NTFY_MEASURE_MEMORY=1 GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStorePruneCountWithinBoundAllocatesNothing' -count=1 -v .`
+
+Expected: the benchmark reports B/op in the megabytes, because the pass copies every `Notification` into `byRecipient` before any per-recipient work. The gate FAILS at both sizes, on the zero-allocation assertion. The threshold is zero allocations for a pass that finds everyone within the bound. It is stated here, before measuring, and zero allocations means zero bytes. Note the figures; Step 5 compares against them.
 
 - [ ] **Step 3: Rewrite `pruneCount` to iterate the index**
 
@@ -818,15 +982,23 @@ Replace `pruneCount` (`memory.go:446-473`) with:
 // pruneCount brings each recipient within the count bound, inactive
 // notifications first. The caller holds the lock.
 func (s *MemoryStore) pruneCount(req PruneRequest, result *PruneResult) {
-	// The keys are collected before the loop, so evicting inside it cannot
-	// disturb the iteration.
-	for _, recipient := range slices.Sorted(maps.Keys(s.recipients)) {
-		ids := s.recipients[recipient]
+	// Only recipients over the bound are collected, so a pass that finds
+	// everyone within it, the steady state, allocates nothing. Collecting
+	// before evicting also keeps eviction from disturbing the iteration, and
+	// sorting keeps Recipients in a stable order.
+	var over []string
 
-		excess := len(ids) - req.MaxPerRecipient
-		if excess <= 0 {
-			continue
+	for recipient, ids := range s.recipients {
+		if len(ids) > req.MaxPerRecipient {
+			over = append(over, recipient)
 		}
+	}
+
+	slices.Sort(over)
+
+	for _, recipient := range over {
+		ids := s.recipients[recipient]
+		excess := len(ids) - req.MaxPerRecipient
 
 		held := make([]Notification, 0, len(ids))
 		for id := range ids {
@@ -847,7 +1019,7 @@ func (s *MemoryStore) pruneCount(req PruneRequest, result *PruneResult) {
 }
 ```
 
-Two differences from the old body, both deliberate: a recipient already within the bound allocates nothing at all, and only one recipient's notifications are materialised at a time. `evict` still walks the `held` slice it was given, so removing entries from `ids` during eviction cannot disturb it.
+Two differences from the old body, both deliberate. Only recipients over the bound are collected and sorted, so a pass that finds everyone within it allocates nothing. Only one recipient's notifications are materialised at a time. `PruneResult.Recipients` keeps its sorted order. `evict` still walks the `held` slice it was given, so removing entries from `ids` during eviction cannot disturb it.
 
 - [ ] **Step 4: Run the prune and retention tests**
 
@@ -857,7 +1029,7 @@ Expected: PASS — the count bound, the `RetainActive` and `EvictOldestActive` s
 - [ ] **Step 5: Re-run the benchmark and verify the allocation is gone**
 
 Run: `GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStorePruneCount' -benchmem -benchtime 10x .`
-Expected: B/op falls by orders of magnitude against Step 2 — from a copy of the whole store to one recipient's slice at a time. Record both figures in `evidence.md` under `## Prune count bound`.
+Expected: 0 B/op and 0 allocs/op at both sizes, and the gate from Step 2 passes. Record both figures in `evidence.md` under `## Prune count bound`.
 
 - [ ] **Step 6: Commit**
 
@@ -888,11 +1060,12 @@ git commit -m "Prune the memory store count bound without copying every notifica
 // concurrent use; every method runs under one lock, which is the whole of its
 // serialisation.
 //
-// Reading a recipient's notifications — listing, counting, marking all read —
-// costs what that recipient holds, because notifications are indexed by
-// recipient. Two passes are not: pruning by age and claiming emails visit every
-// notification in the store, because neither is scoped to a recipient. Both are
-// driven by the host on an interval rather than by a request.
+// Listing a recipient's notifications, counting them and marking them all read
+// cost what that recipient holds, because notifications are indexed by
+// recipient. The periodic passes are not scoped to a recipient: pruning by age
+// and claiming emails visit every notification in the store, and the count
+// bound visits every recipient. The host drives them on an interval, and each
+// holds the lock while it runs, so their cost grows with the whole store.
 //
 // Nothing here survives a restart, and nothing is shared between processes. A
 // host that needs either uses ntfy/sqlstore.
@@ -952,12 +1125,16 @@ Expected: tests PASS, and `git diff` reports **no changes** under `ntfytest/`. A
 - [ ] **Step 4: Run the race detector**
 
 Run: `GOTOOLCHAIN=go1.26.8 go test -race -count=1 ./...`
-Expected: PASS, no data races, no goroutine leaks from `goleak`. `memory_bench_test.go` is excluded here by its build constraint, which is why Step 5 matters.
+Expected: PASS, no data races, no goroutine leaks from `goleak`. `memory_bench_test.go` is excluded here by its build constraint. The gates are run by the CI step in Step 5.
 
 - [ ] **Step 5: Run the full make target**
 
 Run: `make all`
-Expected: lint, split-check and tests pass in every module. This is the run that executes the gate test, since it does not use `-race`.
+Expected: lint, split-check and tests pass in every module. The gate tests report SKIP here, because they are opt-in. Run them as CI's unit job does:
+
+`NTFY_MEASURE_MEMORY=1 GOTOOLCHAIN=go1.26.8 go test -count=1 -run 'TestMemoryStore(ReadsDoNotScale|PruneCountWithinBound)' -v .`
+
+Expected: PASS.
 
 - [ ] **Step 6: Validate the change**
 
@@ -1012,7 +1189,7 @@ Expected: PASS. A read path that mutates under `RLock` shows up here as a data r
 
 - [ ] **Step 4: Re-run the gate and the parallel benchmark**
 
-Run: `GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 . && GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStoreCountActiveParallel' -benchtime 20x .`
+Run: `NTFY_MEASURE_MEMORY=1 GOTOOLCHAIN=go1.26.8 go test -run 'TestMemoryStoreReadsDoNotScaleWithStoreSize' -count=1 . && GOTOOLCHAIN=go1.26.8 go test -run '^$' -bench 'BenchmarkMemoryStoreCountActiveParallel' -benchtime 20x .`
 Expected: the gate passes, and concurrent throughput scales with goroutines rather than flattening.
 
 - [ ] **Step 5: Record the answer in `design.md`**
