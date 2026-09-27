@@ -44,14 +44,14 @@
 
 ## 4. Upgrade an existing MySQL schema
 
-- [ ] 4.1 Add the section "Comparing identifiers byte for byte on an existing MySQL host" to `docs/schema.md`, after "Adding the email claim index to an existing host". It holds:
+- [x] 4.1 Add the section "Comparing identifiers byte for byte on an existing MySQL host" to `docs/schema.md`, after "Adding the email claim index to an existing host". It holds:
   - a pre-check `SELECT` that finds identifiers longer than the new byte lengths;
   - an "Upgrading" `sql` block of `ALTER TABLE ... MODIFY ... VARBINARY(n)` statements for notifications, watermarks and email deliveries, using the `app_` prefix;
   - a note that the rebuild blocks writes;
   - a "Rolling the upgrade back" `sql` block with the collision and invalid-UTF-8 caveat from `design.md` Migration Plan.
 
   Verify through 4.2.
-- [ ] 4.2 Add `TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes` in `sqlstore/email_verify_test.go`, beside the existing upgrade test.
+- [x] 4.2 Add `TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes` in `sqlstore/email_verify_test.go`, beside the existing upgrade test.
   - Migrate the notification and email schemas, insert `alice`'s notification, and apply the documented rollback block, read through a new `documentedBlock(t, heading, prefix)` helper.
   - Require both verifications to fail, then apply the documented upgrade block.
   - Require both verifications to pass, `alice` + U+200B to get `ErrNotFound`, and `alice` still to read her notification.

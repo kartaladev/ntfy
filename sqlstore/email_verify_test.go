@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/kartaladev/ntfy"
 	"github.com/kartaladev/ntfy/sqlstore"
 	"github.com/kartaladev/ntfy/sqlstore/internal/harness"
 	"github.com/kartaladev/sqlkit"
@@ -201,4 +203,102 @@ func TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex(t *testing.T) {
 
 	assert.NoError(t, store.VerifyEmailSchema(t.Context()))
 	assert.NoError(t, store.MigrateEmail(t.Context()), "and the development path stays re-runnable")
+}
+
+// documentedBlock reads the statements of the first fenced sql block under a
+// heading line of docs/schema.md, comment lines dropped and the documented app_
+// prefix replaced by the store's, so that the upgrade a host runs is the one
+// the test ran.
+func documentedBlock(t *testing.T, heading, prefix string) []string {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join("..", "docs", "schema.md"))
+	require.NoError(t, err)
+
+	document := string(raw)
+
+	start := strings.Index(document, "\n"+heading+"\n")
+	require.GreaterOrEqualf(t, start, 0, "docs/schema.md has the heading %q", heading)
+
+	body := document[start:]
+
+	open := strings.Index(body, "```sql\n")
+	require.GreaterOrEqualf(t, open, 0, "%q is followed by an sql block", heading)
+
+	body = body[open+len("```sql\n"):]
+
+	end := strings.Index(body, "\n```")
+	require.GreaterOrEqualf(t, end, 0, "the sql block under %q is closed", heading)
+
+	var kept []string
+
+	for line := range strings.SplitSeq(body[:end], "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+			kept = append(kept, line)
+		}
+	}
+
+	var statements []string
+
+	for statement := range strings.SplitSeq(strings.Join(kept, "\n"), ";") {
+		if statement = strings.TrimSpace(statement); statement != "" {
+			statements = append(statements, strings.ReplaceAll(statement, "app_", prefix))
+		}
+	}
+
+	require.NotEmptyf(t, statements, "the sql block under %q holds statements", heading)
+
+	return statements
+}
+
+// TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes puts a populated
+// schema back on the old columns with the documented rollback, requires it to
+// fail verification, runs the documented pre-check and upgrade, and requires the
+// schema to verify and to compare recipients byte for byte.
+func TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes(t *testing.T) {
+	t.Parallel()
+
+	db := openSQL(t, "mysql", sqlkittest.RunTestMySQL(t))
+	executor := stdsqlExecutor(t, db, sqlkit.MySQL)
+	store := harness.NewEmailStore(t, executor)
+	prefix := prefixOf(store)
+
+	alices := ntfy.Notification{
+		ID: "n-1", Recipient: "alice", SourceID: "event-1", Subject: "task-1", SubjectVersion: 1,
+		Kind: "offer", State: ntfy.StateActive, CreatedAt: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC),
+	}
+	_, err := store.Insert(t.Context(), "task-1", []ntfy.Insertion{{Notification: alices}})
+	require.NoError(t, err)
+
+	for _, statement := range documentedBlock(t, "### Rolling the upgrade back", prefix) {
+		exec(t, executor, statement)
+	}
+
+	assert.Contains(t, issues(t, store.VerifySchema(t.Context())),
+		prefix+`ntfy_notifications.recipient: collation is "utf8mb4_0900_as_cs" but must be "binary"`,
+		"the old columns fail verification")
+	assert.Contains(t, issues(t, store.VerifyEmailSchema(t.Context())),
+		prefix+`ntfy_email_deliveries.owner: collation is "utf8mb4_0900_as_cs" but must be "binary"`)
+
+	for _, check := range documentedBlock(t, "### Checking before upgrading", prefix) {
+		rows, err := db.QueryContext(t.Context(), check)
+		require.NoErrorf(t, err, "run the documented pre-check %q", check)
+
+		assert.False(t, rows.Next(), "the pre-check finds no identifier the upgrade would refuse")
+		require.NoError(t, rows.Close())
+	}
+
+	for _, statement := range documentedBlock(t, "### Upgrading", prefix) {
+		exec(t, executor, statement)
+	}
+
+	assert.NoError(t, store.VerifySchema(t.Context()))
+	assert.NoError(t, store.VerifyEmailSchema(t.Context()))
+
+	_, err = store.Get(t.Context(), "alice\u200b", "n-1")
+	assert.ErrorIs(t, err, ntfy.ErrNotFound, "after the upgrade another recipient reads nothing of alice's")
+
+	got, err := store.Get(t.Context(), "alice", "n-1")
+	require.NoError(t, err, "the upgrade keeps alice's notification")
+	assert.Equal(t, "alice", got.Recipient)
 }

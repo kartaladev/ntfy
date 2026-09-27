@@ -185,6 +185,104 @@ before deploying the upgrade, with the table prefix in place of `app_`:
 
 A host that does not email does nothing.
 
+## Comparing identifiers byte for byte on an existing MySQL host
+
+A MySQL schema whose identifier columns are `VARCHAR ... COLLATE
+utf8mb4_0900_as_cs` fails `Store.VerifySchema` at startup, naming each
+identifier column. It also fails `Store.VerifyEmailSchema` when the host
+emails. Until it is upgraded, it treats `alice` and `alice` followed by U+200B,
+or `josé` in its two Unicode spellings, as one recipient.
+
+The upgrade makes those columns `VARBINARY`. It needs no newer MySQL. Run it
+once, before deploying, through the migration pipeline, with the table prefix
+in place of `app_`.
+
+MySQL rebuilds each table to change a column's type, and writes to the table
+wait until it finishes. Run it in a maintenance window, or with an online
+schema-change tool.
+
+### Checking before upgrading
+
+The binary columns hold at most as many bytes as the library accepts: 255 for
+an identifier, 100 for a kind. An identifier the library wrote is never longer.
+This query lists any row written around the library that is. MySQL's default
+strict mode refuses the upgrade for such a row and changes nothing; with strict
+mode off it would truncate the identifier, so run this first and fix what it
+finds.
+
+```sql
+SELECT `id` FROM `app_ntfy_notifications`
+    WHERE LENGTH(`id`) > 64 OR LENGTH(`recipient`) > 255 OR LENGTH(`source_id`) > 255
+       OR LENGTH(`subject`) > 255 OR LENGTH(`kind`) > 100 OR LENGTH(`state`) > 16;
+
+SELECT `subject` FROM `app_ntfy_watermarks`
+    WHERE LENGTH(`subject`) > 255 OR LENGTH(`kind`) > 100;
+```
+
+### Upgrading
+
+```sql
+ALTER TABLE `app_ntfy_notifications`
+    MODIFY `id`        VARBINARY(64)  NOT NULL,
+    MODIFY `recipient` VARBINARY(255) NOT NULL,
+    MODIFY `source_id` VARBINARY(255) NOT NULL,
+    MODIFY `subject`   VARBINARY(255) NOT NULL,
+    MODIFY `kind`      VARBINARY(100) NOT NULL,
+    MODIFY `state`     VARBINARY(16)  NOT NULL;
+
+ALTER TABLE `app_ntfy_watermarks`
+    MODIFY `subject` VARBINARY(255) NOT NULL,
+    MODIFY `kind`    VARBINARY(100) NOT NULL;
+
+-- Only a host that emails has this table.
+ALTER TABLE `app_ntfy_email_deliveries`
+    MODIFY `notification_id` VARBINARY(64)  NOT NULL,
+    MODIFY `recipient`       VARBINARY(255) NOT NULL,
+    MODIFY `status`          VARBINARY(16)  NOT NULL,
+    MODIFY `batch_id`        VARBINARY(64)  NULL,
+    MODIFY `owner`           VARBINARY(255) NULL;
+```
+
+No row changes: every identifier keeps its bytes, identifiers that were
+distinct stay distinct, and no unique key can collide. What the old collation
+already merged is not undone. A publish that it suppressed as a duplicate of a
+byte-different source stays unpublished.
+
+A listing page read across the upgrade can repeat or skip one notification
+when the host's `IDGenerator` produces identifiers of mixed case, because the
+old collation and byte order sort case differently. The default UUIDv7
+identifiers sort the same under both.
+
+### Rolling the upgrade back
+
+Rolling back reintroduces the defect. It can also fail. Two rows written after
+the upgrade may differ only in bytes the old collation ignores, such as
+`event-1` and `event-1` followed by U+200B for one recipient, and then collide
+on a unique key. An identifier that is not valid UTF-8 cannot be converted
+back. Either way MySQL refuses the statement and changes nothing.
+
+```sql
+ALTER TABLE `app_ntfy_notifications`
+    MODIFY `id`        VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `recipient` VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `source_id` VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `subject`   VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `kind`      VARCHAR(100) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `state`     VARCHAR(16)  COLLATE utf8mb4_0900_as_cs NOT NULL;
+
+ALTER TABLE `app_ntfy_watermarks`
+    MODIFY `subject` VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `kind`    VARCHAR(100) COLLATE utf8mb4_0900_as_cs NOT NULL;
+
+-- Only a host that emails has this table.
+ALTER TABLE `app_ntfy_email_deliveries`
+    MODIFY `notification_id` VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `recipient`       VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `status`          VARCHAR(16)  COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `batch_id`        VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NULL,
+    MODIFY `owner`           VARCHAR(255) COLLATE utf8mb4_0900_as_cs NULL;
+```
+
 ## Rolling back
 
 The schema is additive. To remove it, stop running the pruner, hub and handlers,
