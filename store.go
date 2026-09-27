@@ -24,6 +24,14 @@ import (
 // holds for other data. Callers are the [Service] and the [Pruner]: requests
 // reach a store already validated, and notifications reach Insert already
 // stamped.
+//
+// A store shares no memory with its caller. It copies what it retains, so that
+// a caller mutating a link map or payload afterwards cannot change what is
+// stored, and what it returns shares nothing with its own state, with the
+// caller's request, or with another notification returned by the same call.
+// [Notification.Clone] is the mechanism, and ntfytest asserts the invariant on
+// every store. A store whose results are decoded afresh from its backing
+// storage satisfies it without copying.
 type Store interface {
 	// Insert publishes notifications that all share one subject, applying, in
 	// the subject's serialised write: watermark suppression, coalescing, and
@@ -157,6 +165,10 @@ func (r CloseRequest) Validate() error {
 // calls it inside its close transaction, once the recipients are known, and
 // inserts the result through its ordinary insert path. It returns nothing when
 // the request names no successor.
+//
+// Every insertion it returns shares no links or payload with the request or
+// with the other insertions. A store still copies what it retains, as [Store]
+// requires: its insert path has other callers, which make no such promise.
 func (r CloseRequest) SuccessorInsertions(recipients []string, at time.Time, ids IDGenerator) ([]Insertion, error) {
 	if r.Successor == nil {
 		return nil, nil
@@ -175,11 +187,15 @@ func (r CloseRequest) SuccessorInsertions(recipients []string, at time.Time, ids
 			return nil, err
 		}
 
-		out = append(out, Insertion{Notification: Notification{
-			ID: id, Recipient: recipient, SourceID: successor.SourceID, Subject: r.Subject,
-			SubjectVersion: successor.SubjectVersion, Kind: successor.Kind, State: StateActive,
-			Title: successor.Title, Links: successor.Links, Data: successor.Data, CreatedAt: at,
-		}})
+		out = append(out, Insertion{
+			// Cloned, so that the insertions share nothing with the request or
+			// with each other: a store may keep what it is given.
+			Notification: Notification{
+				ID: id, Recipient: recipient, SourceID: successor.SourceID, Subject: r.Subject,
+				SubjectVersion: successor.SubjectVersion, Kind: successor.Kind, State: StateActive,
+				Title: successor.Title, Links: successor.Links, Data: successor.Data, CreatedAt: at,
+			}.Clone(),
+		})
 	}
 
 	return out, nil
