@@ -43,7 +43,11 @@ type Hub struct {
 	current *hubRun
 	readyCh chan struct{}
 
-	mu            sync.Mutex
+	mu sync.Mutex
+	// receiving is the subscription side's view of running. It is written under
+	// mu, so that Subscribe decides and inserts in one critical section and a run
+	// ending in between cannot leave an orphaned subscription behind.
+	receiving     bool
 	subscriptions map[string]map[*Subscription]struct{}
 }
 
@@ -169,6 +173,11 @@ func (h *Hub) markReady(run *hubRun) {
 	}
 
 	h.running.Store(true)
+
+	h.mu.Lock()
+	h.receiving = true
+	h.mu.Unlock()
+
 	close(h.readyCh)
 }
 
@@ -181,12 +190,30 @@ func (h *Hub) endRun() {
 
 	h.current = nil
 	h.running.Store(false)
+	h.closeSubscriptions()
 
 	select {
 	case <-h.readyCh:
 		h.readyCh = make(chan struct{})
 	default:
 	}
+}
+
+// closeSubscriptions stops accepting streams and closes every open one, so that
+// no stream outlives the run that fed it. A later run starts with none.
+func (h *Hub) closeSubscriptions() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.receiving = false
+
+	for _, held := range h.subscriptions {
+		for subscription := range held {
+			subscription.closeLocked()
+		}
+	}
+
+	h.subscriptions = make(map[string]map[*Subscription]struct{})
 }
 
 // Running reports whether the hub is receiving signals: a run is in progress and
@@ -243,17 +270,18 @@ func (h *Hub) deliver(signal Signal) {
 // Subscribe opens a subscription to a recipient's signals.
 //
 // It does not authorize: a transport asks its [SubscriptionAuthorizer] first.
-// A hub that is not running refuses with an error matching [ErrUnavailable],
-// and a recipient already holding the maximum number of subscriptions on this
-// instance is refused with one matching [ErrTooManyStreams]. Every subscription
-// must be closed.
+// A hub that is not receiving signals refuses with an error matching
+// [ErrUnavailable], and a recipient already holding the maximum number of
+// subscriptions on this instance is refused with one matching
+// [ErrTooManyStreams]. Every subscription must be closed, and a subscription is
+// closed for the caller when the hub's run ends.
 func (h *Hub) Subscribe(recipient string) (*Subscription, error) {
-	if !h.Running() {
-		return nil, fmt.Errorf("%w: the hub is not receiving signals", ErrUnavailable)
-	}
-
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	if !h.receiving {
+		return nil, fmt.Errorf("%w: the hub is not receiving signals", ErrUnavailable)
+	}
 
 	held := h.subscriptions[recipient]
 	if len(held) >= h.maxStreams {
@@ -265,7 +293,12 @@ func (h *Hub) Subscribe(recipient string) (*Subscription, error) {
 		h.subscriptions[recipient] = held
 	}
 
-	subscription := &Subscription{hub: h, recipient: recipient, ready: make(chan struct{}, 1)}
+	subscription := &Subscription{
+		hub:       h,
+		recipient: recipient,
+		ready:     make(chan struct{}, 1),
+		done:      make(chan struct{}),
+	}
 	held[subscription] = struct{}{}
 
 	return subscription, nil
@@ -281,6 +314,7 @@ type Subscription struct {
 	hub       *Hub
 	recipient string
 	ready     chan struct{}
+	done      chan struct{}
 	closeOnce sync.Once
 
 	mu      sync.Mutex
@@ -321,14 +355,32 @@ func (s *Subscription) Take() (Signal, bool) {
 	return signal, true
 }
 
+// Done is closed when the subscription ends, whether its stream closed it or
+// its instance stopped receiving signals. A transport selects on it alongside
+// [Subscription.Ready] and ends the stream when it closes; a transport that
+// ignores it is left holding a stream no signal will ever reach.
+func (s *Subscription) Done() <-chan struct{} { return s.done }
+
 // Close ends the subscription and frees its slot in the recipient's cap. It is
 // safe to call more than once.
 func (s *Subscription) Close() {
+	s.hub.mu.Lock()
+	defer s.hub.mu.Unlock()
+
+	s.closeLocked()
+}
+
+// closeLocked ends the subscription exactly once. The caller holds the hub's
+// lock, so that a stop can close every subscription in one critical section.
+func (s *Subscription) closeLocked() {
 	s.closeOnce.Do(func() {
-		s.hub.mu.Lock()
-		defer s.hub.mu.Unlock()
+		close(s.done)
 
 		held := s.hub.subscriptions[s.recipient]
+		if _, open := held[s]; !open {
+			return
+		}
+
 		delete(held, s)
 
 		if len(held) == 0 {

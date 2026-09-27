@@ -3,6 +3,7 @@ package ntfy_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -580,6 +581,159 @@ func TestHubReadiness(t *testing.T) {
 
 			tc.assert(t, hub, readies)
 		})
+	}
+}
+
+// TestHubStopReleasesSubscriptions proves a run's end does not leave its
+// subscriptions holding slots: after a stop and a fresh run, a recipient can
+// open a full cap again.
+func TestHubStopReleasesSubscriptions(t *testing.T) {
+	t.Parallel()
+
+	hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), ntfy.WithMaxStreamsPerRecipient(2))
+	require.NoError(t, err)
+
+	stop := runHub(t, hub)
+
+	for range 2 {
+		_, err := hub.Subscribe("alice")
+		require.NoError(t, err)
+	}
+
+	require.ErrorIs(t, stop(), context.Canceled)
+
+	runHub(t, hub)
+
+	for i := range 2 {
+		_, err := hub.Subscribe("alice")
+		assert.NoErrorf(t, err, "subscription %d after the stop", i)
+	}
+}
+
+func TestHubStopClosesOpenSubscriptions(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		assert func(t *testing.T, hub *ntfy.Hub, stop func() error)
+	}
+
+	cases := []testCase{
+		{
+			name: "a stop closes every open subscription",
+			assert: func(t *testing.T, hub *ntfy.Hub, stop func() error) {
+				alice, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				bob, err := hub.Subscribe("bob")
+				require.NoError(t, err)
+
+				assert.False(t, closed(alice.Done()), "an open subscription is not done")
+
+				require.ErrorIs(t, stop(), context.Canceled)
+
+				assert.True(t, closed(alice.Done()))
+				assert.True(t, closed(bob.Done()))
+			},
+		},
+		{
+			name: "closing a subscription the stop already closed is safe",
+			assert: func(t *testing.T, hub *ntfy.Hub, stop func() error) {
+				subscription, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				require.ErrorIs(t, stop(), context.Canceled)
+
+				subscription.Close()
+				subscription.Close()
+
+				assert.True(t, closed(subscription.Done()))
+			},
+		},
+		{
+			name: "a subscription closed by a stop is not revived by the next run",
+			assert: func(t *testing.T, hub *ntfy.Hub, stop func() error) {
+				stale, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				require.ErrorIs(t, stop(), context.Canceled)
+
+				runHub(t, hub)
+
+				fresh, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				assert.True(t, closed(stale.Done()), "the stale subscription stays closed")
+				assert.False(t, closed(fresh.Done()), "the fresh one is open")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster())
+			require.NoError(t, err)
+
+			stop := runHub(t, hub)
+
+			tc.assert(t, hub, stop)
+		})
+	}
+}
+
+// TestHubSubscribeDuringStop proves the window between deciding and inserting is
+// closed: whatever the interleaving, every subscription Subscribe hands out is
+// closed by the stop that follows, and none is left orphaned in a map nobody
+// delivers to.
+func TestHubSubscribeDuringStop(t *testing.T) {
+	t.Parallel()
+
+	for range 100 {
+		hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), ntfy.WithMaxStreamsPerRecipient(16))
+		require.NoError(t, err)
+
+		stop := runHub(t, hub)
+
+		var (
+			wg     sync.WaitGroup
+			mu     sync.Mutex
+			opened []*ntfy.Subscription
+		)
+
+		start := make(chan struct{})
+
+		for range 8 {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				<-start
+
+				subscription, err := hub.Subscribe("alice")
+				if err != nil {
+					return
+				}
+
+				mu.Lock()
+				opened = append(opened, subscription)
+				mu.Unlock()
+			}()
+		}
+
+		close(start)
+		require.ErrorIs(t, stop(), context.Canceled)
+		wg.Wait()
+
+		mu.Lock()
+
+		for i, subscription := range opened {
+			assert.Truef(t, closed(subscription.Done()), "subscription %d outlived the run that fed it", i)
+		}
+
+		mu.Unlock()
 	}
 }
 
