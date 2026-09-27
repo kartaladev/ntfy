@@ -2210,7 +2210,7 @@ Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestStoreOn.*/identity' 
 Observed: 64 identity rows pass across PostgreSQL (database/sql and pgx), MySQL and SQLite.
 Inversion: with the "in another normalisation form" variant temporarily removed, exactly the two NFC rows fail; restored, they pass.
 
-- [ ] **Step 11: Update the sqlkit issue text, run the gates, commit (7.8)**
+- [x] **Step 11: Update the sqlkit issue text, run the gates, commit (7.8)**
 
 The issue text under Task 5 Step 2 now asks for a type check and names `BINARY`/`BLOB`. Run `make all`, `make store-matrix` and `make sqlkit-copy-check`, and record the results in the execution record below. Commit the root, sqlstore and ntfytest changes, each with the tests that drove it.
 
@@ -2252,3 +2252,18 @@ This settled the proposal's claim that the collation also merges sources, which 
 - `make sqlkit-copy-check`: exit 0 against `32e7763297a4ac0107c0702da5a5b497c9029083`. `pkg/sqlkit` is untouched.
 
 **sqlkit follow-up (Task 5 Step 2):** the issue text under Task 5 Step 2 is ready to file in sqlkit's repository. Filing it is left to the maintainer; it has not been filed.
+
+**Task 6, the code review (2026-09-28):**
+- Nine findings. Seven were fixed in this change: #1, #2, #4, #5, #6, #7 and #9. #8 is resolved by #2's design. #3 is resolved for MySQL by #2, and the rest went to the sqlkit issue.
+- Red observations are recorded in Task 6's steps. In summary:
+  - over-long and empty generated identifiers were accepted;
+  - `BINARY(255)` verified;
+  - the MySQL issue said "case-insensitively";
+  - the pre-check missed an over-long email owner;
+  - all four `filters only` folding stores passed the suite.
+- The gates after Task 6:
+  - `make lint split-check` exited 0, with `0 issues.` in all six modules.
+  - Every module's tests passed: `ntfy`, `ntfytest`, `sqlstore`, `sqlstore/internal/gormtest`, `websocket`, `redis`, `nats`, and the five `pkg/sqlkit` modules. The `redis` race did not recur.
+  - `make store-matrix` exited 0.
+  - `make sqlkit-copy-check` exited 0.
+- The sqlkit issue text under Task 5 Step 2 was updated to ask for a type check. It has not been filed.

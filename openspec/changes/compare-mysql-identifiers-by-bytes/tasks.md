@@ -91,4 +91,4 @@
 - [x] 7.5 (#5) Extend the identity group to filter by the byte-different identifier: list by subject, close by subject and by kind, `Except`, `SuccessorSkip` and `MarkAllRead`. Add a test store that folds only those arguments. Verify that `TestIdentityRejectsFoldingStores` rejects it: red before the extension, green after.
 - [x] 7.6 (#7) Replace `documentedStatement` with `documentedBlock`, keyed by the claim-index section's MySQL line. Verify that `TestTheDocumentedMySQLUpgrade` passes (a refactor under green).
 - [x] 7.7 (#9) Correct `docs/schema.md`: precomposed `é` equals `e` followed by U+0301; `é` does not equal `e`. Verify by re-reading.
-- [ ] 7.8 Update the sqlkit issue text in `plans.md` so it asks for a type check and the reworded issue. Then run `make all`, `make store-matrix` and `make sqlkit-copy-check`, and record the results.
+- [x] 7.8 Update the sqlkit issue text in `plans.md` so it asks for a type check and the reworded issue. Then run `make all`, `make store-matrix` and `make sqlkit-copy-check`, and record the results.
