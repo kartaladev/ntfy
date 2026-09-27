@@ -47,6 +47,12 @@ svc, err := ntfy.New(ntfy.NewMemoryStore())
 | Identifiers | UUIDv7, sorting in the order they were minted | `WithIDGenerator` |
 | Change signals | `InProcessBroadcaster`, which reaches only its own process | `WithBroadcaster`, such as ntfy/redis or ntfy/nats |
 | Broadcast failures | ignored, silently | `WithSignalErrorHandler` — supply one that logs |
+| Title length | 1 KiB | `WithLimits(ntfy.Limits{MaxTitleBytes: ntfy.Limit(n)})` |
+| Payload size | 64 KiB | `WithLimits(ntfy.Limits{MaxDataBytes: ntfy.Limit(n)})` |
+| Links per notification | 16, each relation name at most 100 bytes and each href at most 2 KiB | `WithLimits(ntfy.Limits{MaxLinks: …, MaxLinkRelationBytes: …, MaxLinkHrefBytes: …})` |
+| Link schemes | `http`, `https` and relative references | `WithLimits(ntfy.Limits{LinkSchemes: […]})`, or `AnyLinkScheme: true` to store any scheme |
+| Drafts per publish | 1000 | `WithLimits(ntfy.Limits{MaxDraftsPerPublish: ntfy.Limit(n)})` |
+| Values per list filter | 100 | `WithLimits(ntfy.Limits{MaxFilterValues: ntfy.Limit(n)})` |
 
 A nil option is ignored and keeps the default. A nil store is a configuration
 error from `New`, before any traffic.
@@ -277,3 +283,14 @@ stream is open. A different Fiber major version should be checked again.
 - **No signal replay.** A reconnecting client must re-read.
 - **A group join after a notification was written does not deliver it.**
   Notifications are per recipient; a publisher expands groups when it publishes.
+- **A page is bounded by two limits, not one.** A response carries at most
+  `MaxListLimit` notifications of at most `MaxDataBytes` each, and the body is
+  marshalled whole before a byte is written: 500 × 64 KiB is 32 MB. A host
+  storing large payloads lowers one of the two.
+- **An over-limit draft is refused, never truncated.** Content is returned
+  exactly as published, so there is nothing sensible to store for a draft that
+  does not fit.
+- **A limit bounds what is published from here on.** Rows stored before a limit
+  was lowered are untouched and are still returned in full.
+- **A link's href is checked for form only.** Nothing resolves it, follows it,
+  or asks where it points.
