@@ -1833,3 +1833,13 @@ Where the implementation departed from the steps above, and why:
 7. **Task 7 checks `information_schema.STATISTICS` in `mysqlIndexExists`,** and drops the index statement from the rendered list when the index is present.
 8. **The migration note is verified from the document.** `TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex` reads the `ALTER TABLE` line from `docs/schema.md` and runs it against an email schema from before the index.
 9. **The write-side cost (task 4.4) comes from the harness's bulk-seed times,** without the index (before) and with it (after), rather than from a separate publish benchmark. The figures are indicative, and `measurements.md` says so.
+10. **Review follow-up.** `/code-review high` returned ten items; each was checked before it was accepted.
+    - **Branch 1 changed from `NOT EXISTS` to `LEFT JOIN ... IS NULL`.** The grown seed now carries `SENT` history, and with it threshold 2 failed on MySQL (56 → 164 ms). `TestClaimStatementShape` changed to match. `measurements.md` has the figures.
+    - **The benchmark runs inside the test.** `benchClaim` uses `testing.Benchmark`, because `sqlkittest` needs a `*testing.T`.
+    - **`MigrateEmail` finds the index statement by its quoted name**, and checks for the index through `sqlkit.IndexQuery` on the store's own context.
+    - **The recorded-flag test no longer depends on the opt-in measurement file.**
+    - **`docs/email.md` and `docs/schema.md` state the apply order:** the email schema goes after the notification schema.
+    - **Not changed:**
+      - The MySQL non-idempotent statement stays, as decided in D2.
+      - Branch 3's abandoned records are recorded as unverified.
+      - Moving idempotent index creation into `sqlkit` is ruled out, because it is a frozen copy.

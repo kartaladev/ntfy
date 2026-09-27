@@ -79,20 +79,25 @@ func (s *Store) EmailSchema() string {
 
 // MigrateEmail applies the email delivery schema. Like [Store.Migrate] it exists
 // for tests and development, and it may be run again: on MySQL, which has no
-// CREATE INDEX IF NOT EXISTS, it skips the notifications table's email index
-// when that index is already there.
+// CREATE INDEX IF NOT EXISTS, it skips the statement that adds the
+// notifications table's email index when that index is already there.
+//
+// The email schema adds an index to the notifications table, so it applies
+// after the notification schema, never before.
 func (s *Store) MigrateEmail(ctx context.Context) error {
 	statements := sqlkit.RenderSchema(s.emailDocument(), s.prefix)
 
 	if s.dialect.Name() == sqlkit.MySQL.Name() {
-		present, err := s.mysqlIndexExists(ctx, s.prefix+NotificationsTable, s.prefix+emailNotificationsIndex)
+		name := s.prefix + emailNotificationsIndex
+
+		present, err := s.indexExists(ctx, s.prefix+NotificationsTable, name)
 		if err != nil {
 			return err
 		}
 
 		if present {
 			statements = slices.DeleteFunc(statements, func(statement string) bool {
-				return strings.HasPrefix(statement, "CREATE INDEX "+s.quote(s.prefix+emailNotificationsIndex))
+				return strings.Contains(statement, s.quote(name))
 			})
 		}
 	}
@@ -100,34 +105,17 @@ func (s *Store) MigrateEmail(ctx context.Context) error {
 	return sqlkit.ApplySchema(ctx, s.execer, s.dialect, statements)
 }
 
-// mysqlIndexExists reports whether a MySQL table in the current database has
-// an index of a name.
-func (s *Store) mysqlIndexExists(ctx context.Context, table, index string) (bool, error) {
-	w := sqlkit.NewWriter(s.dialect)
-	w.Write("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()",
-		" AND TABLE_NAME = ", w.Bind(table), " AND INDEX_NAME = ", w.Bind(index))
+// indexExists reports whether a table in the current schema has an index of a
+// name, through the same introspection schema verification uses and outside
+// any transaction the caller holds.
+func (s *Store) indexExists(ctx context.Context, table, index string) (bool, error) {
+	var found bool
 
-	var count int64
-
-	err := s.executor.Query(ctx, w.Done(), func(rows sqlkit.Rows) error {
-		for rows.Next() {
-			var value any
-			if err := rows.Scan(&value); err != nil {
-				return err
-			}
-
-			var dec decoder
-
-			count = dec.integer(value)
-			if dec.err != nil {
-				return dec.err
-			}
-		}
-
-		return rows.Err()
+	err := s.queryTexts(s.own(ctx), sqlkit.IndexQuery(s.dialect, []string{table}), 2, func(values []string) {
+		found = found || values[1] == index
 	})
 
-	return count > 0, err
+	return found, err
 }
 
 // VerifyEmailSchema compares the live database with what email delivery
@@ -259,7 +247,10 @@ func (s *Store) dueEmails(ctx context.Context, claim ntfy.EmailClaim, now time.T
 // branches, each driving from the table an index of its own covers, so that a
 // pass costs what the claim window holds rather than what the table holds.
 //
-//	branch 1  a notification that qualifies and has no delivery record
+//	branch 1  a notification that qualifies and has no delivery record, found
+//	          by probing the deliveries key once per notification in the
+//	          window: an outer join tested for NULL, because MySQL runs NOT
+//	          EXISTS as a materialised anti-join that reads every delivery
 //	branch 2  a send left in doubt, whatever the notification's state now is
 //	branch 3  a due CLAIMED or RETRY record whose notification still qualifies
 //
@@ -305,9 +296,11 @@ func (s *Store) dueEmailsStatement(claim ntfy.EmailClaim, now time.Time) sqlkit.
 
 	w.Write("SELECT due.", s.quote("id"), ", due.", s.quote("recorded"), " FROM (")
 
-	branch("b1", "'0'", s.notificationsTable()+" n", func() {
+	unrecorded := s.notificationsTable() + " n LEFT JOIN " + s.emailTable() + " d ON " + d("notification_id") + " = " + n("id")
+
+	branch("b1", "'0'", unrecorded, func() {
 		qualifies()
-		w.Write(" AND NOT EXISTS (SELECT 1 FROM ", s.emailTable(), " d WHERE ", d("notification_id"), " = ", n("id"), ")")
+		w.Write(" AND ", d("notification_id"), " IS NULL")
 	})
 	w.Write(" UNION ALL ")
 	branch("b2", "'1'", joined, func() { s.writeInDoubt(w, d, instant) })

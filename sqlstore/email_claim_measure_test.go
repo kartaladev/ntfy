@@ -6,8 +6,9 @@ package sqlstore
 //
 //	NTFY_MEASURE_ROWS=1000000 go test -run TestMeasureClaim -timeout 90m -v .
 //
-// It asserts the thresholds of openspec/changes/scale-email-claim-query/design.md
-// — D3 that hold on any machine: no full scan of the notifications table, and an
+// It asserts the thresholds of
+// openspec/changes/archive/2026-09-27-scale-email-claim-query/design.md — D3
+// that hold on any machine: no full scan of the notifications table, and an
 // empty pass that costs the same after rows are added outside the claim window.
 // The absolute timings are logged for the change's measurements.md.
 
@@ -105,8 +106,9 @@ func measureStore(t *testing.T, dialect sqlkit.Dialect) *Store {
 type seedShape struct {
 	// InWindow is how many ACTIVE notifications fall inside the claim window.
 	InWindow int
-	// Recorded is how many of those already carry a terminal delivery record,
-	// so that a pass considers and discards them rather than claiming them.
+	// Recorded is how many rows already carry a terminal delivery record, so
+	// that a pass considers and discards them rather than claiming them. It
+	// counts the in-window rows first, then the outside ones.
 	Recorded int
 	// Outside is how many ACTIVE notifications are older than the window, which
 	// no pass may ever claim.
@@ -460,6 +462,26 @@ func timeClaims(t *testing.T, store *Store, claim ntfy.EmailClaim, want int) tim
 	return medianOf(took)
 }
 
+// benchClaim runs a claim that claims nothing as a Go benchmark and logs the
+// standard result line, so that runs can be compared with benchstat. It lives
+// inside the test rather than in a Benchmark function because the databases
+// come from sqlkittest's helpers, which take a *testing.T.
+func benchClaim(t *testing.T, store *Store, claim ntfy.EmailClaim, label string) {
+	t.Helper()
+
+	result := testing.Benchmark(func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			if _, err := store.ClaimEmails(t.Context(), claim); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	t.Logf("BENCH %s\t%s\t%s", label, result.String(), result.MemString())
+}
+
 // measureClaim is the claim every measurement runs, with the dispatcher's
 // default grace, lag and limit.
 func measureClaim(now time.Time) ntfy.EmailClaim {
@@ -505,23 +527,28 @@ func TestMeasureClaim(t *testing.T) {
 			plan := explain(t, store, store.dueEmailsStatement(claim, now))
 			t.Logf("plan with work available:\n%s", plan)
 
-			working := timeClaims(t, store, claim, min(claim.Limit, len(unrecorded)))
-			t.Logf("MEASURE %s working pass (%d claimed) median: %s", tc.name, claim.Limit, working)
+			claimable := min(claim.Limit, len(unrecorded))
+			working := timeClaims(t, store, claim, claimable)
+			t.Logf("MEASURE %s working pass (%d claimed) median: %s", tc.name, claimable, working)
 
 			require.NoError(t, seedDeliveries(t.Context(), store, unrecorded, now))
 
 			empty := timeClaims(t, store, claim, 0)
 			t.Logf("MEASURE %s empty pass median: %s", tc.name, empty)
+			benchClaim(t, store, claim, tc.name+" empty pass")
 
 			idle := explain(t, store, store.dueEmailsStatement(claim, now))
 			t.Logf("plan with nothing claimable:\n%s", idle)
 
+			// The rows added outside the window carry SENT records, as a mature
+			// host's do until retention removes them: history grows both tables.
 			seed(t, store, seedShape{
-				Outside: rows, Now: now.Add(-time.Hour), Grace: shape.Grace, MaxLag: shape.MaxLag,
+				Outside: rows, Recorded: rows, Now: now.Add(-time.Hour), Grace: shape.Grace, MaxLag: shape.MaxLag,
 			})
 
 			grown := timeClaims(t, store, claim, 0)
-			t.Logf("MEASURE %s empty pass median after %d more rows outside the window: %s", tc.name, rows, grown)
+			benchClaim(t, store, claim, tc.name+" empty pass, table grown")
+			t.Logf("MEASURE %s empty pass median after %d more recorded rows outside the window: %s", tc.name, rows, grown)
 
 			// Threshold 1: no branch scans the notifications table in full.
 			assert.Empty(t, fullScans(t, tc.dialect, plan), "a full scan of the notifications table with work available")

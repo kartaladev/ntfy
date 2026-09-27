@@ -747,3 +747,65 @@ SCAN b3
 SCAN due
 USE TEMP B-TREE FOR ORDER BY
 ```
+
+## Review follow-up: growth that carries delivery history
+
+Code review questioned threshold 2's "grown" seed. It added notifications
+with no delivery records, but in production every emailed notification keeps
+its `SENT` record until retention removes it, so history grows both tables.
+The seed now gives the grown rows `SENT` records. The threshold is unchanged.
+
+**It reproduced on MySQL.** With branch 1 as `NOT EXISTS`, the MySQL empty
+pass went from 56 ms to **164 ms**, against a limit of 88 ms, because MySQL
+runs that `NOT EXISTS` as a materialized anti-join that reads every delivery
+record. PostgreSQL went from 79 to 87 ms and SQLite from 71 to 83 ms, both
+within their limits.
+
+**The fix:** branch 1 became `LEFT JOIN d ... WHERE d.notification_id IS
+NULL`. Each dialect now probes the deliveries primary key once per
+notification in the window. It returns the same rows: the equivalence fixture
+passes unedited on all three dialects and fails when `IS NULL` is dropped.
+With the same command, machine and seed:
+
+| Dialect | Empty pass | +1M recorded rows outside the window | Limit (threshold 2) | 500-claim pass |
+| --- | --- | --- | --- | --- |
+| PostgreSQL | 82 ms | 87 ms | 129 ms | 88 ms |
+| MySQL | 151 ms | 163 ms | 231 ms | 164 ms |
+| SQLite | 71 ms | 77 ms | 112 ms | 71 ms |
+
+`TestMeasureClaim` passes on all three dialects.
+
+**The trade-off on MySQL:** the idle pass is now 151 ms. Under the `NOT
+EXISTS` form it was 56 ms, but only while delivery history was small, and it
+grew with that history. The outer-join form costs what the window holds (50k
+probes here), so it stays flat. Both are far below the 1.87 s before this
+change.
+
+### Benchmark output
+
+`benchClaim` runs the empty pass through `testing.Benchmark`, one line per
+run in benchstat format:
+
+```
+PostgreSQL empty pass              14   82583378 ns/op   8617916 B/op   44006 allocs/op
+PostgreSQL empty pass, table grown 13   87248737 ns/op   9406618 B/op   43791 allocs/op
+MySQL empty pass                    7  155508125 ns/op  42748766 B/op  432702 allocs/op
+MySQL empty pass, table grown       7  159128429 ns/op   4663563 B/op   33918 allocs/op
+SQLite empty pass                  15   72408853 ns/op      8584 B/op     188 allocs/op
+SQLite empty pass, table grown     14   78213747 ns/op      8585 B/op     188 allocs/op
+```
+
+It runs inside the test rather than as a `func Benchmark`. The databases come
+from `sqlkittest`'s helpers, which take a `*testing.T`, and `pkg/sqlkit` is a
+frozen copy.
+
+## Not measured (unverified)
+
+**Unverified:** branch 3's cost grows with abandoned `CLAIMED` or `RETRY`
+records. When a delivery's notification is closed or ages out of the window
+while its record is `CLAIMED` or `RETRY`, the record is never claimed again.
+It stays until retention deletes the notification. Branch 3 reads such records
+through the lease and retry indexes and discards them. The seed creates none,
+so this change neither measures nor claims their cost. Under
+`.claude/rules/performance-benchmark.md` the claim cannot justify a change
+until a seed that contains such records shows the cost.

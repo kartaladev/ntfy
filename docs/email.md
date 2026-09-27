@@ -28,10 +28,14 @@ Each has a `Func` adapter. A nil port is a configuration error, and so is a stor
 that does not record email deliveries: `NewMemoryStore()` and `ntfy/sqlstore`
 do.
 
-**The SQL store needs one more table.** Apply `Store.EmailSchema()` (the documents
-under `ntfy/sqlstore/ddl/email/`) through your migration pipeline, and call
-`Store.VerifyEmailSchema(ctx)` at startup alongside `Store.VerifySchema(ctx)`,
-which does not require it.
+**The SQL store needs one more table, and one index on the notifications
+table.** Apply `Store.EmailSchema()` (the documents under
+`ntfy/sqlstore/ddl/email/`) through your migration pipeline **after**
+`Store.Schema()`. The email schema indexes the notifications table, so it
+fails if applied first. Then call `Store.VerifyEmailSchema(ctx)` at startup
+alongside `Store.VerifySchema(ctx)`, which requires neither. On MySQL the email
+document's index statement is not idempotent; `docs/schema.md` explains how to
+add it to an existing database.
 
 Nothing emails on its own. The host runs a pass once with `Dispatch`, in a loop
 with `Run`, or from its own scheduler; constructing a dispatcher starts nothing.

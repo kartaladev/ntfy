@@ -54,6 +54,8 @@ Branch 1 is served by the new index (D2) with an anti-join probe on the deliveri
 - **Insert a delivery row at publish time**, making the claim purely delivery-driven and removing branch 1 altogether. Rejected: it welds the two tables together and breaks the `notification-email` requirement that a host which does not email needs none of this storage. It also puts email's write cost on every publish.
 - **Three separate round trips** instead of `UNION ALL`. Rejected: the limit must be applied across the union, so the branches would need their own limit arithmetic and would see three different snapshots inside one claim transaction.
 
+**Amended after review:** branch 1 is written `LEFT JOIN deliveries ... WHERE d.notification_id IS NULL`, not `NOT EXISTS`. MySQL runs `NOT EXISTS` as a materialised anti-join that reads every delivery record, so its empty pass grew with delivery history. The outer join tested for NULL probes the deliveries key once per notification in the window on every dialect. See `measurements.md`, "Review follow-up".
+
 The per-branch `LIMIT k` plus the outer `LIMIT k` is what keeps the union bounded. `k` is the claim limit.
 
 ### D2. Add `(state, created_at, id)` on `ntfy_notifications`, declared in the **email** documents, required only by `VerifyEmailSchema`

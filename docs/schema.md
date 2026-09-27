@@ -23,7 +23,9 @@ applied, ready to hand to a migration tool. Every statement is `CREATE ... IF NO
 EXISTS`, so applying it to an existing schema changes nothing.
 
 A host that emails notifications also applies the email schema,
-`ntfy/sqlstore/ddl/email/<dialect>.sql`, returned by `Store.EmailSchema()`. It
+`ntfy/sqlstore/ddl/email/<dialect>.sql`, returned by `Store.EmailSchema()`.
+It indexes the notifications table, so it is applied after this document,
+never before. It
 holds the same promise, with **one stated exception**. On MySQL, the email
 document's `CREATE INDEX` for `ntfy_notifications_email_idx` is not
 idempotent. The index belongs to a table that already exists, so it cannot be

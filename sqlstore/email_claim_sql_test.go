@@ -1,10 +1,12 @@
 package sqlstore
 
-// The SQL the claim path writes, asserted per dialect with no database.
+// The SQL the claim path writes, asserted per dialect with no database, and the
+// recorded flag the claim reads back, checked on SQLite.
 
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -142,8 +144,18 @@ func TestDueEmailsMarksWhatIsRecorded(t *testing.T) {
 		CreatedUntil: now.Add(-time.Minute), CreatedFrom: now.Add(-time.Hour), Limit: 10,
 	}
 
-	unseen := seed(t, store, seedShape{InWindow: 2, Now: now, Grace: time.Minute, MaxLag: time.Hour})
-	require.Len(t, unseen, 2)
+	var unseen []string
+
+	for i := range 2 {
+		id := fmt.Sprintf("n-%d", i)
+		_, err := store.Insert(t.Context(), id, []ntfy.Insertion{{Notification: ntfy.Notification{
+			ID: id, Recipient: "alice", SourceID: "src-" + id, Subject: id, Kind: "offer",
+			State: ntfy.StateActive, CreatedAt: now.Add(-30*time.Minute + time.Duration(i)*time.Minute),
+		}}})
+		require.NoError(t, err)
+
+		unseen = append(unseen, id)
+	}
 
 	// The first notification is claimed and its lease left to lapse, so it has a
 	// record; the second never was.
@@ -173,8 +185,8 @@ func claimSQL(t *testing.T, dialect sqlkit.Dialect) string {
 }
 
 // TestClaimStatementShape pins the shape that lets an index serve each branch:
-// no outer join, an anti-join for the unrecorded branch, and a limit per branch
-// as well as on the union.
+// one outer join, tested for NULL, as the unrecorded branch's anti-join; no
+// disjunction; and a limit per branch as well as on the union.
 func TestClaimStatementShape(t *testing.T) {
 	t.Parallel()
 
@@ -189,8 +201,10 @@ func TestClaimStatementShape(t *testing.T) {
 
 		assert.Equal(t, 2, strings.Count(sql, " UNION ALL "), "three branches")
 		assert.Equal(t, 4, strings.Count(sql, " LIMIT 500"), "one limit per branch and one for the union")
-		assert.Equal(t, 1, strings.Count(sql, "NOT EXISTS"), "branch 1 is an anti-join")
-		assert.NotContains(t, sql, "LEFT JOIN", "no branch drives through an outer join")
+		assert.Equal(t, 1, strings.Count(sql, " LEFT JOIN "), "only branch 1 joins outward, as its anti-join")
+		assert.Equal(t, 1, strings.Count(sql, `."notification_id" IS NULL`)+strings.Count(sql, ".`notification_id` IS NULL"),
+			"and tests the join for NULL")
+		assert.NotContains(t, sql, "NOT EXISTS", "no anti-join MySQL would materialise")
 		assert.NotContains(t, sql, " OR (", "no branch filters on a disjunction of branches")
 		assert.True(t, strings.HasSuffix(sql, " LIMIT 500"), "the union is limited last")
 	}
