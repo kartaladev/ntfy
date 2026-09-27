@@ -180,10 +180,10 @@ func TestMySQLComparesIdentifiersByBytes(t *testing.T) {
 	}
 
 	cases := []testCase{
-		{name: "a zero-width space makes another recipient", assert: recipientSeesNothing("alice", "alice​")},
+		{name: "a zero-width space makes another recipient", assert: recipientSeesNothing("alice", "alice\u200b")},
 		{name: "a NUL byte makes another recipient", assert: recipientSeesNothing("alice", "alice\x00")},
-		{name: "NFD makes another recipient than NFC", assert: recipientSeesNothing("josé", "josé")},
-		{name: "a zero-width space makes another source", assert: sourceIsNew("event-1", "event-1​")},
+		{name: "NFD makes another recipient than NFC", assert: recipientSeesNothing("josé", "jose\u0301")},
+		{name: "a zero-width space makes another source", assert: sourceIsNew("event-1", "event-1\u200b")},
 		{name: "a NUL byte makes another source", assert: sourceIsNew("event-1", "event-1\x00")},
 	}
 
@@ -202,8 +202,8 @@ func TestMySQLComparesIdentifiersByBytes(t *testing.T) {
 Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -run 'TestMySQLComparesIdentifiersByBytes' -count=1 .`
 
 Expected: FAIL on all five cases.
-- The three recipient cases fail with `Get as "alice​" returned "alice"'s notification` (and the NUL and NFD equivalents), then `List as ... returned another recipient's notifications` and `CountActive as ... counted`.
-- The two source cases fail with `"event-1​" is a source of its own, not a redelivery of "event-1"`: `Created` has length 0 and `Duplicates` is 1.
+- The three recipient cases fail with `Get as "alice\u200b" returned "alice"'s notification` (and the NUL and NFD equivalents), then `List as ... returned another recipient's notifications` and `CountActive as ... counted`.
+- The two source cases fail with `"event-1\u200b" is a source of its own, not a redelivery of "event-1"`: `Created` has length 0 and `Duplicates` is 1.
 
 If a source case fails with a duplicate-key *error* from `require.NoError` instead, that is the same defect surfacing through the unique key. Record the exact output either way. A container or compile error is not a red; fix it and re-run.
 
@@ -239,8 +239,8 @@ func identityVariants(identifier string) []identityVariant {
 	return []identityVariant{
 		{name: "differing in case", of: identifier, other: strings.ToUpper(identifier[:1]) + identifier[1:]},
 		{name: "with a trailing space", of: identifier, other: identifier + " "},
-		{name: "with a zero-width space", of: identifier, other: identifier + "​"},
-		{name: "in another normalisation form", of: identifier + "-josé", other: identifier + "-josé"},
+		{name: "with a zero-width space", of: identifier, other: identifier + "\u200b"},
+		{name: "in another normalisation form", of: identifier + "-josé", other: identifier + "-jose\u0301"},
 	}
 }
 
@@ -660,7 +660,7 @@ git add sqlstore/identity_test.go sqlstore/verify_test.go sqlstore/verify_intern
 git commit -m "Compare MySQL identifiers byte for byte
 
 MySQL's utf8mb4_0900_as_cs ignored U+200B and NUL and equated NFC with NFD,
-so alice​ read alice's notifications. Identifier columns are now
+so alice\u200b read alice's notifications. Identifier columns are now
 VARBINARY, byte-exact on every supported MySQL, VerifySchema requires binary
 identifier columns, and the conformance suite holds every store to
 byte-exact recipient, source, subject and kind.
@@ -718,7 +718,7 @@ const identityChildEnv = "NTFYTEST_IDENTITY_CHILD"
 var folds = map[string]func(string) string{
 	"lower-casing":                strings.ToLower,
 	"trimming trailing spaces":    func(s string) string { return strings.TrimRight(s, " ") },
-	"stripping zero-width spaces": func(s string) string { return strings.ReplaceAll(s, "​", "") },
+	"stripping zero-width spaces": func(s string) string { return strings.ReplaceAll(s, "\u200b", "") },
 }
 
 // foldingStore is a memory store that folds every identifier it is given, the
@@ -796,10 +796,10 @@ func TestIdentityChild(t *testing.T) {
 
 // runIdentityChild runs the identity group in a child process folding by mode,
 // and reports whether it passed and what it printed.
-func runIdentityChild(t *testing.T, mode string) (bool, string) {
+func runIdentityChild(t *testing.T, mode string) (passed bool, output string) {
 	t.Helper()
 
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run", "^TestIdentityChild$/^identity$", "-test.count=1")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run", "^TestIdentityChild$/^identity$", "-test.count=1", "-test.v")
 	cmd.Env = append(os.Environ(), identityChildEnv+"="+mode)
 	out, err := cmd.CombinedOutput()
 
@@ -828,6 +828,8 @@ func TestIdentityRejectsFoldingStores(t *testing.T) {
 			mode: "sound",
 			assert: func(t *testing.T, passed bool, output string) {
 				assert.Truef(t, passed, "ntfytest.Run failed the memory store:\n%s", output)
+				assert.Contains(t, output, "--- PASS: TestIdentityChild/identity/alice_differing_in_case",
+					"the child ran the identity group, so passing is not vacuous")
 			},
 		},
 	}
@@ -857,7 +859,7 @@ Expected: PASS on all four rows. Task 1 already added the group, so this test pr
 Comment out the `t.Run("identity", ...)` line in `ntfytest/suite.go`. Re-run the command from Step 2.
 Expected:
 - FAIL on the three folding rows, with `ntfytest.Run accepted a store that folds identifiers`. With the group removed, the child runs no subtests and exits 0.
-- `a sound store passes` still passes.
+- `a sound store passes` also fails, on its non-vacuity check (`the child ran the identity group`). A child that ran no identity rows proves nothing.
 
 Restore the line and re-run Step 2 to confirm PASS. Do not commit the inversion.
 
@@ -980,7 +982,7 @@ func TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes(t *testing.T) {
 	assert.NoError(t, store.VerifySchema(t.Context()))
 	assert.NoError(t, store.VerifyEmailSchema(t.Context()))
 
-	_, err = store.Get(t.Context(), "alice​", "n-1")
+	_, err = store.Get(t.Context(), "alice\u200b", "n-1")
 	assert.ErrorIs(t, err, ntfy.ErrNotFound, "after the upgrade another recipient reads nothing of alice's")
 
 	got, err := store.Get(t.Context(), "alice", "n-1")
