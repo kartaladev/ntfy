@@ -158,7 +158,7 @@ streams refused as unavailable until the hub is ready, and clients retry.
 | Closing a client that accepts no writes | after 10s | `WithWriteTimeout` |
 | Streams per recipient on one instance | 8, counted across SSE and WebSocket | `WithMaxStreamsPerRecipient` |
 | Streams on one instance | 10000, counted across every recipient and transport | `WithMaxStreamsPerInstance`, or `WithoutMaxStreamsPerInstance` |
-| Reconnect delay a stream carries | 1s, spread per stream up to 2s | `WithReconnectDelay` (the spread itself is fixed) |
+| Reconnect delay a stream carries | 1s, spread per stream to less than 2s | `WithReconnectDelay` (the spread itself is fixed) |
 | Who may follow whose signals | `SelfOnly`: a user follows only their own | `WithSubscriptionAuthorizer` on the handler; `AllowAll` to permit everything |
 
 - **A signal says that something changed, never what.** It reaches a client as an

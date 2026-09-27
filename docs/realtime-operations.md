@@ -144,7 +144,7 @@ Hub defaults, which both transports share:
 | --- | --- | --- |
 | Streams per recipient | 8 per instance | `ntfy.WithMaxStreamsPerRecipient` |
 | Streams per instance | 10000 across every recipient | `ntfy.WithMaxStreamsPerInstance`, or `ntfy.WithoutMaxStreamsPerInstance` |
-| Reconnect delay | 1s, spread per stream up to 2s | `ntfy.WithReconnectDelay` |
+| Reconnect delay | 1s, spread per stream to less than 2s | `ntfy.WithReconnectDelay` |
 
 **Stated limit:** the spread on the reconnect delay is not configurable. A base
 with no spread returns an instance's clients in one wave, which is what the
