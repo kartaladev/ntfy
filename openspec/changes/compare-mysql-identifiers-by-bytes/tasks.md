@@ -92,3 +92,19 @@
 - [x] 7.6 (#7) Replace `documentedStatement` with `documentedBlock`, keyed by the claim-index section's MySQL line. Verify that `TestTheDocumentedMySQLUpgrade` passes (a refactor under green).
 - [x] 7.7 (#9) Correct `docs/schema.md`: precomposed `é` equals `e` followed by U+0301; `é` does not equal `e`. Verify by re-reading.
 - [x] 7.8 Update the sqlkit issue text in `plans.md` so it asks for a type check and the reworded issue. Then run `make all`, `make store-matrix` and `make sqlkit-copy-check`, and record the results.
+
+## 8. Fix sqlkit in the copy, and record the patch
+
+> Added 2026-09-28. The maintainer allowed changing `pkg/sqlkit` here, on condition that the change is documented so it can be handed to sqlkit's own repository. This replaces the sqlstore-side check from 7.2.
+
+- [x] 8.1 In `pkg/sqlkit`, add `Dialect.IdentifierType()`: `varbinary` on MySQL, whose `IdentifierCollation()` becomes empty; PostgreSQL and SQLite are unchanged. `SchemaQuery` reads each column's type, and `VerifySchema` judges an identifier column by type where the dialect pins one, otherwise by collation. The issue wording says "will not compare byte for byte". Verify with `go test -C pkg/sqlkit -run 'TestVerifySchema|TestDialect|TestIntrospection' -count=1 .`: red first on MySQL's pin, the `varchar` and `binary` rows and the wording, then green.
+- [x] 8.2 Move `sqlkittest`'s MySQL fixture to `VARBINARY`, and widen the executor suite's identifier case to "identifiers compare byte for byte": case, trailing space, U+200B, NFC/NFD. Verify that `go test ./...` in `pkg/sqlkit/{stdsql,pgx,gorm}` passes. Check the reverse too: against the old fixture, the new case fails on MySQL.
+- [x] 8.3 Delete `sqlstore/verify.go` and its tripwire test. `VerifySchema` and `VerifyEmailSchema` call `sqlkit.VerifySchema` directly again. The sqlstore tests expect sqlkit's wording (`type is "varchar" collated "…" but must be "varbinary"`). Verify with `cd sqlstore && go test ./...`: red while the stopgap's wording remained, then green.
+- [x] 8.4 Record the change for upstream:
+  - `pkg/sqlkit/PATCHES.md`: the defect, the reasoning, what changed, the proof and how to apply it;
+  - `pkg/sqlkit/patches/0001-compare-mysql-identifiers-by-bytes.patch`;
+  - `pkg/sqlkit/README.md`: states the patch policy;
+  - `make sqlkit-copy-check`: applies recorded patches before comparing.
+
+  Verify that `make sqlkit-copy-check` passes, that it fails on an unrecorded edit, and that the documented upstream recipe applies cleanly to the source commit.
+- [x] 8.5 Run `make all` and `make store-matrix`, record the results, and commit.

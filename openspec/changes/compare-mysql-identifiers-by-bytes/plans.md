@@ -24,7 +24,7 @@
 - **Go 1.26: export `GOTOOLCHAIN=go1.26.8` before any Go command.** A newer Go may be first on `PATH`. The `make` targets already pin it.
 - **The core module imports only the standard library** in production code. Tests may use `testify`, `goleak` and `go.uber.org/mock`. Enforced by `.golangci.yml` depguard and `make split-check`. This change adds no production import to the core module.
 - **Each satellite module may import only `ntfy`, `sqlkit` and its own client library.** `make split-check` is authoritative.
-- **`pkg/sqlkit` is never edited.** `make sqlkit-copy-check` fails on any difference from its source commit. The expected-collation fix belongs in sqlkit's own repository (Task 5).
+- **`pkg/sqlkit` changes only through a recorded patch.** `make sqlkit-copy-check` rebuilds it from the source commit, the path rewrite and `pkg/sqlkit/patches/*.patch`, and fails on any other difference. Each patch is described in `pkg/sqlkit/PATCHES.md` for sqlkit's own repository (Task 7). Until Task 7 this read "never edited", and Tasks 1 and 6 worked around sqlkit.
 - **Tests follow the `table-test` skill:**
   - an `assert` closure on every case, never `want`/`wantErr` fields;
   - `t.Context()`, not `context.Background()`;
@@ -74,6 +74,7 @@
 | Task 4: documentation of the guarantee | 5.1, 5.2 |
 | Task 5: verify and hand off | 6.1, 6.2 |
 | Task 6: answer the code review | 7.1–7.8 |
+| Task 7: fix sqlkit in the copy, record the patch | 8.1–8.5 |
 
 Task 1 gathers eight `tasks.md` items into one commit, because none of them can land green alone:
 - The new DDL fails the existing `TestVerifySchemaOnMySQL` until `verifyDialect` exists.
@@ -1244,11 +1245,11 @@ Asked for:
    collation.
 3. The `sqlkittest` MySQL fixtures declare identifier columns VARBINARY.
 
-ntfy carries this today as `Store.verify` in `sqlstore/verify.go`. It asks
-sqlkit nothing about MySQL identifier collation, and reads the columns' types
-itself. Once a sqlkit release with the above is copied into ntfy's
-`pkg/sqlkit`, ntfy hands the check back and deletes its own; the tripwire
-`TestSQLKitStillExpectsTheOldMySQLCollation` fails first.
+ntfy now carries exactly this as a patch to its copy of sqlkit (Task 7). The
+patch is `pkg/sqlkit/patches/0001-compare-mysql-identifiers-by-bytes.patch`,
+explained in `pkg/sqlkit/PATCHES.md`, which is the document to send. Once a
+sqlkit release carries it and ntfy's copy is refreshed, the patch and its entry
+are deleted.
 ```
 
 - [x] **Step 3: Tick `tasks.md` and commit**
@@ -2216,6 +2217,289 @@ The issue text under Task 5 Step 2 now asks for a type check and names `BINARY`/
 
 ---
 
+### Task 7: Fix sqlkit in the copy, and record the patch (tasks 8.1–8.5)
+
+> Added 2026-09-28. The maintainer allowed changing `pkg/sqlkit` here, provided the change is documented to hand to sqlkit's own repository. This replaces Task 6's sqlstore-side check (`Store.verify`), which is deleted.
+
+**Files:**
+- Modify in `pkg/sqlkit` (all recorded in the patch):
+  - `dialect.go`, `dialect_test.go`, `verify.go`, `verify_test.go`, `docs/README.md`;
+  - `sqlkittest/fixture.go`, `sqlkittest/suite.go`, `sqlkittest/testutils.go`.
+- Create:
+  - `pkg/sqlkit/PATCHES.md`;
+  - `pkg/sqlkit/patches/0001-compare-mysql-identifiers-by-bytes.patch`.
+- Modify: `pkg/sqlkit/README.md`, `Makefile` (`sqlkit-copy-check`), `sqlstore/store.go`, `sqlstore/email.go`, `sqlstore/verify_test.go`, `sqlstore/email_verify_test.go`, `docs/schema.md`.
+- Delete: `sqlstore/verify.go`, `sqlstore/verify_internal_test.go`.
+
+**Interfaces:**
+- Produces:
+  - `sqlkit.Dialect.IdentifierType() string`: `"varbinary"` for `sqlkit.MySQL`, `""` for PostgreSQL and SQLite;
+  - `sqlkit.MySQL.IdentifierCollation()` is now `""`;
+  - `sqlkit.SchemaQuery` rows are `(table, column, collation, type)`.
+- Consumes: `sqlkit.VerifySchema(ctx, querier, dialect, prefix, expectation)`, unchanged in signature.
+
+The complete change is the patch file itself, which `make sqlkit-copy-check` applies. The steps below show its substance.
+
+- [x] **Step 1: Red in sqlkit (8.1)**
+
+In `pkg/sqlkit/verify_test.go`:
+- the canned introspection rows gain a `typ` field, and `completeColumns(prefix, collation, typ)` takes it;
+- MySQL cases report `typ: "varbinary"` with no collation;
+- a new `setColumn(table, column, collation, typ)` changes one row.
+
+Three cases were added or rewritten:
+
+```go
+		{
+			name: "a case-insensitive collation on an identifier column is named", dialect: sqlkit.PostgreSQL,
+			collation: "C", typ: "text", columns: setCollation("widgets", "owner", "en_US"),
+			assert: func(t *testing.T, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "widgets.owner")
+				assert.Contains(t, err.Error(), `collation is "en_US" but must be "C"`)
+				assert.Contains(t, err.Error(), "byte for byte", "the message has to say why it matters")
+			},
+		},
+		{
+			name:    "a MySQL identifier column that is text under a collation is named, whatever the collation",
+			dialect: sqlkit.MySQL, typ: "varbinary",
+			columns: setColumn("widgets", "owner", "utf8mb4_0900_as_cs", "varchar"),
+			assert: func(t *testing.T, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(),
+					`widgets.owner: type is "varchar" collated "utf8mb4_0900_as_cs" but must be "varbinary"`)
+				assert.Contains(t, err.Error(), "byte for byte", "the message has to say why it matters")
+				assert.NotContains(t, err.Error(), "case-insensitively", "utf8mb4_0900_as_cs is case-sensitive")
+			},
+		},
+		{
+			name:    "a MySQL identifier column of fixed-width BINARY, which pads with NUL, is named",
+			dialect: sqlkit.MySQL, typ: "varbinary", columns: setColumn("widgets", "owner", "", "binary"),
+			assert: func(t *testing.T, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `widgets.owner: type is "binary" but must be "varbinary"`)
+			},
+		},
+```
+
+In `pkg/sqlkit/dialect_test.go`, `TestDialectFragments` gains an `identifierType` expectation: MySQL collation `""` and type `"varbinary"`, the others `""`. `TestDialectsAreStableAndDistinct` requires exactly one of collation and type to be non-empty.
+
+For compilation only, add `IdentifierType() string` to `Dialect`, returning `""` on every dialect, and read a fourth introspection column into `observedColumn{collation, typ}`.
+
+Run: `GOTOOLCHAIN=go1.26.8 go test -C pkg/sqlkit -run 'TestVerifySchema|TestDialect|TestIntrospection' -count=1 .`
+Observed:
+- `TestDialectFragments/mysql` fails: `expected: "" actual: "utf8mb4_0900_as_cs"`, then `expected: "varbinary" actual: ""`.
+- The `varchar` and `BINARY` rows fail with `An error is expected but got nil`.
+- The PostgreSQL row fails because the message lacks "byte for byte".
+
+- [x] **Step 2: Green in sqlkit (8.1)**
+
+The interface in `pkg/sqlkit/dialect.go`:
+
+```go
+	// IdentifierCollation is the collation that identifier columns must carry
+	// for comparison to be byte for byte and ordering to be byte-wise, or empty
+	// when the dialect's identifier columns are binary strings, which carry no
+	// collation. Exactly one of it and IdentifierType is empty: every dialect
+	// pins one or the other.
+	IdentifierCollation() string
+	// IdentifierType is the column type identifier columns must have, as the
+	// database's introspection names it, or empty when a text column carrying
+	// IdentifierCollation will do.
+	IdentifierType() string
+```
+
+MySQL:
+
+```go
+// IdentifierCollation is empty: MySQL identifier columns are binary strings,
+// which carry no collation. See IdentifierType.
+func (mysql) IdentifierCollation() string { return "" }
+
+// IdentifierType pins VARBINARY, which compares and sorts by bytes and pads
+// nothing, on every supported server. No MySQL collation does all of that
+// before 8.0.17: the default, utf8mb4_0900_ai_ci, folds case, so "alice" would
+// match "Alice"; utf8mb4_0900_as_cs ignores code points such as U+200B and
+// equates NFC with NFD; utf8mb4_bin ignores trailing spaces. utf8mb4_0900_bin
+// would, but only from 8.0.17. BINARY is not enough either: it pads with NUL,
+// so a stored identifier stops matching the one it was stored as.
+func (mysql) IdentifierType() string { return "varbinary" }
+```
+
+PostgreSQL and SQLite: `func (postgres) IdentifierType() string { return "" }` and `func (sqlite) IdentifierType() string { return "" }`.
+
+`SchemaQuery` selects the type as a fourth column: `data_type` on PostgreSQL, `DATA_TYPE` on MySQL, `p.type` on SQLite. `VerifySchema` judges identifier columns through:
+
+```go
+// columnIssues reports a missing table, its missing columns and its identifier
+// columns that would not compare byte for byte: of the wrong type where the
+// dialect pins one, or of the wrong collation where it pins that.
+func columnIssues(
+	dialect Dialect, table string, expected TableExpectation, observed map[string]map[string]observedColumn,
+) []SchemaIssue {
+	found, present := observed[table]
+	if !present {
+		return []SchemaIssue{{Table: table, Detail: "table is missing"}}
+	}
+
+	var issues []SchemaIssue
+
+	for _, column := range expected.Columns {
+		live, ok := found[column]
+		if !ok {
+			issues = append(issues, SchemaIssue{Table: table, Column: column, Detail: "column is missing"})
+
+			continue
+		}
+
+		if !slices.Contains(expected.IdentifierColumns, column) {
+			continue
+		}
+
+		if detail := identifierDetail(dialect, live); detail != "" {
+			issues = append(issues, SchemaIssue{Table: table, Column: column, Detail: detail})
+		}
+	}
+
+	return issues
+}
+```
+
+```go
+// identifierDetail says what is wrong with an identifier column, or nothing
+// when it compares byte for byte.
+func identifierDetail(dialect Dialect, live observedColumn) string {
+	const consequence = ", or identifiers will not compare byte for byte"
+
+	if want := dialect.IdentifierType(); want != "" {
+		if strings.EqualFold(live.typ, want) {
+			return ""
+		}
+
+		declared := fmt.Sprintf("%q", live.typ)
+		if live.collation != "" {
+			declared += fmt.Sprintf(" collated %q", live.collation)
+		}
+
+		return fmt.Sprintf("type is %s but must be %q", declared, want) + consequence
+	}
+
+	// An unreported collation is the dialect's default, which is correct
+	// everywhere verification can ask.
+	if want := dialect.IdentifierCollation(); live.collation != "" && live.collation != want {
+		return fmt.Sprintf("collation is %q but must be %q", live.collation, want) + consequence
+	}
+
+	return ""
+}
+```
+
+The godoc of `TableExpectation.IdentifierColumns`, `SchemaError.Issues` and `VerifySchema` says the same, and so does `pkg/sqlkit/docs/README.md`.
+
+Run the Step 1 command. Observed: `ok`.
+
+- [x] **Step 3: The fixture and the suite (8.2)**
+
+`pkg/sqlkit/stdsql`'s live suite failed first on MySQL: `the fixture renders, applies and verifies` named every fixture identifier column `type is "varchar" collated "utf8mb4_0900_as_cs"`.
+
+Changes:
+- In `sqlkittest/fixture.go`, every MySQL `VARCHAR(n) COLLATE utf8mb4_0900_as_cs` becomes `VARBINARY(n)`, in both the fixture and the broken fixture.
+- The fixture's comment says "compare byte for byte".
+- `MySQLImage`'s comment no longer cites the collation.
+- The suite's identifier case:
+
+```go
+	t.Run("identifiers compare byte for byte", func(t *testing.T) {
+		f := newFixture(t, factory, fixtureSchemas)
+
+		// Each owner differs from the others only in bytes some collation
+		// ignores: case, a trailing space, an ignorable code point, and the
+		// decomposed spelling of a precomposed character.
+		owners := map[string]string{
+			"w-1": "alice",
+			"w-2": "Alice",
+			"w-3": "alice ",
+			"w-4": "alice\u200b",
+			"w-5": "jos\u00e9",
+			"w-6": "jose\u0301",
+		}
+
+		for id, owner := range owners {
+			f.insertWidget(t.Context(), t, id, owner)
+		}
+
+		for id, owner := range owners {
+			w := sqlkit.NewWriter(f.Executor.Dialect())
+			w.Write("SELECT ", f.column("id"), " FROM ", f.table("widgets"), " WHERE ", f.column("owner"), " = ")
+			w.Write(w.Bind(owner))
+
+			assert.Equalf(t, []string{id}, f.queryStrings(t, w.Done()),
+				"%+q must match only itself on every dialect", owner)
+		}
+	})
+```
+
+Run `go test ./...` in `pkg/sqlkit/stdsql`, `pkg/sqlkit/pgx` and `pkg/sqlkit/gorm`. Observed: `ok` on all three.
+Inversion: with the old MySQL fixture restored temporarily, `TestExecutorOnMySQL/values/identifiers_compare_byte_for_byte` failed on `"alice"`, `"alice\u200b"` and `"jos\u00e9"`. Restored, it passes.
+
+- [x] **Step 4: Delete the sqlstore stopgap (8.3)**
+
+First, the sqlstore tests expect sqlkit's wording, in `verify_test.go` and `email_verify_test.go`: `type is "varchar" collated "utf8mb4_0900_as_cs" but must be "varbinary"`, and `type is "binary" but must be "varbinary"`. Observed red: the stopgap still said `"varchar(255)" ... must be VARBINARY`.
+
+Then `git rm sqlstore/verify.go sqlstore/verify_internal_test.go`. Make both methods call sqlkit again:
+
+```go
+func (s *Store) VerifySchema(ctx context.Context) error {
+	return sqlkit.VerifySchema(s.own(ctx), s.querier, s.dialect, s.prefix, schemaExpectation)
+}
+```
+
+```go
+func (s *Store) VerifyEmailSchema(ctx context.Context) error {
+	return sqlkit.VerifySchema(s.own(ctx), s.querier, s.dialect, s.prefix, emailSchemaExpectation)
+}
+```
+
+In `docs/schema.md`, "Verifying the schema at startup" now names what is checked: each identifier column's collation on PostgreSQL and SQLite, and its `VARBINARY` type on MySQL.
+
+Run: `cd sqlstore && GOTOOLCHAIN=go1.26.8 go test -count=1 ./...`. Observed: `ok`, including `internal/gormtest`.
+
+- [x] **Step 5: Record the patch (8.4)**
+
+Generate the patch from the difference against the committed copy, which `make sqlkit-copy-check` had just confirmed equals the source:
+
+```sh
+git diff --relative=pkg/sqlkit HEAD -- pkg/sqlkit \
+    ':(exclude)pkg/sqlkit/README.md' ':(exclude)pkg/sqlkit/PATCHES.md' ':(exclude)pkg/sqlkit/patches' \
+    > pkg/sqlkit/patches/0001-compare-mysql-identifiers-by-bytes.patch
+```
+
+Write `pkg/sqlkit/PATCHES.md`, covering the defect, the table of MySQL column choices, what the patch changes, its proof and how to apply it upstream. Rewrite `pkg/sqlkit/README.md` to state the rule: edit the copy only through a recorded patch.
+
+In the `Makefile`'s `sqlkit-copy-check`, after the path rewrite:
+
+```make
+	for patch in $$(ls pkg/sqlkit/patches/*.patch 2>/dev/null | sort); do \
+		echo "    applying $$patch"; \
+		(cd "$$tmp/want/sqlkit" && git apply "$(CURDIR)/$$patch") || { \
+			echo "sqlkit-copy-check: $$patch no longer applies to the source commit"; exit 1; }; \
+	done; \
+	cp -R pkg/sqlkit/README.md pkg/sqlkit/SOURCE pkg/sqlkit/PATCHES.md pkg/sqlkit/patches "$$tmp/want/sqlkit/"; \
+```
+
+Observed:
+- `make sqlkit-copy-check` passes, and prints the patch it applied.
+- With `// an unrecorded edit` appended to `pkg/sqlkit/doc.go`, it fails with `pkg/sqlkit differs from its source and recorded patches`. That edit was reverted.
+- The upstream recipe in `PATCHES.md` (reverse the path rewrite with `sed`, then `git apply --directory=sqlkit`) applies cleanly to `github.com/kartaladev/hmntsk` at `32e7763…`, changing exactly the eight files.
+
+*A mistake made and undone:* a helper that turns literal U+200B, U+0301 and U+00E9 into Go escapes also rewrote an unrelated JSON payload inside a raw string in `sqlkittest/suite.go`. That changed what the test checks, so the line was restored byte for byte before the patch was generated. The patch touches no other line of that test.
+
+- [x] **Step 6: Gates and commit (8.5)**
+
+Run `make all`, `make store-matrix` and `make sqlkit-copy-check`. Record the results in the execution record, then commit the sqlkit patch, the stopgap's removal and the records.
+
+---
+
 ## Execution record
 
 Executed 2026-09-28 in the worktree `.claude/worktrees/compare-mysql-identifiers-by-bytes`, branch `compare-mysql-identifiers-by-bytes`, against MySQL 8.4.6 (`sqlkittest.MySQLImage`), Go 1.26.8.
@@ -2267,3 +2551,20 @@ This settled the proposal's claim that the collation also merges sources, which 
   - `make store-matrix` exited 0.
   - `make sqlkit-copy-check` exited 0.
 - The sqlkit issue text under Task 5 Step 2 was updated to ask for a type check. It has not been filed.
+
+**Task 7, the sqlkit patch (2026-09-28):**
+- Red observations are recorded in Task 7's steps. In summary:
+  - MySQL pinned `utf8mb4_0900_as_cs` and no type;
+  - `varchar` and `BINARY` identifier columns verified;
+  - the message said "case-insensitively";
+  - the live stdsql suite then rejected the old fixture;
+  - the byte-identity case failed on the old fixture;
+  - the sqlstore tests failed on the stopgap's wording.
+- The gates:
+  - `make lint split-check` exited 0, with `0 issues.` in all six modules.
+  - Every module's tests passed: the seven ntfy packages and the five `pkg/sqlkit` modules.
+  - `make store-matrix` exited 0.
+  - `make sqlkit-copy-check` exited 0, applying `0001-compare-mysql-identifiers-by-bytes.patch`.
+- An unrecorded edit to `pkg/sqlkit/doc.go` failed the copy check, as it must.
+- The upstream recipe applied cleanly to `github.com/kartaladev/hmntsk` at `32e7763…`.
+- `pkg/sqlkit/PATCHES.md` and the patch are the documents to hand to sqlkit's repository. They have not been sent.

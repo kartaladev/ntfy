@@ -33,8 +33,8 @@ The ntfytest conformance suite could not catch any of this. It passes a store th
   - The column lengths become byte lengths, which match the core's own byte limits: `MaxIdentifierBytes` = 255, `MaxKindBytes` = 100.
 - **The minimum supported MySQL does not change.** It stays at 8.0. No collation is needed, so nothing asks for a newer server. A library cannot require its hosts to upgrade their database for a fix, and this one does not.
 - **`Store.VerifySchema` and `Store.VerifyEmailSchema` require binary identifier columns on MySQL.** Any identifier column that reports a character-set collation is named at startup, whichever collation it is. An existing MySQL schema therefore fails verification until it is upgraded. **BREAKING** for existing MySQL hosts; no tag has been cut, so this is recorded rather than versioned.
-  - sqlkit hard-codes the expected collation, and its copy in `pkg/sqlkit` may not be edited here. So sqlstore passes verification a dialect that overrides the expectation on MySQL only.
-  - A follow-up fixes the value in sqlkit's own repository, and the override is then deleted.
+  - The check lives in sqlkit, which ntfy carries as a copy in `pkg/sqlkit`. The fix is made there as a recorded patch: `Dialect.IdentifierType()` pins `varbinary` for MySQL, and verification checks identifier columns by type where a dialect pins one. `BINARY(n)` and `BLOB` columns are now reported too, and the issue says identifiers "will not compare byte for byte". **BREAKING** for sqlkit: a `Dialect` implemented outside it must add the method.
+  - `pkg/sqlkit/PATCHES.md` and `pkg/sqlkit/patches/0001-…` record the change for sqlkit's own repository. `make sqlkit-copy-check` applies recorded patches before comparing, and still fails on any unrecorded edit.
 - **A documented, tested upgrade for existing MySQL schemas.** `ALTER TABLE ... MODIFY` statements in `docs/schema.md`, proved by a test that starts from the old columns, applies them, and requires the schema to verify.
   - It comes with a query that finds any row the conversion would reject. Such a row holds an identifier longer than the core's byte limits, which could only have been written around the library's validation.
 - **The conformance suite holds every store to byte-exact identifiers.** New `ntfytest` cases for recipient, source, subject and kind. Each pair differs only by case, trailing space, a zero-width space, or NFC versus NFD. The pairs are chosen to be valid UTF-8 without NUL, so PostgreSQL can store them. NUL is covered by a MySQL-specific test in sqlstore.
@@ -53,7 +53,8 @@ None.
 
 - **Code:**
   - `sqlstore/ddl/mysql.sql`, `sqlstore/ddl/email/mysql.sql` and their golden files under `sqlstore/testdata/schema/`.
-  - `sqlstore/store.go` and `sqlstore/email.go`: the verification dialect.
+  - `pkg/sqlkit` (`dialect.go`, `verify.go`, `sqlkittest/`, `docs/README.md`), recorded in `pkg/sqlkit/PATCHES.md` and `pkg/sqlkit/patches/`; the `sqlkit-copy-check` target in the `Makefile`.
+  - `id.go`, `service.go`, `notification.go`: identifiers minted by an ID generator are bounded by `MaxIDBytes` (64 bytes).
   - New tests in `sqlstore/`.
   - A new `ntfytest/identity.go`, wired into `ntfytest.Run`.
 - **Docs:**
@@ -67,4 +68,4 @@ None.
 - **Out of scope:** validating identifiers for NUL and invalid UTF-8 (audit finding 10) is its own change. A binary column now stores what PostgreSQL would refuse, so that change matters more after this one.
 - **Dependencies:**
   - Nothing new.
-  - Follow-up outside this repository: sqlkit's MySQL dialect should expect binary identifier columns. Then refresh `pkg/sqlkit`, and delete the override.
+  - Follow-up outside this repository: send `pkg/sqlkit/PATCHES.md` and its patch to sqlkit. Once a sqlkit release carries them, refresh the copy and delete the patch.
