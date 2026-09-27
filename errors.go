@@ -19,7 +19,9 @@ var (
 	ErrUnauthorized = errors.New("ntfy: unauthorized")
 	// ErrConfiguration reports a wiring mistake, found at construction.
 	ErrConfiguration = errors.New("ntfy: invalid configuration")
-	// ErrTooManyStreams reports a recipient over the per-instance stream cap.
+	// ErrTooManyStreams reports a stream refused by a cap: a recipient already
+	// holding the per-recipient cap on this instance, or an instance already
+	// holding its total. The message says which.
 	ErrTooManyStreams = errors.New("ntfy: too many streams")
 	// ErrUnavailable reports a realtime stream requested while the hub is not
 	// receiving signals.

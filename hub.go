@@ -30,7 +30,8 @@ const (
 
 // Hub routes signals from a [Broadcaster] to the subscriptions of the recipient
 // each signal is for. Every transport, SSE and WebSocket alike, subscribes
-// through it, so one per-recipient cap counts all of a recipient's streams.
+// through it, so one per-recipient cap counts all of a recipient's streams and
+// one instance-wide cap counts every recipient's together.
 //
 // Nothing runs on its own: signals are received only while the host runs
 // [Hub.Run]. A Hub is safe for concurrent use.
@@ -349,10 +350,10 @@ func (h *Hub) deliver(signal Signal) {
 //
 // It does not authorize: a transport asks its [SubscriptionAuthorizer] first.
 // A hub that is not receiving signals refuses with an error matching
-// [ErrUnavailable], and a recipient already holding the maximum number of
-// subscriptions on this instance is refused with one matching
-// [ErrTooManyStreams]. Every subscription must be closed, and a subscription is
-// closed for the caller when the hub's run ends.
+// [ErrUnavailable], and a stream beyond either the per-recipient cap or the
+// instance-wide cap is refused with an error matching [ErrTooManyStreams],
+// whose message says which. Every subscription must be closed, and a
+// subscription is closed for the caller when the hub's run ends.
 func (h *Hub) Subscribe(recipient string) (*Subscription, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

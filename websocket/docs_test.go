@@ -31,6 +31,8 @@ func TestTheOperationsGuideMatchesTheHandler(t *testing.T) {
 		strconv.Itoa(ntfy.DefaultMaxStreamsPerRecipient) + " connections per instance",
 		"not available on Fiber",
 		"status 1001",
+		strconv.Itoa(ntfy.DefaultMaxStreamsPerInstance) + " streams per instance",
+		"stopped receiving",
 	} {
 		assert.Containsf(t, document, stated, "the guide states %q", stated)
 	}
