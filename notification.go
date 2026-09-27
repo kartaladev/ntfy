@@ -142,7 +142,9 @@ type Draft struct {
 func (d Draft) Validate() error { return d.ValidateWithin(Limits{}) }
 
 // ValidateWithin reports every problem with the draft, bounding its content by
-// limits. An unset limit keeps its default.
+// limits. An unset limit keeps its default. It expects limits [New] would
+// accept; behaviour is unspecified for one [New] would refuse to construct
+// with.
 func (d Draft) ValidateWithin(limits Limits) error {
 	issues := validateContent(content{
 		sourceID: d.SourceID, subject: d.Subject, kind: d.Kind,
@@ -218,13 +220,16 @@ func validateLinks(links map[string]string, limits Limits) []ValidationIssue {
 		return nil
 	}
 
-	var issues []ValidationIssue
-
+	// An over-count map is reported once, and never scanned link by link: a
+	// count issue on top of one per link would report thousands of issues for
+	// one oversized publish.
 	if limit := limits.maxLinks(); len(links) > limit {
-		issues = append(issues, ValidationIssue{
+		return []ValidationIssue{{
 			Pointer: "/links", Detail: "carries more than " + strconv.Itoa(limit) + " links",
-		})
+		}}
 	}
+
+	var issues []ValidationIssue
 
 	for _, relation := range slices.Sorted(maps.Keys(links)) {
 		pointer := "/links/" + escapePointer(relation)
@@ -269,7 +274,9 @@ func checkScheme(href string, limits Limits) string {
 		return ""
 	}
 
-	if slices.Contains(limits.linkSchemes(), strings.ToLower(parsed.Scheme)) {
+	if slices.ContainsFunc(limits.linkSchemes(), func(scheme string) bool {
+		return strings.EqualFold(scheme, parsed.Scheme)
+	}) {
 		return ""
 	}
 

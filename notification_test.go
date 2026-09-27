@@ -208,6 +208,13 @@ func TestDraftValidateContentLimits(t *testing.T) {
 			},
 			assert: func(t *testing.T, err error) { issue(t, err, "/links/a~1b") },
 		},
+		{
+			name: "a relation name carrying a tilde is escaped in the pointer",
+			draft: func(d *ntfy.Draft) {
+				d.Links = map[string]string{"a~b": "/v1/tasks/" + strings.Repeat("x", ntfy.DefaultMaxLinkHrefBytes)}
+			},
+			assert: func(t *testing.T, err error) { issue(t, err, "/links/a~0b") },
+		},
 	}
 
 	for _, tc := range cases {
@@ -220,6 +227,27 @@ func TestDraftValidateContentLimits(t *testing.T) {
 			tc.assert(t, draft.Validate())
 		})
 	}
+}
+
+// TestDraftValidateOversizedLinksSkipsPerLinkChecks proves that a link map
+// over the count limit reports only the count issue, not one issue per link on
+// top of it. Every link here also fails the scheme check, so a per-link issue
+// for each would appear if the per-link loop still ran.
+func TestDraftValidateOversizedLinksSkipsPerLinkChecks(t *testing.T) {
+	t.Parallel()
+
+	links := make(map[string]string, ntfy.DefaultMaxLinks+1)
+	for i := range ntfy.DefaultMaxLinks + 1 {
+		links["r"+strconv.Itoa(i)] = "javascript:alert(1)"
+	}
+
+	draft := validDraft()
+	draft.Links = links
+
+	var validation *ntfy.ValidationError
+	require.ErrorAs(t, draft.Validate(), &validation)
+	require.Len(t, validation.Issues, 1, "an over-count link map reports only the count issue")
+	assert.Equal(t, "/links", validation.Issues[0].Pointer)
 }
 
 func TestDraftValidateWithinRaisedLimits(t *testing.T) {
@@ -283,6 +311,14 @@ func TestDraftValidateLinkSchemes(t *testing.T) {
 			name:   "a host permits another scheme",
 			links:  map[string]string{"task": "mailto:alice@example.test"},
 			limits: ntfy.Limits{LinkSchemes: []string{"http", "https", "mailto"}},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name:   "a host-configured scheme is matched whatever its case",
+			links:  map[string]string{"task": "mailto:alice@example.test"},
+			limits: ntfy.Limits{LinkSchemes: []string{"http", "https", "MAILTO"}},
 			assert: func(t *testing.T, err error) {
 				assert.NoError(t, err)
 			},

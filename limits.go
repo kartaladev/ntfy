@@ -42,8 +42,10 @@ const (
 //	    MaxDataBytes: ntfy.Limit(1 << 20),
 //	}))
 //
-// A limit that is not positive, or naming link schemes while also accepting
-// any scheme, is a [ConfigurationError] from [New].
+// [New] refuses, with a [ConfigurationError]: a limit that is not positive; a
+// LinkSchemes that names no scheme, an empty slice rather than nil, when a
+// host means to keep the default schemes; a LinkSchemes containing an empty
+// scheme name; and naming link schemes while also setting AnyLinkScheme.
 type Limits struct {
 	// MaxTitleBytes is the longest title. Unset means [DefaultMaxTitleBytes].
 	MaxTitleBytes *int
@@ -140,6 +142,32 @@ func limitOr(value *int, fallback int) int {
 	}
 
 	return *value
+}
+
+// snapshot copies every pointer field and the scheme slice, so that a host
+// mutating the [Limits] value it gave [WithLimits] — or the slice or the
+// values a pointer field points at — after construction cannot change an
+// already-built service's policy.
+func (l Limits) snapshot() Limits {
+	l.MaxTitleBytes = clonedLimit(l.MaxTitleBytes)
+	l.MaxDataBytes = clonedLimit(l.MaxDataBytes)
+	l.MaxLinks = clonedLimit(l.MaxLinks)
+	l.MaxLinkRelationBytes = clonedLimit(l.MaxLinkRelationBytes)
+	l.MaxLinkHrefBytes = clonedLimit(l.MaxLinkHrefBytes)
+	l.MaxDraftsPerPublish = clonedLimit(l.MaxDraftsPerPublish)
+	l.MaxFilterValues = clonedLimit(l.MaxFilterValues)
+	l.LinkSchemes = slices.Clone(l.LinkSchemes)
+
+	return l
+}
+
+// clonedLimit copies a limit pointer, or returns nil for one that is unset.
+func clonedLimit(value *int) *int {
+	if value == nil {
+		return nil
+	}
+
+	return Limit(*value)
 }
 
 // validate reports a meaningless or contradictory set of limits.

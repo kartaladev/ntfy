@@ -70,10 +70,14 @@ func WithSignalErrorHandler(handler func(ctx context.Context, err error)) Option
 }
 
 // WithLimits replaces the validation limits, [DefaultLimits]. A field the host
-// leaves unset keeps its default. A limit that is not positive, or naming link
-// schemes while also accepting any scheme, is a [ConfigurationError].
+// leaves unset keeps its default. [New] refuses, with a [ConfigurationError]:
+// a limit that is not positive; an empty LinkSchemes, naming no scheme; a
+// LinkSchemes containing an empty scheme name; and naming link schemes while
+// also setting AnyLinkScheme. The limits are snapshotted at this call: a host
+// mutating the value or slice it passed afterwards does not change the
+// service's policy.
 func WithLimits(limits Limits) Option {
-	return func(s *Service) { s.limits = limits }
+	return func(s *Service) { s.limits = limits.snapshot() }
 }
 
 // New builds a service over a store. With no options it reads the system clock,

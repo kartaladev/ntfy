@@ -40,6 +40,60 @@ func TestDefaultLinkSchemesIsACopy(t *testing.T) {
 	assert.Equal(t, []string{"http", "https"}, ntfy.DefaultLinkSchemes(), "a caller cannot change the defaults")
 }
 
+// TestWithLimitsSnapshotsHostValues proves that a host mutating the pointers
+// or the scheme slice it gave WithLimits, after New returns, cannot change an
+// already-built service's policy.
+func TestWithLimitsSnapshotsHostValues(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		limits func() ntfy.Limits
+		mutate func(l ntfy.Limits)
+		draft  ntfy.Draft
+	}
+
+	cases := []testCase{
+		{
+			name:   "mutating the host's limit pointer after New does not raise the service's link cap",
+			limits: func() ntfy.Limits { return ntfy.Limits{MaxLinks: ntfy.Limit(2)} },
+			mutate: func(l ntfy.Limits) { *l.MaxLinks = 1000 },
+			draft: ntfy.Draft{
+				Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer",
+				Links: map[string]string{
+					"a": "http://x.test/1", "b": "http://x.test/2", "c": "http://x.test/3",
+				},
+			},
+		},
+		{
+			name:   "mutating the host's scheme slice after New does not widen the service's permitted schemes",
+			limits: func() ntfy.Limits { return ntfy.Limits{LinkSchemes: []string{"https"}} },
+			mutate: func(l ntfy.Limits) { l.LinkSchemes[0] = "http" },
+			draft: ntfy.Draft{
+				Recipient: "alice", SourceID: "event-1", Subject: "task-1", Kind: "offer",
+				Links: map[string]string{"a": "http://x.test/1"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			limits := tc.limits()
+
+			svc, err := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithLimits(limits))
+			require.NoError(t, err)
+
+			tc.mutate(limits)
+
+			_, err = svc.Publish(t.Context(), tc.draft)
+			assert.ErrorIs(t, err, ntfy.ErrValidation,
+				"the service keeps enforcing the limits it was given, not the host's later mutation")
+		})
+	}
+}
+
 func TestNewRefusesMeaninglessLimits(t *testing.T) {
 	t.Parallel()
 

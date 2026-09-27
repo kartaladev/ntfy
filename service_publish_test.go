@@ -375,4 +375,30 @@ func TestServicePublishHonoursConfiguredLimits(t *testing.T) {
 		_, err = svc.Publish(t.Context(), first, second)
 		assert.ErrorIs(t, err, ntfy.ErrValidation)
 	})
+
+	t.Run("a raised draft cap accepts a publish the default would refuse", func(t *testing.T) {
+		t.Parallel()
+
+		drafts := make([]ntfy.Draft, 0, ntfy.DefaultMaxDraftsPerPublish+1)
+		for i := range ntfy.DefaultMaxDraftsPerPublish + 1 {
+			drafts = append(drafts, ntfy.Draft{
+				Recipient: "alice", SourceID: "event-" + strconv.Itoa(i), Subject: "task-1", Kind: "offer",
+			})
+		}
+
+		defaultSvc, err := ntfy.New(ntfy.NewMemoryStore())
+		require.NoError(t, err)
+
+		_, err = defaultSvc.Publish(t.Context(), drafts...)
+		require.ErrorIs(t, err, ntfy.ErrValidation, "the default cap refuses it")
+
+		raisedSvc, err := ntfy.New(ntfy.NewMemoryStore(), ntfy.WithLimits(ntfy.Limits{
+			MaxDraftsPerPublish: ntfy.Limit(ntfy.DefaultMaxDraftsPerPublish + 1),
+		}))
+		require.NoError(t, err)
+
+		result, err := raisedSvc.Publish(t.Context(), drafts...)
+		require.NoError(t, err)
+		assert.Len(t, result.Created, ntfy.DefaultMaxDraftsPerPublish+1)
+	})
 }

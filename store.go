@@ -131,7 +131,9 @@ type CloseRequest struct {
 func (r CloseRequest) Validate() error { return r.ValidateWithin(Limits{}) }
 
 // ValidateWithin reports every problem with the request, bounding its
-// successor's content by limits. An unset limit keeps its default.
+// successor's content by limits. An unset limit keeps its default. It expects
+// limits [New] would accept; behaviour is unspecified for one [New] would
+// refuse to construct with.
 func (r CloseRequest) ValidateWithin(limits Limits) error {
 	issues := validateIdentifier("/subject", r.Subject)
 
@@ -258,7 +260,9 @@ type ListQuery struct {
 func (q ListQuery) Validate() error { return q.ValidateWithin(Limits{}) }
 
 // ValidateWithin reports every problem with the query, bounding how many values
-// each filter carries by limits. An unset limit keeps its default.
+// each filter carries by limits. An unset limit keeps its default. It expects
+// limits [New] would accept; behaviour is unspecified for one [New] would
+// refuse to construct with.
 func (q ListQuery) ValidateWithin(limits Limits) error {
 	issues := validateIdentifier("/recipient", q.Recipient)
 
