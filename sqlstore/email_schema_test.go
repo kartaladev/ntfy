@@ -36,9 +36,15 @@ func TestEmailSchema(t *testing.T) {
 			assert.Contains(t, schema, table)
 		}
 
-		for _, table := range store.Tables() {
-			assert.NotContains(t, schema, `"`+table+`"`, "the email schema creates no notification table")
-			assert.NotContains(t, schema, "`"+table+"`", "the email schema creates no notification table")
+		for _, statement := range sqlkit.SplitStatements(schema) {
+			if !strings.HasPrefix(statement, "CREATE TABLE") {
+				continue
+			}
+
+			for _, table := range store.Tables() {
+				assert.NotContains(t, statement, `"`+table+`"`, "the email schema creates no notification table")
+				assert.NotContains(t, statement, "`"+table+"`", "the email schema creates no notification table")
+			}
 		}
 
 		for _, statement := range sqlkit.SplitStatements(schema) {

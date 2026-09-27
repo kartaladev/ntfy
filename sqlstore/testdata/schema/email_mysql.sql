@@ -11,6 +11,18 @@
 -- Identifier columns are pinned to utf8mb4_0900_as_cs and timestamps are
 -- DATETIME(6), as in the notification store's schema. MySQL has no CREATE INDEX
 -- IF NOT EXISTS, so indexes are declared inside the table.
+--
+-- One index here belongs to the notifications table rather than the email
+-- table: ntfy_notifications_email_idx lets a dispatcher claim the notifications
+-- no delivery record covers without scanning the whole table. It lives in this
+-- document because only a host that emails needs it; a host that does not never
+-- pays for it on every publish.
+--
+-- That index is this document's one statement that is NOT idempotent. The table
+-- it belongs to already exists, so it cannot be declared inside a CREATE TABLE,
+-- and MySQL has no CREATE INDEX IF NOT EXISTS: applying this document to a
+-- database that already has the index fails with error 1061. A host upgrading
+-- runs the ALTER TABLE in docs/schema.md once instead of re-applying this.
 
 CREATE TABLE IF NOT EXISTS `ntfy_email_deliveries` (
     `notification_id`  VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
@@ -28,3 +40,7 @@ CREATE TABLE IF NOT EXISTS `ntfy_email_deliveries` (
     KEY `ntfy_email_deliveries_lease_idx` (`status`, `lease_until`),
     KEY `ntfy_email_deliveries_retry_idx` (`status`, `next_attempt_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Claiming the notifications no delivery record covers yet, oldest first.
+CREATE INDEX `ntfy_notifications_email_idx`
+    ON `ntfy_notifications` (`state`, `created_at`, `id`);

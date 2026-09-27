@@ -17,6 +17,11 @@ import (
 // before any prefix. It exists only where a host applied the email schema.
 const EmailDeliveriesTable = "ntfy_email_deliveries"
 
+// emailNotificationsIndex is the index the email schema adds to the
+// notifications table, before the table prefix, so that a claim reaches the
+// notifications no delivery record covers without scanning the table.
+const emailNotificationsIndex = "ntfy_notifications_email_idx"
+
 // emailDocuments holds the published email DDL, one document per dialect.
 //
 //go:embed ddl/email/*.sql
@@ -41,6 +46,12 @@ var emailSchemaExpectation = sqlkit.SchemaExpectation{
 		},
 		IdentifierColumns: []string{"notification_id", "recipient", "status", "batch_id", "owner"},
 		Indexes:           []string{"ntfy_email_deliveries_lease_idx", "ntfy_email_deliveries_retry_idx"},
+	},
+	// The notifications table's columns are the notification schema's to
+	// verify; the email schema only adds this index to it. VerifySchema does not
+	// require it, so a host that never emails never needs it.
+	NotificationsTable: {
+		Indexes: []string{emailNotificationsIndex},
 	},
 }
 
@@ -67,9 +78,56 @@ func (s *Store) EmailSchema() string {
 }
 
 // MigrateEmail applies the email delivery schema. Like [Store.Migrate] it exists
-// for tests and development.
+// for tests and development, and it may be run again: on MySQL, which has no
+// CREATE INDEX IF NOT EXISTS, it skips the notifications table's email index
+// when that index is already there.
 func (s *Store) MigrateEmail(ctx context.Context) error {
-	return sqlkit.ApplySchema(ctx, s.execer, s.dialect, sqlkit.RenderSchema(s.emailDocument(), s.prefix))
+	statements := sqlkit.RenderSchema(s.emailDocument(), s.prefix)
+
+	if s.dialect.Name() == sqlkit.MySQL.Name() {
+		present, err := s.mysqlIndexExists(ctx, s.prefix+NotificationsTable, s.prefix+emailNotificationsIndex)
+		if err != nil {
+			return err
+		}
+
+		if present {
+			statements = slices.DeleteFunc(statements, func(statement string) bool {
+				return strings.HasPrefix(statement, "CREATE INDEX "+s.quote(s.prefix+emailNotificationsIndex))
+			})
+		}
+	}
+
+	return sqlkit.ApplySchema(ctx, s.execer, s.dialect, statements)
+}
+
+// mysqlIndexExists reports whether a MySQL table in the current database has
+// an index of a name.
+func (s *Store) mysqlIndexExists(ctx context.Context, table, index string) (bool, error) {
+	w := sqlkit.NewWriter(s.dialect)
+	w.Write("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()",
+		" AND TABLE_NAME = ", w.Bind(table), " AND INDEX_NAME = ", w.Bind(index))
+
+	var count int64
+
+	err := s.executor.Query(ctx, w.Done(), func(rows sqlkit.Rows) error {
+		for rows.Next() {
+			var value any
+			if err := rows.Scan(&value); err != nil {
+				return err
+			}
+
+			var dec decoder
+
+			count = dec.integer(value)
+			if dec.err != nil {
+				return dec.err
+			}
+		}
+
+		return rows.Err()
+	})
+
+	return count > 0, err
 }
 
 // VerifyEmailSchema compares the live database with what email delivery

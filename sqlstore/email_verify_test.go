@@ -12,21 +12,27 @@ import (
 	"github.com/kartaladev/sqlkit/sqlkittest"
 )
 
-// The indexes VerifyEmailSchema requires, before the table prefix.
-var requiredEmailIndexes = []string{
-	"ntfy_email_deliveries_lease_idx",
-	"ntfy_email_deliveries_retry_idx",
+// emailIndex is an index VerifyEmailSchema requires and the table it is on,
+// both before the table prefix.
+type emailIndex struct{ table, name string }
+
+// The indexes VerifyEmailSchema requires. One is on the notifications table:
+// the email schema adds it, and only VerifyEmailSchema requires it.
+var requiredEmailIndexes = []emailIndex{
+	{table: sqlstore.EmailDeliveriesTable, name: "ntfy_email_deliveries_lease_idx"},
+	{table: sqlstore.EmailDeliveriesTable, name: "ntfy_email_deliveries_retry_idx"},
+	{table: sqlstore.NotificationsTable, name: "ntfy_notifications_email_idx"},
 }
 
 // dropEmailIndex drops a prefixed email index in the executor's dialect.
-func dropEmailIndex(t *testing.T, executor sqlkit.Executor, store *sqlstore.Store, index string) {
+func dropEmailIndex(t *testing.T, executor sqlkit.Executor, store *sqlstore.Store, index emailIndex) {
 	t.Helper()
 
 	dialect := executor.Dialect()
-	name := dialect.Quote(prefixOf(store) + index)
+	name := dialect.Quote(prefixOf(store) + index.name)
 
 	if dialect.Name() == sqlkit.MySQL.Name() {
-		exec(t, executor, "DROP INDEX "+name+" ON "+dialect.Quote(store.EmailTables()[0]))
+		exec(t, executor, "DROP INDEX "+name+" ON "+dialect.Quote(prefixOf(store)+index.table))
 
 		return
 	}
@@ -89,24 +95,34 @@ func runVerifyEmailSchema(t *testing.T, executor sqlkit.Executor) {
 			assert: func(t *testing.T, store *sqlstore.Store, err error) {
 				listed := issues(t, err)
 				assert.Contains(t, listed, store.EmailTables()[0]+".reason: column is missing")
-				assert.Contains(t, listed, "index "+prefixOf(store)+requiredEmailIndexes[0]+" is missing")
+				assert.Contains(t, listed, "index "+prefixOf(store)+requiredEmailIndexes[0].name+" is missing")
 			},
 		},
 	}
 
 	for _, index := range requiredEmailIndexes {
 		cases = append(cases, testCase{
-			name:  "a missing " + index + " index is reported",
+			name:  "a missing " + index.name + " index is reported",
 			store: withEmail,
 			breaks: func(t *testing.T, store *sqlstore.Store) {
 				dropEmailIndex(t, executor, store, index)
 			},
 			verify: verifyEmail,
 			assert: func(t *testing.T, store *sqlstore.Store, err error) {
-				assert.Contains(t, issues(t, err), "index "+prefixOf(store)+index+" is missing")
+				assert.Contains(t, issues(t, err), "index "+prefixOf(store)+index.name+" is missing")
 			},
 		})
 	}
+
+	cases = append(cases, testCase{
+		name:  "the notification schema verifies without the email index on its table",
+		store: withEmail,
+		breaks: func(t *testing.T, store *sqlstore.Store) {
+			dropEmailIndex(t, executor, store, requiredEmailIndexes[2])
+		},
+		verify: func(t *testing.T, store *sqlstore.Store) error { return store.VerifySchema(t.Context()) },
+		assert: func(t *testing.T, _ *sqlstore.Store, err error) { assert.NoError(t, err) },
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
