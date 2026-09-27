@@ -44,7 +44,8 @@ import (
 //	CountActive, 32 callers   ~180 ops/s  ->  ~185,000 ops/s
 //	Prune, within the bound   130 MB, 34-54 ms  ->  0 B, 15 µs
 //
-// openspec/changes/speed-up-memory-store-reads/evidence.md has the runs.
+// openspec/changes/archive/2026-09-28-speed-up-memory-store-reads/evidence.md
+// has the runs.
 const (
 	smallNotifications, smallRecipients = 20_000, 200
 	largeNotifications, largeRecipients = 200_000, 2_000
