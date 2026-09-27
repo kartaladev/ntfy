@@ -195,3 +195,555 @@ USE TEMP B-TREE FOR ORDER BY
 ```
 
 ## After
+
+The code is the three-branch claim with `ntfy_notifications_email_idx`
+(commits `2eae6b6` and `68e9cbc`). The machine, seed and command are those
+above.
+
+| Dialect | Pass | Before (run 1) | After |
+| --- | --- | --- | --- |
+| PostgreSQL | working (500 claimed) | 93 ms | 85 ms |
+| PostgreSQL | empty | 84 ms | 79 ms |
+| PostgreSQL | empty, +1M rows outside the window | 163 ms | **80 ms** |
+| MySQL | working (500 claimed) | 1.83 s | 68 ms |
+| MySQL | empty | 1.87 s | 44 ms |
+| MySQL | empty, +1M rows outside the window | 3.58 s | **44 ms** |
+| SQLite | working (500 claimed) | 637 ms | 71 ms |
+| SQLite | empty | 681 ms | 72 ms |
+| SQLite | empty, +1M rows outside the window | 1.28 s | **70 ms** |
+
+**Every threshold passes on every dialect** (`TestMeasureClaim` PASS):
+
+- **1. No full scan.** No plan scans `ntfy_notifications` in full; the plans
+  are below.
+- **2. The window, not the table.** Adding a million rows outside the window
+  leaves the empty pass unchanged: 79 → 80 ms, 44 → 44 ms and 72 → 70 ms,
+  against limits of 124 ms, 71 ms and 113 ms.
+- **3. An empty pass under 100 ms on PostgreSQL:** 79 ms.
+- **4. A 500-candidate pass under 500 ms on PostgreSQL:** 85 ms.
+
+**What remains is the residual in `design.md` D4.** PostgreSQL's empty pass
+improved least, from 84 ms to 79 ms. Branch 1 still walks the 50,000 ACTIVE
+notifications inside the window, and probes the deliveries key for each, so
+the pass now costs what the window holds. Threshold 2 shows it no longer grows
+with the table. D4 describes when the frontier cursor becomes worth building.
+
+## Write-side cost (task 4.4)
+
+The bulk seed is a one-transaction multi-row insert. Its time, with and
+without the index, gives the index's cost to inserts. These are single runs
+seeded in parallel across dialects, so the figures are indicative only.
+
+| Dialect | 1M rows, no index (before) | 1M rows, with the index (after) | +1M outside rows, before → after |
+| --- | --- | --- | --- |
+| PostgreSQL | 20 s | 20 s | 19 s → 22 s |
+| MySQL | 39 s | 42 s | 37 s → 39 s |
+| SQLite | 68 s | 81 s | 57 s → 58 s |
+
+The index costs at most about 20% on a bulk insert (the SQLite first seed),
+and usually less than run-to-run noise. Only hosts that apply the email
+schema pay it.
+
+### Reading the plans
+
+- **MySQL** still reports `access_type: ALL`, but only on the derived tables
+  `b1`, `b2`, `b3` and `due`, each holding 504 rows at most. `n` is read
+  through `ntfy_notifications_email_idx` (a range) or `PRIMARY` (`eq_ref`).
+  **An observation, not a threshold:** MySQL materialises branch 1's
+  anti-join by reading `ntfy_email_deliveries_lease_idx` in full, about
+  50,000 entries here. That cost follows the deliveries table, which
+  `PurgeEmailRecords` and retention keep bounded, not the notifications table,
+  and threshold 2 still holds.
+- **SQLite**'s `SCAN b1`, `SCAN b2`, `SCAN b3` and `SCAN due` read the
+  co-routines of the compound query, not a table. Every table access is a
+  `SEARCH ... USING (COVERING) INDEX`.
+- **PostgreSQL** reads branch 1 as an `Index Only Scan using
+  ntfy_notifications_email_idx` inside a `Nested Loop Anti Join`. The
+  delivery-driven branches use the lease and retry indexes.
+
+### Plans for the empty pass after the change
+
+#### PostgreSQL
+
+```text
+Limit  (cost=458.78..741.84 rows=49 width=72) (actual time=86.289..86.294 rows=0 loops=1)
+  Buffers: shared hit=403146
+  ->  Merge Append  (cost=458.78..741.84 rows=49 width=72) (actual time=86.289..86.293 rows=0 loops=1)
+        Sort Key: b1.created_at, b1.id COLLATE "C"
+        Buffers: shared hit=403146
+        ->  Subquery Scan on b1  (cost=0.83..141.51 rows=10 width=72) (actual time=41.990..41.992 rows=0 loops=1)
+              Buffers: shared hit=201571
+              ->  Limit  (cost=0.83..141.41 rows=10 width=72) (actual time=41.990..41.991 rows=0 loops=1)
+                    Buffers: shared hit=201571
+                    ->  Nested Loop Anti Join  (cost=0.83..141.41 rows=10 width=72) (actual time=41.989..41.990 rows=0 loops=1)
+                          Buffers: shared hit=201571
+                          ->  Index Only Scan using ntfy_notifications_email_idx on ntfy_notifications n  (cost=0.42..48.67 rows=11 width=40) (actual time=0.016..5.312 rows=50000 loops=1)
+                                Index Cond: ((state = 'ACTIVE'::text) AND (created_at <= '2026-09-27 16:04:16.794311+00'::timestamp with time zone) AND (created_at >= '2026-09-26 16:09:16.794311+00'::timestamp with time zone))
+                                Heap Fetches: 50000
+                                Buffers: shared hit=1571
+                          ->  Index Only Scan using ntfy_email_deliveries_pkey on ntfy_email_deliveries d  (cost=0.41..8.43 rows=1 width=32) (actual time=0.001..0.001 rows=1 loops=50000)
+                                Index Cond: (notification_id = n.id)
+                                Heap Fetches: 50000
+                                Buffers: shared hit=200000
+        ->  Subquery Scan on b2  (cost=457.09..457.56 rows=38 width=72) (actual time=0.034..0.036 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Limit  (cost=457.09..457.18 rows=38 width=72) (actual time=0.033..0.035 rows=0 loops=1)
+                    Buffers: shared hit=4
+                    ->  Sort  (cost=457.09..457.18 rows=38 width=72) (actual time=0.032..0.034 rows=0 loops=1)
+                          Sort Key: n_1.created_at, n_1.id COLLATE "C"
+                          Sort Method: quicksort  Memory: 25kB
+                          Buffers: shared hit=4
+                          ->  Nested Loop  (cost=9.40..456.09 rows=38 width=72) (actual time=0.009..0.010 rows=0 loops=1)
+                                Buffers: shared hit=4
+                                ->  Bitmap Heap Scan on ntfy_email_deliveries d_1  (cost=8.97..135.37 rows=38 width=32) (actual time=0.009..0.010 rows=0 loops=1)
+                                      Recheck Cond: (((status = 'SENDING'::text) AND (lease_until IS NULL)) OR ((status = 'SENDING'::text) AND (lease_until <= '2026-09-27 16:09:16.794311+00'::timestamp with time zone)))
+                                      Buffers: shared hit=4
+                                      ->  BitmapOr  (cost=8.97..8.97 rows=38 width=0) (actual time=0.005..0.005 rows=0 loops=1)
+                                            Buffers: shared hit=4
+                                            ->  Bitmap Index Scan on ntfy_email_deliveries_lease_idx  (cost=0.00..4.30 rows=1 width=0) (actual time=0.004..0.004 rows=0 loops=1)
+                                                  Index Cond: ((status = 'SENDING'::text) AND (lease_until IS NULL))
+                                                  Buffers: shared hit=2
+                                            ->  Bitmap Index Scan on ntfy_email_deliveries_lease_idx  (cost=0.00..4.66 rows=37 width=0) (actual time=0.001..0.001 rows=0 loops=1)
+                                                  Index Cond: ((status = 'SENDING'::text) AND (lease_until <= '2026-09-27 16:09:16.794311+00'::timestamp with time zone))
+                                                  Buffers: shared hit=2
+                                ->  Index Scan using ntfy_notifications_pkey on ntfy_notifications n_1  (cost=0.42..8.44 rows=1 width=40) (never executed)
+                                      Index Cond: (id = d_1.notification_id)
+        ->  Subquery Scan on b3  (cost=0.83..142.11 rows=1 width=72) (actual time=44.263..44.264 rows=0 loops=1)
+              Buffers: shared hit=201571
+              ->  Limit  (cost=0.83..142.10 rows=1 width=72) (actual time=44.263..44.263 rows=0 loops=1)
+                    Buffers: shared hit=201571
+                    ->  Nested Loop  (cost=0.83..142.10 rows=1 width=72) (actual time=44.262..44.262 rows=0 loops=1)
+                          Buffers: shared hit=201571
+                          ->  Index Only Scan using ntfy_notifications_email_idx on ntfy_notifications n_2  (cost=0.42..48.67 rows=11 width=40) (actual time=0.014..5.403 rows=50000 loops=1)
+                                Index Cond: ((state = 'ACTIVE'::text) AND (created_at <= '2026-09-27 16:04:16.794311+00'::timestamp with time zone) AND (created_at >= '2026-09-26 16:09:16.794311+00'::timestamp with time zone))
+                                Heap Fetches: 50000
+                                Buffers: shared hit=1571
+                          ->  Index Scan using ntfy_email_deliveries_pkey on ntfy_email_deliveries d_2  (cost=0.41..8.44 rows=1 width=32) (actual time=0.001..0.001 rows=0 loops=50000)
+                                Index Cond: (notification_id = n_2.id)
+                                Filter: ((status = ANY ('{CLAIMED,RETRY}'::text[])) AND ((lease_until IS NULL) OR (lease_until <= '2026-09-27 16:09:16.794311+00'::timestamp with time zone)) AND ((next_attempt_at IS NULL) OR (next_attempt_at <= '2026-09-27 16:09:16.794311+00'::timestamp with time zone)))
+                                Rows Removed by Filter: 1
+                                Buffers: shared hit=200000
+Planning Time: 0.380 ms
+Execution Time: 86.394 ms
+```
+
+#### MySQL
+
+```json
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "59.20"
+    },
+    "ordering_operation": {
+      "using_filesort": true,
+      "table": {
+        "table_name": "due",
+        "access_type": "ALL",
+        "rows_examined_per_scan": 504,
+        "rows_produced_per_join": 504,
+        "filtered": "100.00",
+        "cost_info": {
+          "read_cost": "8.80",
+          "eval_cost": "50.40",
+          "prefix_cost": "59.20",
+          "data_read_per_join": "137K"
+        },
+        "used_columns": [
+          "id",
+          "created_at",
+          "recorded"
+        ],
+        "materialized_from_subquery": {
+          "using_temporary_table": true,
+          "dependent": false,
+          "cacheable": true,
+          "query_block": {
+            "union_result": {
+              "using_temporary_table": false,
+              "query_specifications": [
+                {
+                  "dependent": false,
+                  "cacheable": true,
+                  "query_block": {
+                    "select_id": 2,
+                    "cost_info": {
+                      "query_cost": "58.75"
+                    },
+                    "table": {
+                      "table_name": "b1",
+                      "access_type": "ALL",
+                      "rows_examined_per_scan": 500,
+                      "rows_produced_per_join": 500,
+                      "filtered": "100.00",
+                      "cost_info": {
+                        "read_cost": "8.75",
+                        "eval_cost": "50.00",
+                        "prefix_cost": "58.75",
+                        "data_read_per_join": "136K"
+                      },
+                      "used_columns": [
+                        "id",
+                        "created_at",
+                        "recorded"
+                      ],
+                      "materialized_from_subquery": {
+                        "using_temporary_table": true,
+                        "dependent": false,
+                        "cacheable": true,
+                        "query_block": {
+                          "select_id": 3,
+                          "cost_info": {
+                            "query_cost": "47463.38"
+                          },
+                          "ordering_operation": {
+                            "using_filesort": false,
+                            "nested_loop": [
+                              {
+                                "table": {
+                                  "table_name": "n",
+                                  "access_type": "range",
+                                  "possible_keys": [
+                                    "ntfy_notifications_inactive_idx",
+                                    "ntfy_notifications_email_idx"
+                                  ],
+                                  "key": "ntfy_notifications_email_idx",
+                                  "used_key_parts": [
+                                    "state",
+                                    "created_at"
+                                  ],
+                                  "key_length": "74",
+                                  "rows_examined_per_scan": 102256,
+                                  "rows_produced_per_join": 102256,
+                                  "filtered": "100.00",
+                                  "using_index": true,
+                                  "cost_info": {
+                                    "read_cost": "16943.93",
+                                    "eval_cost": "10225.60",
+                                    "prefix_cost": "27169.53",
+                                    "data_read_per_join": "477M"
+                                  },
+                                  "used_columns": [
+                                    "id",
+                                    "state",
+                                    "created_at"
+                                  ],
+                                  "attached_condition": "((`sqlkit`.`n`.`state` = 'ACTIVE') and (`sqlkit`.`n`.`created_at` <= TIMESTAMP'2026-09-27 16:04:20.934283') and (`sqlkit`.`n`.`created_at` >= TIMESTAMP'2026-09-26 16:09:20.934283'))"
+                                }
+                              },
+                              {
+                                "table": {
+                                  "table_name": "<subquery4>",
+                                  "access_type": "eq_ref",
+                                  "key": "<auto_distinct_key>",
+                                  "key_length": "259",
+                                  "ref": [
+                                    "sqlkit.n.id"
+                                  ],
+                                  "rows_examined_per_scan": 1,
+                                  "not_exists": true,
+                                  "attached_condition": "<if>(is_not_null_compl(<subquery4>), <if>(found_match(<subquery4>), false, true), true)",
+                                  "materialized_from_subquery": {
+                                    "using_temporary_table": true,
+                                    "query_block": {
+                                      "table": {
+                                        "table_name": "d",
+                                        "access_type": "index",
+                                        "possible_keys": [
+                                          "PRIMARY"
+                                        ],
+                                        "key": "ntfy_email_deliveries_lease_idx",
+                                        "used_key_parts": [
+                                          "status",
+                                          "lease_until"
+                                        ],
+                                        "key_length": "75",
+                                        "rows_examined_per_scan": 49975,
+                                        "rows_produced_per_join": 49975,
+                                        "filtered": "100.00",
+                                        "using_index": true,
+                                        "cost_info": {
+                                          "read_cost": "72.25",
+                                          "eval_cost": "4997.50",
+                                          "prefix_cost": "5069.75",
+                                          "data_read_per_join": "127M"
+                                        },
+                                        "used_columns": [
+                                          "notification_id"
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "dependent": false,
+                  "cacheable": true,
+                  "query_block": {
+                    "select_id": 5,
+                    "cost_info": {
+                      "query_cost": "2.72"
+                    },
+                    "table": {
+                      "table_name": "b2",
+                      "access_type": "ALL",
+                      "rows_examined_per_scan": 2,
+                      "rows_produced_per_join": 2,
+                      "filtered": "100.00",
+                      "cost_info": {
+                        "read_cost": "2.52",
+                        "eval_cost": "0.20",
+                        "prefix_cost": "2.73",
+                        "data_read_per_join": "560"
+                      },
+                      "used_columns": [
+                        "id",
+                        "created_at",
+                        "recorded"
+                      ],
+                      "materialized_from_subquery": {
+                        "using_temporary_table": true,
+                        "dependent": false,
+                        "cacheable": true,
+                        "query_block": {
+                          "select_id": 6,
+                          "cost_info": {
+                            "query_cost": "1.18"
+                          },
+                          "ordering_operation": {
+                            "using_temporary_table": true,
+                            "using_filesort": true,
+                            "cost_info": {
+                              "sort_cost": "0.40"
+                            },
+                            "nested_loop": [
+                              {
+                                "table": {
+                                  "table_name": "d",
+                                  "access_type": "ref",
+                                  "possible_keys": [
+                                    "PRIMARY",
+                                    "ntfy_email_deliveries_lease_idx",
+                                    "ntfy_email_deliveries_retry_idx"
+                                  ],
+                                  "key": "ntfy_email_deliveries_retry_idx",
+                                  "used_key_parts": [
+                                    "status"
+                                  ],
+                                  "key_length": "66",
+                                  "ref": [
+                                    "const"
+                                  ],
+                                  "rows_examined_per_scan": 1,
+                                  "rows_produced_per_join": 0,
+                                  "filtered": "40.00",
+                                  "cost_info": {
+                                    "read_cost": "0.25",
+                                    "eval_cost": "0.04",
+                                    "prefix_cost": "0.35",
+                                    "data_read_per_join": "1K"
+                                  },
+                                  "used_columns": [
+                                    "notification_id",
+                                    "status",
+                                    "lease_until"
+                                  ],
+                                  "attached_condition": "((`sqlkit`.`d`.`lease_until` is null) or (`sqlkit`.`d`.`lease_until` <= TIMESTAMP'2026-09-27 16:09:20.934283'))"
+                                }
+                              },
+                              {
+                                "table": {
+                                  "table_name": "n",
+                                  "access_type": "eq_ref",
+                                  "possible_keys": [
+                                    "PRIMARY"
+                                  ],
+                                  "key": "PRIMARY",
+                                  "used_key_parts": [
+                                    "id"
+                                  ],
+                                  "key_length": "258",
+                                  "ref": [
+                                    "sqlkit.d.notification_id"
+                                  ],
+                                  "rows_examined_per_scan": 1,
+                                  "rows_produced_per_join": 0,
+                                  "filtered": "100.00",
+                                  "cost_info": {
+                                    "read_cost": "0.39",
+                                    "eval_cost": "0.04",
+                                    "prefix_cost": "0.78",
+                                    "data_read_per_join": "1K"
+                                  },
+                                  "used_columns": [
+                                    "id",
+                                    "created_at"
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "dependent": false,
+                  "cacheable": true,
+                  "query_block": {
+                    "select_id": 7,
+                    "cost_info": {
+                      "query_cost": "2.72"
+                    },
+                    "table": {
+                      "table_name": "b3",
+                      "access_type": "ALL",
+                      "rows_examined_per_scan": 2,
+                      "rows_produced_per_join": 2,
+                      "filtered": "100.00",
+                      "cost_info": {
+                        "read_cost": "2.52",
+                        "eval_cost": "0.20",
+                        "prefix_cost": "2.73",
+                        "data_read_per_join": "560"
+                      },
+                      "used_columns": [
+                        "id",
+                        "created_at",
+                        "recorded"
+                      ],
+                      "materialized_from_subquery": {
+                        "using_temporary_table": true,
+                        "dependent": false,
+                        "cacheable": true,
+                        "query_block": {
+                          "select_id": 8,
+                          "cost_info": {
+                            "query_cost": "2.31"
+                          },
+                          "ordering_operation": {
+                            "using_temporary_table": true,
+                            "using_filesort": true,
+                            "cost_info": {
+                              "sort_cost": "0.04"
+                            },
+                            "nested_loop": [
+                              {
+                                "table": {
+                                  "table_name": "d",
+                                  "access_type": "range",
+                                  "possible_keys": [
+                                    "PRIMARY",
+                                    "ntfy_email_deliveries_lease_idx",
+                                    "ntfy_email_deliveries_retry_idx"
+                                  ],
+                                  "key": "ntfy_email_deliveries_lease_idx",
+                                  "used_key_parts": [
+                                    "status",
+                                    "lease_until"
+                                  ],
+                                  "key_length": "75",
+                                  "rows_examined_per_scan": 2,
+                                  "rows_produced_per_join": 0,
+                                  "filtered": "40.00",
+                                  "index_condition": "((`sqlkit`.`d`.`status` in ('CLAIMED','RETRY')) and ((`sqlkit`.`d`.`lease_until` is null) or (`sqlkit`.`d`.`lease_until` <= TIMESTAMP'2026-09-27 16:09:20.934283')))",
+                                  "cost_info": {
+                                    "read_cost": "1.33",
+                                    "eval_cost": "0.08",
+                                    "prefix_cost": "1.41",
+                                    "data_read_per_join": "2K"
+                                  },
+                                  "used_columns": [
+                                    "notification_id",
+                                    "status",
+                                    "lease_until",
+                                    "next_attempt_at"
+                                  ],
+                                  "attached_condition": "((`sqlkit`.`d`.`next_attempt_at` is null) or (`sqlkit`.`d`.`next_attempt_at` <= TIMESTAMP'2026-09-27 16:09:20.934283'))"
+                                }
+                              },
+                              {
+                                "table": {
+                                  "table_name": "n",
+                                  "access_type": "eq_ref",
+                                  "possible_keys": [
+                                    "PRIMARY",
+                                    "ntfy_notifications_inactive_idx",
+                                    "ntfy_notifications_email_idx"
+                                  ],
+                                  "key": "PRIMARY",
+                                  "used_key_parts": [
+                                    "id"
+                                  ],
+                                  "key_length": "258",
+                                  "ref": [
+                                    "sqlkit.d.notification_id"
+                                  ],
+                                  "rows_examined_per_scan": 1,
+                                  "rows_produced_per_join": 0,
+                                  "filtered": "5.55",
+                                  "cost_info": {
+                                    "read_cost": "0.78",
+                                    "eval_cost": "0.00",
+                                    "prefix_cost": "2.27",
+                                    "data_read_per_join": "217"
+                                  },
+                                  "used_columns": [
+                                    "id",
+                                    "state",
+                                    "created_at"
+                                  ],
+                                  "attached_condition": "((`sqlkit`.`n`.`state` = 'ACTIVE') and (`sqlkit`.`n`.`created_at` <= TIMESTAMP'2026-09-27 16:04:20.934283') and (`sqlkit`.`n`.`created_at` >= TIMESTAMP'2026-09-26 16:09:20.934283'))"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+#### SQLite
+
+```text
+CO-ROUTINE due
+COMPOUND QUERY
+LEFT-MOST SUBQUERY
+CO-ROUTINE b1
+SEARCH n USING COVERING INDEX ntfy_notifications_email_idx (state=? AND created_at>? AND created_at<?)
+CORRELATED SCALAR SUBQUERY 1
+SEARCH d USING COVERING INDEX sqlite_autoindex_ntfy_email_deliveries_1 (notification_id=?)
+SCAN b1
+UNION ALL
+CO-ROUTINE b2
+SEARCH d USING INDEX ntfy_email_deliveries_retry_idx (status=?)
+SEARCH n USING INDEX sqlite_autoindex_ntfy_notifications_1 (id=?)
+USE TEMP B-TREE FOR ORDER BY
+SCAN b2
+UNION ALL
+CO-ROUTINE b3
+SEARCH n USING COVERING INDEX ntfy_notifications_email_idx (state=? AND created_at>? AND created_at<?)
+SEARCH d USING INDEX sqlite_autoindex_ntfy_email_deliveries_1 (notification_id=?)
+SCAN b3
+SCAN due
+USE TEMP B-TREE FOR ORDER BY
+```

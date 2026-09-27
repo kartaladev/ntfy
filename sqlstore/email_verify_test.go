@@ -1,6 +1,9 @@
 package sqlstore_test
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -158,4 +161,44 @@ func TestVerifyEmailSchemaOnSQLite(t *testing.T) {
 	db := openSQL(t, "sqlite", sqlkittest.RunTestSQLite(t))
 
 	runVerifyEmailSchema(t, stdsqlExecutor(t, db, sqlkit.SQLite))
+}
+
+// documentedStatement reads the SQL statement docs/schema.md gives on the line
+// starting with a keyword, with the documented app_ prefix replaced by the
+// store's.
+func documentedStatement(t *testing.T, keyword, prefix string) string {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join("..", "docs", "schema.md"))
+	require.NoError(t, err)
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, keyword) {
+			return strings.TrimSuffix(strings.ReplaceAll(line, "app_", prefix), ";")
+		}
+	}
+
+	t.Fatalf("docs/schema.md gives no statement starting with %q", keyword)
+
+	return ""
+}
+
+// TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex applies the email schema
+// as it stood before the claim index, then the upgrade docs/schema.md gives for
+// MySQL, and requires the result to verify.
+func TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex(t *testing.T) {
+	t.Parallel()
+
+	executor := stdsqlExecutor(t, openSQL(t, "mysql", sqlkittest.RunTestMySQL(t)), sqlkit.MySQL)
+	store := harness.NewEmailStore(t, executor)
+	index := requiredEmailIndexes[2]
+
+	dropEmailIndex(t, executor, store, index)
+	require.Error(t, store.VerifyEmailSchema(t.Context()), "an email schema from before the index does not verify")
+
+	exec(t, executor, documentedStatement(t, "ALTER TABLE", prefixOf(store)))
+
+	assert.NoError(t, store.VerifyEmailSchema(t.Context()))
+	assert.NoError(t, store.MigrateEmail(t.Context()), "and the development path stays re-runnable")
 }

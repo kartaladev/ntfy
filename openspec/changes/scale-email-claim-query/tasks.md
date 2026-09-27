@@ -21,15 +21,15 @@
 
 ## 4. Re-measure against the threshold
 
-- [ ] 4.1 Re-capture `EXPLAIN` on all three dialects against the same seed and verify threshold 1: no `Seq Scan` on PostgreSQL, no `type: ALL` on MySQL, no unindexed `SCAN ntfy_notifications` on SQLite, in any branch.
-- [ ] 4.2 Re-run the window-versus-table measurement from 1.4 and verify threshold 2: adding 1M rows outside the window must leave the empty-pass time within noise of the measurement taken without them.
-- [ ] 4.3 Re-run the pass timings and verify thresholds 3 and 4: an empty pass under 100 ms and a 500-candidate pass under 500 ms on PostgreSQL at the seeded size, quoting before-and-after medians. Report any dialect that misses a threshold rather than adjusting the threshold.
-- [ ] 4.4 Measure the index's cost on the write side: time a bulk publish with and without `ntfy_notifications_email_idx` present, and record it so the trade-off is on the record (`design.md` — Risks).
-- [ ] 4.5 Write the measurements — plans, medians, machine and seed — into the change directory so the archived change carries its own evidence.
+- [x] 4.1 Re-capture `EXPLAIN` on all three dialects against the same seed and verify threshold 1: no `Seq Scan` on PostgreSQL, no `type: ALL` on MySQL, no unindexed `SCAN ntfy_notifications` on SQLite, in any branch.
+- [x] 4.2 Re-run the window-versus-table measurement from 1.4 and verify threshold 2: adding 1M rows outside the window must leave the empty-pass time within noise of the measurement taken without them.
+- [x] 4.3 Re-run the pass timings and verify thresholds 3 and 4: an empty pass under 100 ms and a 500-candidate pass under 500 ms on PostgreSQL at the seeded size, quoting before-and-after medians. Report any dialect that misses a threshold rather than adjusting the threshold.
+- [x] 4.4 Measure the index's cost on the write side: time a bulk publish with and without `ntfy_notifications_email_idx` present, and record it so the trade-off is on the record (`design.md` — Risks).
+- [x] 4.5 Write the measurements — plans, medians, machine and seed — into the change directory so the archived change carries its own evidence.
 
 ## 5. Documentation and full verification
 
-- [ ] 5.1 Update `docs/schema.md`: add the index to the index table noting it belongs to the email schema, add the one stated MySQL exception where the "Every statement is `CREATE ... IF NOT EXISTS`" promise is made, and extend the rollback section to cover the email schema including this index on a table that outlives it. Verify by re-reading: a host must be able to find the MySQL `ALTER TABLE` without reading the DDL.
-- [ ] 5.2 Add the migration note of `design.md` — Migration Plan to the docs, per dialect, stating that on MySQL re-applying the email document is not the upgrade path. Verify the `ALTER TABLE` given there runs cleanly against a MySQL database holding the old schema.
+- [x] 5.1 Update `docs/schema.md`: add the index to the index table noting it belongs to the email schema, add the one stated MySQL exception where the "Every statement is `CREATE ... IF NOT EXISTS`" promise is made, and extend the rollback section to cover the email schema including this index on a table that outlives it. Verify by re-reading: a host must be able to find the MySQL `ALTER TABLE` without reading the DDL.
+- [x] 5.2 Add the migration note of `design.md` — Migration Plan to the docs, per dialect, stating that on MySQL re-applying the email document is not the upgrade path. Verify the `ALTER TABLE` given there runs cleanly against a MySQL database holding the old schema.
 - [ ] 5.3 Run `make all` and verify lint, split-check and tests pass on every module.
 - [ ] 5.4 Run `make store-matrix` and verify all seven driver-and-dialect combinations pass.
