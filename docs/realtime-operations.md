@@ -144,19 +144,23 @@ Hub defaults, which both transports share:
 | --- | --- | --- |
 | Streams per recipient | 8 per instance | `ntfy.WithMaxStreamsPerRecipient` |
 | Streams per instance | 10000 across every recipient | `ntfy.WithMaxStreamsPerInstance`, or `ntfy.WithoutMaxStreamsPerInstance` |
-| Reconnect delay | 1s, spread per stream to less than 2s | `ntfy.WithReconnectDelay` |
+| Reconnect delay | 1s, spread per stream to less than 2s (server-sent events only) | `ntfy.WithReconnectDelay` |
 
 **Stated limit:** the spread on the reconnect delay is not configurable. A base
 with no spread returns an instance's clients in one wave, which is what the
-delay exists to prevent.
+delay exists to prevent. **Stated limit: only the server-sent event stream
+carries the delay to the client**, as the `retry:` field. The WebSocket
+transport never writes one.
 
 When an instance stops receiving signals — `hub.Run` returned, because its
 context was cancelled or its broadcaster gave up — every stream and connection
 on it is closed: a server-sent event stream ends, and a WebSocket closes with
-status 1001 and a reason saying the instance stopped receiving. Clients
-reconnect after their delay and re-read the store. An instance that is up but
-not receiving refuses new streams as unavailable, so a client that returns too
-early is refused cheaply rather than left silent.
+status 1001 and a reason saying the instance stopped receiving. A server-sent
+event client reconnects after the delay its stream sent it. A WebSocket client
+is closed with no delay of its own and should jitter its own backoff, for
+example between 1s and 2s, before reconnecting. Both then re-read the store.
+An instance that is up but not receiving refuses new streams as unavailable,
+so a client that returns too early is refused cheaply rather than left silent.
 
 Mounting:
 

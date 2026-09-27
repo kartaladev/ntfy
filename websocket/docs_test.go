@@ -33,6 +33,7 @@ func TestTheOperationsGuideMatchesTheHandler(t *testing.T) {
 		"status 1001",
 		strconv.Itoa(ntfy.DefaultMaxStreamsPerInstance) + " streams per instance",
 		"stopped receiving",
+		"jitter its own backoff",
 	} {
 		assert.Containsf(t, document, stated, "the guide states %q", stated)
 	}

@@ -108,7 +108,8 @@ func WithoutMaxStreamsPerInstance() HubOption {
 }
 
 // WithReconnectDelay replaces [DefaultReconnectDelay], the base a stream tells
-// its client to wait before reconnecting. It must be positive.
+// its client to wait before reconnecting. It must be at least a millisecond,
+// the resolution a server-sent event stream carries.
 //
 // The jitter that spreads it is not configurable: a base with no spread returns
 // an instance's clients in one wave, which is what the delay exists to prevent.
@@ -117,8 +118,11 @@ func WithReconnectDelay(d time.Duration) HubOption {
 }
 
 // NewHub builds a hub over a broadcaster, normally the service's
-// [Service.Broadcaster]. A nil broadcaster, or a heartbeat, write timeout or
-// stream cap that is not positive, is a [ConfigurationError].
+// [Service.Broadcaster]. A nil broadcaster; a heartbeat, write timeout or
+// per-recipient stream cap that is not positive; or a reconnect delay that is
+// non-positive or under a millisecond, is a [ConfigurationError]. So is a
+// total stream cap below one, below the per-recipient cap, or both set and
+// removed.
 func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 	if broadcaster == nil {
 		return nil, &ConfigurationError{Detail: "a hub needs a broadcaster; pass the service's Broadcaster()"}
@@ -148,8 +152,10 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		return nil, &ConfigurationError{Detail: "a hub heartbeat must be positive"}
 	case cfg.writeTimeout != nil && *cfg.writeTimeout <= 0:
 		return nil, &ConfigurationError{Detail: "a hub write timeout must be positive"}
-	case cfg.reconnect != nil && *cfg.reconnect <= 0:
-		return nil, &ConfigurationError{Detail: "a hub reconnect delay must be positive"}
+	case cfg.reconnect != nil && *cfg.reconnect < time.Millisecond:
+		return nil, &ConfigurationError{
+			Detail: "a hub reconnect delay must be at least a millisecond, the smallest a stream can carry",
+		}
 	case cfg.maxStreams != nil && *cfg.maxStreams < 1:
 		return nil, &ConfigurationError{Detail: "a hub must allow at least one stream per recipient"}
 	case cfg.maxTotal != nil && cfg.withoutTotal:

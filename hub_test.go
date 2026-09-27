@@ -653,7 +653,17 @@ func TestHubStopClosesOpenSubscriptions(t *testing.T) {
 		},
 		{
 			name: "a subscription closed by a stop is not revived by the next run",
-			assert: func(t *testing.T, hub *ntfy.Hub, stop func() error) {
+			assert: func(t *testing.T, _ *ntfy.Hub, _ func() error) {
+				// This case needs its own hub: it must broadcast through the
+				// same broadcaster the hub subscribes to, which the shared
+				// harness above does not expose.
+				broadcaster := ntfy.NewInProcessBroadcaster()
+
+				hub, err := ntfy.NewHub(broadcaster)
+				require.NoError(t, err)
+
+				stop := runHub(t, hub)
+
 				stale, err := hub.Subscribe("alice")
 				require.NoError(t, err)
 
@@ -663,6 +673,22 @@ func TestHubStopClosesOpenSubscriptions(t *testing.T) {
 
 				fresh, err := hub.Subscribe("alice")
 				require.NoError(t, err)
+
+				signal := ntfy.Signal{Recipient: "alice", Change: ntfy.ChangeCreated, At: serviceAt}
+				require.NoError(t, broadcaster.Broadcast(t.Context(), []ntfy.Signal{signal}))
+
+				select {
+				case <-fresh.Ready():
+				case <-time.After(hubWait):
+					t.Fatal("the fresh subscription never became ready")
+				}
+
+				got, ok := fresh.Take()
+				require.True(t, ok)
+				assert.Equal(t, signal, got, "alice's signal reaches the stream she opened afterwards")
+
+				_, ok = stale.Take()
+				assert.False(t, ok, "the closed stream receives nothing")
 
 				assert.True(t, closed(stale.Done()), "the stale subscription stays closed")
 				assert.False(t, closed(fresh.Done()), "the fresh one is open")
@@ -690,6 +716,8 @@ func TestHubStopClosesOpenSubscriptions(t *testing.T) {
 // delivers to.
 func TestHubSubscribeDuringStop(t *testing.T) {
 	t.Parallel()
+
+	var total int
 
 	for range 100 {
 		hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), ntfy.WithMaxStreamsPerRecipient(16))
@@ -734,8 +762,12 @@ func TestHubSubscribeDuringStop(t *testing.T) {
 			assert.Truef(t, closed(subscription.Done()), "subscription %d outlived the run that fed it", i)
 		}
 
+		total += len(opened)
+
 		mu.Unlock()
 	}
+
+	assert.Positive(t, total, "some subscription opened before the stop, or the test proves nothing")
 }
 
 func TestHubRun(t *testing.T) {
@@ -838,6 +870,14 @@ func TestHubReconnectDelay(t *testing.T) {
 		{
 			name: "a non-positive delay is a configuration error",
 			opts: []ntfy.HubOption{ntfy.WithReconnectDelay(0)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
+				assert.Nil(t, hub)
+			},
+		},
+		{
+			name: "a delay under a millisecond is a configuration error",
+			opts: []ntfy.HubOption{ntfy.WithReconnectDelay(500 * time.Microsecond)},
 			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
 				require.ErrorIs(t, err, ntfy.ErrConfiguration)
 				assert.Nil(t, hub)
@@ -970,6 +1010,7 @@ func TestHubInstanceCapConfiguration(t *testing.T) {
 				require.ErrorIs(t, err, ntfy.ErrTooManyStreams)
 
 				first.Close()
+				assert.True(t, closed(first.Done()), "closing a subscription closes its done channel")
 
 				_, err = hub.Subscribe("bob")
 				assert.NoError(t, err, "the closed stream's slot is free again")
