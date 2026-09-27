@@ -17,7 +17,7 @@
 - [x] 3.1 Rewrite `dueEmails` (`sqlstore/email.go:173-207`) as the three-branch `UNION ALL` of `design.md` — D1, each branch projecting `(id, created_at, recorded)` with `recorded` as a per-branch literal, each with its own `LIMIT`, wrapped in an outer `ORDER BY created_at, id LIMIT`. Keep `writeLapsed` as the single source of the lease predicate. Verify the `sqlstore` package builds and its own unit tests pass.
 - [x] 3.2 Update the row reader from 2 columns to the new projection and drop the `COALESCE(d.notification_id, '')` inference of `recorded`. Verify with a test asserting `dueEmail.recorded` is true for a lapsed record and false for an unrecorded notification.
 - [x] 3.3 Confirm the branch semantics the rewrite must preserve, each with a test: an in-doubt `SENDING` record is claimed even when its notification is no longer ACTIVE; a `CLAIMED`/`RETRY` record is claimed only while its notification still qualifies; a delivery row whose notification was deleted is not returned; terminal statuses are never returned.
-- [ ] 3.4 Verify no behaviour moved: run `ntfytest.RunEmail` and `RunEmailDispatch` through the conformance entry points unchanged. If a test needs editing to pass, stop — that means the rewrite changed what is claimed.
+- [x] 3.4 Verify no behaviour moved: run `ntfytest.RunEmail` and `RunEmailDispatch` through the conformance entry points unchanged. If a test needs editing to pass, stop — that means the rewrite changed what is claimed.
 
 ## 4. Re-measure against the threshold
 
@@ -31,5 +31,5 @@
 
 - [x] 5.1 Update `docs/schema.md`: add the index to the index table noting it belongs to the email schema, add the one stated MySQL exception where the "Every statement is `CREATE ... IF NOT EXISTS`" promise is made, and extend the rollback section to cover the email schema including this index on a table that outlives it. Verify by re-reading: a host must be able to find the MySQL `ALTER TABLE` without reading the DDL.
 - [x] 5.2 Add the migration note of `design.md` — Migration Plan to the docs, per dialect, stating that on MySQL re-applying the email document is not the upgrade path. Verify the `ALTER TABLE` given there runs cleanly against a MySQL database holding the old schema.
-- [ ] 5.3 Run `make all` and verify lint, split-check and tests pass on every module.
-- [ ] 5.4 Run `make store-matrix` and verify all seven driver-and-dialect combinations pass.
+- [x] 5.3 Run `make all` and verify lint, split-check and tests pass on every module.
+- [x] 5.4 Run `make store-matrix` and verify all seven driver-and-dialect combinations pass.

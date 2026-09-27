@@ -1812,3 +1812,24 @@ Two gaps found and fixed while reviewing: `tasks.md` never mentions that adding 
 **3. Type consistency.** Checked across tasks: `dueEmailsStatement(claim ntfy.EmailClaim, now time.Time) sqlkit.Statement` is produced in Task 3 and consumed unchanged in Tasks 4, 9; `writeDueRetry`/`writeInDoubt`/`writeLapsed` share one signature `(w *sqlkit.Writer, column func(string) string, now any)`; `emailNotificationsIndex` is defined in Task 6 and used in Tasks 7, 8, 9; `seed`/`seedShape`/`explain`/`medianOf`/`timeClaim`/`measureStore`/`measureRows` are defined in Task 1 and used in Task 9; `dropEmailIndex` gains its `table` parameter in Task 8 with both existing call sites updated in the same step.
 
 One inconsistency found and fixed: Task 1's `timeClaim` deletes by `owner`, so the measurement claim must carry a fixed `Owner` — `measureClaim` sets `"measure"`, and the deletion binds `claim.Owner` rather than a literal.
+
+## Execution Record
+
+Where the implementation departed from the steps above, and why:
+
+1. **Task 3's extraction came first.** Task 1's `explain` needs `dueEmailsStatement`, so the builder was extracted, SQL unchanged, before the baseline was taken.
+2. **The seed is 90% recorded, as tasks.md 1.1 says,** not 100% as Task 1 Step 4 had it. The working pass claims 500 of the 5,000 unrecorded rows. The empty pass is timed after those 5,000 are recorded `SENT` too. `requireShape` counts rows per state and per status after seeding (task 1.1's verification).
+3. **The thresholds are asserted, not only logged.** `TestMeasureClaim` fails on a full scan (threshold 1). It also fails when an empty pass exceeds `1.5 ×` its cost, plus 5 ms, after `N` rows are added outside the window (threshold 2). Both were stated in `measurements.md` before the first run, and both failed on all three dialects before the change.
+4. **`dialectExecutor` also implements `sqlkit.Execer` and `sqlkit.Querier`,** because `New` requires them. It carries no other methods.
+5. **`TestClaimReturnsTheSameRows` is stricter than Task 4's fixture:**
+   - it runs on all three dialects from the start, which was Task 5's step;
+   - it seeds newest first, so identifier order runs against creation order;
+   - it asserts order as well as membership;
+   - it claims with limit 3 before the rest, so the union's limit across branches is pinned;
+   - it adds two orphaned delivery rows, which task 3.3 names.
+
+   It passed unedited on the old query and on the new one. Six mutations of the new query each make it fail: dropping the anti-join, requiring ACTIVE in branch 2, ignoring the notification in branch 3, outer-joining the delivery branches, and ordering the union or a branch by identifier.
+6. **`TestClaimStatementShape` asserts structure on every dialect** instead of pinning PostgreSQL's full text: three branches, four limits, one anti-join, no `LEFT JOIN`, no disjunction.
+7. **Task 7 checks `information_schema.STATISTICS` in `mysqlIndexExists`,** and drops the index statement from the rendered list when the index is present.
+8. **The migration note is verified from the document.** `TestTheDocumentedMySQLUpgradeAddsTheEmailClaimIndex` reads the `ALTER TABLE` line from `docs/schema.md` and runs it against an email schema from before the index.
+9. **The write-side cost (task 4.4) comes from the harness's bulk-seed times,** without the index (before) and with it (after), rather than from a separate publish benchmark. The figures are indicative, and `measurements.md` says so.

@@ -404,7 +404,7 @@ func fullScans(t *testing.T, dialect sqlkit.Dialect, plan string) []string {
 	default:
 		for line := range strings.SplitSeq(plan, "\n") {
 			match := sqliteScan.FindStringSubmatch(line)
-			if match != nil && notifications(match[1]) && !strings.Contains(match[2], "USING") {
+			if len(match) == 3 && notifications(match[1]) && !strings.Contains(match[2], "USING") {
 				found = append(found, strings.TrimSpace(line))
 			}
 		}
@@ -423,12 +423,12 @@ func medianOf(samples []time.Duration) time.Duration {
 
 // timeClaim runs one claim and returns how long it took, deleting whatever it
 // claimed so that samples stay independent.
-func timeClaim(t *testing.T, store *Store, claim ntfy.EmailClaim) (time.Duration, int) {
+func timeClaim(t *testing.T, store *Store, claim ntfy.EmailClaim) (took time.Duration, count int) {
 	t.Helper()
 
 	start := time.Now()
 	claimed, err := store.ClaimEmails(t.Context(), claim)
-	took := time.Since(start)
+	took = time.Since(start)
 
 	require.NoError(t, err)
 
