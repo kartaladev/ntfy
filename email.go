@@ -75,6 +75,56 @@ const (
 	EmailSkipDeleted = "deleted"
 )
 
+// The reasons a delivery ends other than by being sent or skipped. Like the skip
+// reasons they are the library's own classification of an outcome; text produced
+// by a host's Mailer, EmailTemplate or AddressBook is never recorded unless the
+// host asks for it through [WithEmailFailureDetail].
+const (
+	// EmailReasonFilterFailed is a notification whose selection could not be
+	// decided.
+	EmailReasonFilterFailed = "filter_failed"
+	// EmailReasonLookupFailed is a recipient whose address could not be looked
+	// up.
+	EmailReasonLookupFailed = "lookup_failed"
+	// EmailReasonReadFailed is a notification that could not be read again
+	// before its message was sent.
+	EmailReasonReadFailed = "read_failed"
+	// EmailReasonRenderFailed is a message that could not be rendered.
+	EmailReasonRenderFailed = "render_failed"
+	// EmailReasonSendRejected is a message the sender refused for good.
+	EmailReasonSendRejected = "send_rejected"
+	// EmailReasonSendFailed is a message the sender did not send.
+	EmailReasonSendFailed = "send_failed"
+	// EmailReasonSendInDoubt is a send the sender could not confirm, or one a
+	// pass stopped in the middle of.
+	EmailReasonSendInDoubt = "send_in_doubt"
+	// EmailReasonIDFailed is a message whose identifier could not be minted.
+	EmailReasonIDFailed = "id_failed"
+)
+
+// MaxEmailReasonBytes is the longest reason a dispatcher records on a delivery.
+// Detail a host returns beyond it is truncated, so that a delivery record cannot
+// grow without bound whatever the host's rule produces.
+const MaxEmailReasonBytes = 1024
+
+// EmailFailure is an outcome a dispatcher is about to record, for a host
+// deciding what detail to record with it.
+type EmailFailure struct {
+	// Recipient is whose delivery failed.
+	Recipient string
+	// BatchID is the message the failure happened in, empty when none was built.
+	BatchID string
+	// Status is what the delivery is being recorded as: [EmailStatusRetry],
+	// [EmailStatusFailed] or [EmailStatusAbandoned].
+	Status EmailStatus
+	// Reason is the library's own classification, and is what is recorded when a
+	// host records no detail of its own.
+	Reason string
+	// Err is the error behind the failure, exactly as the host's port returned
+	// it, or nil for a send left in doubt by a pass that stopped.
+	Err error
+}
+
 // EmailStore records email delivery state, one row per notification.
 //
 // [NewMemoryStore] and ntfy/sqlstore implement it; a host store may too,
@@ -137,7 +187,8 @@ type EmailRecord struct {
 	Status EmailStatus
 	// BatchID, when set, replaces the recorded message.
 	BatchID string
-	// Reason is a skip reason or the last error.
+	// Reason is a skip reason, or the classification of the last failure: one
+	// of the EmailReason constants, or what [WithEmailFailureDetail] made of it.
 	Reason string
 	// NextAttemptAt is when a [EmailStatusRetry] delivery is due.
 	NextAttemptAt *time.Time
@@ -269,9 +320,13 @@ const (
 	// AtMostOnce is the default. A send in doubt is recorded as abandoned and
 	// never repeated, so an email can be lost but is never duplicated.
 	AtMostOnce DeliveryGuarantee = "AT_MOST_ONCE"
-	// AtLeastOnce repeats a send in doubt with the same idempotency key over
-	// exactly the same notifications, so an email is duplicated unless the sender
-	// honours the key.
+	// AtLeastOnce repeats a send in doubt with the same idempotency key. The
+	// repeat covers a subset of the notifications the attempt in doubt covered:
+	// it never adds one, and it drops any that stopped being ACTIVE since, as a
+	// first attempt does. Where none is left, nothing is sent. The message is
+	// rendered again rather than replayed from a stored copy, so a template
+	// changed between two attempts produces different content under one key, and
+	// a sender that ignores the key may deliver both.
 	AtLeastOnce DeliveryGuarantee = "AT_LEAST_ONCE"
 )
 

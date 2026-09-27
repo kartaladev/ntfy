@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,17 +94,25 @@ func (s *recordingEmailStore) lastRecordOf(t *testing.T, id string) ntfy.EmailRe
 	return ntfy.EmailRecord{}
 }
 
+// errUnreadable is what reading an unreadable notification returns.
+var errUnreadable = errors.New("read failed")
+
 // deletingStore decorates a notification store so that reading chosen
-// notifications finds them gone.
+// notifications finds them gone, or fails.
 type deletingStore struct {
 	ntfy.Store
 
-	gone sync.Map
+	gone       sync.Map
+	unreadable sync.Map
 }
 
 func (s *deletingStore) Get(ctx context.Context, recipient, id string) (ntfy.Notification, error) {
 	if _, ok := s.gone.Load(id); ok {
 		return ntfy.Notification{}, ntfy.ErrNotFound
+	}
+
+	if _, ok := s.unreadable.Load(id); ok {
+		return ntfy.Notification{}, errUnreadable
 	}
 
 	return s.Store.Get(ctx, recipient, id)
@@ -138,6 +149,8 @@ type dispatchHarness struct {
 	lookup func(recipient string) error
 	// render fails a recipient's rendering when it returns an error.
 	render func(batch ntfy.EmailBatch) error
+	// mintFails, once set, fails every identifier the service mints.
+	mintFails atomic.Bool
 
 	dispatcher *ntfy.EmailDispatcher
 }
@@ -154,7 +167,16 @@ func newDispatchHarness(t *testing.T) *dispatchHarness {
 		addresses: map[string]string{"alice": "alice@example.com", "bob": "bob@example.com"},
 	}
 
-	svc, err := ntfy.New(combinedStore{Store: h.store, EmailStore: h.email}, ntfy.WithClock(h.clock))
+	ids := ntfy.NewUUIDv7Generator()
+	mint := ntfy.IDGeneratorFunc(func() (string, error) {
+		if h.mintFails.Load() {
+			return "", errMint
+		}
+
+		return ids.NewID()
+	})
+
+	svc, err := ntfy.New(combinedStore{Store: h.store, EmailStore: h.email}, ntfy.WithClock(h.clock), ntfy.WithIDGenerator(mint))
 	require.NoError(t, err)
 
 	h.svc = svc
@@ -573,6 +595,170 @@ func TestEmailDispatcherDispatch(t *testing.T) {
 			},
 		},
 		{
+			name: "an uncapped ceiling still schedules the retry after the failure",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithEmailBackoff(time.Hour, math.MaxInt64), ntfy.WithEmailMaxAttempts(60))
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 1, Retried: 1}, result)
+
+				page, listErr := h.svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+				require.NoError(t, listErr)
+
+				record := h.email.lastRecordOf(t, page.Notifications[0].ID)
+				require.NotNil(t, record.NextAttemptAt)
+				assert.True(t, record.NextAttemptAt.After(h.clock.Now()), "a retry is never due at or before the failure")
+
+				again, err := h.dispatch()
+				require.NoError(t, err)
+				assert.Zero(t, again.Claimed, "and is not re-claimed by the very next pass")
+			},
+		},
+		{
+			name: "a sender's error text is not recorded, and still reaches the error handler",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithEmailMaxAttempts(1))
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error {
+					return errors.New("550 5.1.1 <alice@example.com>: Recipient address rejected")
+				}
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 1, Failed: 1}, result)
+
+				page, listErr := h.svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+				require.NoError(t, listErr)
+
+				// That a real SMTP rejection embeds the address is provider behaviour and
+				// is UNVERIFIED here; this pins only what the library does with such an
+				// error.
+				record := h.email.lastRecordOf(t, page.Notifications[0].ID)
+				assert.Equal(t, ntfy.EmailReasonSendFailed, record.Reason)
+				assert.NotContains(t, record.Reason, "alice@example.com", "no host text reaches the delivery record")
+
+				require.Len(t, h.reported(), 1)
+				assert.Contains(t, h.reported()[0].Error(), "alice@example.com", "the host still receives the whole error")
+			},
+		},
+		{
+			name: "a host records its own detail",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(
+					ntfy.WithEmailMaxAttempts(1),
+					ntfy.WithEmailFailureDetail(func(_ context.Context, failure ntfy.EmailFailure) string {
+						return failure.Reason + ": " + failure.Err.Error()
+					}),
+				)
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 1, Failed: 1}, result)
+
+				page, listErr := h.svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+				require.NoError(t, listErr)
+
+				record := h.email.lastRecordOf(t, page.Notifications[0].ID)
+				assert.Equal(t, ntfy.EmailReasonSendFailed+": connection refused", record.Reason)
+			},
+		},
+		{
+			name: "recorded detail is bounded",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(
+					ntfy.WithEmailMaxAttempts(1),
+					ntfy.WithEmailFailureDetail(func(context.Context, ntfy.EmailFailure) string {
+						return strings.Repeat("d", ntfy.MaxEmailReasonBytes+10)
+					}),
+				)
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 1, Failed: 1}, result, "the delivery is otherwise recorded normally")
+
+				page, listErr := h.svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+				require.NoError(t, listErr)
+
+				record := h.email.lastRecordOf(t, page.Notifications[0].ID)
+				assert.Equal(t, ntfy.EmailStatusFailed, record.Status)
+				assert.Len(t, record.Reason, ntfy.MaxEmailReasonBytes)
+			},
+		},
+		{
+			name: "recorded detail is cut on a rune boundary",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(
+					ntfy.WithEmailMaxAttempts(1),
+					ntfy.WithEmailFailureDetail(func(context.Context, ntfy.EmailFailure) string {
+						return "d" + strings.Repeat("é", ntfy.MaxEmailReasonBytes)
+					}),
+				)
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, _ ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+
+				page, listErr := h.svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+				require.NoError(t, listErr)
+
+				record := h.email.lastRecordOf(t, page.Notifications[0].ID)
+				assert.LessOrEqual(t, len(record.Reason), ntfy.MaxEmailReasonBytes)
+				assert.True(t, utf8.ValidString(record.Reason), "a truncated reason is still valid UTF-8")
+			},
+		},
+		{
+			name: "a host rule returning nothing keeps the library's reason",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(
+					ntfy.WithEmailMaxAttempts(1),
+					ntfy.WithEmailFailureDetail(func(context.Context, ntfy.EmailFailure) string { return "" }),
+				)
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.send = func(context.Context, ntfy.EmailMessage) error { return errTransient }
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, _ ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+
+				page, listErr := h.svc.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+				require.NoError(t, listErr)
+
+				record := h.email.lastRecordOf(t, page.Notifications[0].ID)
+				assert.Equal(t, ntfy.EmailReasonSendFailed, record.Reason)
+			},
+		},
+		{
 			name: "a render failure fails for good without stopping the pass",
 			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
 				h.build()
@@ -646,7 +832,7 @@ func TestEmailDispatcherDispatch(t *testing.T) {
 			},
 		},
 		{
-			name: "at least once: a send in doubt is resent with the same key over exactly the same notifications",
+			name: "at least once: a send in doubt is resent with the same key, and a newer notification goes separately",
 			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
 				h.build(ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
 				h.publish("alice", "offer")
@@ -702,6 +888,75 @@ func TestEmailDispatcherDispatch(t *testing.T) {
 				messages := h.sent()
 				require.Len(t, messages, 2)
 				assert.Equal(t, messages[0].IdempotencyKey, messages[1].IdempotencyKey)
+			},
+		},
+		{
+			name: "at least once: a send in doubt is resent over the notifications still active",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+				read := h.publish("alice", "offer")
+				h.publish("alice", "offer")
+				h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.email.dropped.Store(true)
+
+				_, err := h.dispatch()
+				require.NoError(t, err)
+				require.Len(t, h.sent(), 1)
+				require.Len(t, h.sent()[0].NotificationIDs, 3)
+
+				h.email.dropped.Store(false)
+
+				_, err = h.svc.MarkRead(t.Context(), "alice", read.ID)
+				require.NoError(t, err)
+
+				h.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 3, Sent: 2, Messages: 1, SkippedInactive: 1}, result)
+
+				messages := h.sent()
+				require.Len(t, messages, 2)
+				assert.Equal(t, messages[0].IdempotencyKey, messages[1].IdempotencyKey, "the resend keeps the key")
+				assert.Equal(t, messages[0].NotificationIDs[1:], messages[1].NotificationIDs, "without the one she read")
+
+				record := h.email.lastRecordOf(t, messages[0].NotificationIDs[0])
+				assert.Equal(t, ntfy.EmailStatusSkipped, record.Status)
+				assert.Equal(t, ntfy.EmailSkipInactive, record.Reason)
+			},
+		},
+		{
+			name: "at least once: nothing is resent once every notification has been read",
+			run: func(t *testing.T, h *dispatchHarness) (ntfy.DispatchResult, error) {
+				h.build(ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce))
+				one := h.publish("alice", "offer")
+				two := h.publish("alice", "offer")
+				h.pastGrace()
+
+				h.email.dropped.Store(true)
+
+				_, err := h.dispatch()
+				require.NoError(t, err)
+				require.Len(t, h.sent(), 1)
+
+				h.email.dropped.Store(false)
+
+				_, err = h.svc.MarkRead(t.Context(), "alice", one.ID, two.ID)
+				require.NoError(t, err)
+
+				h.clock.advance(ntfy.DefaultEmailLease + time.Minute)
+
+				return h.dispatch()
+			},
+			assert: func(t *testing.T, h *dispatchHarness, result ntfy.DispatchResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, ntfy.DispatchResult{Claimed: 2, SkippedInactive: 2}, result)
+				assert.Len(t, h.sent(), 1, "nothing is sent a second time")
+				assert.Empty(t, h.reported(), "an emptied resend is not a failure")
 			},
 		},
 		{
@@ -777,6 +1032,184 @@ func TestEmailDispatcherDispatch(t *testing.T) {
 			h := newDispatchHarness(t)
 			result, err := tc.run(t, h)
 			tc.assert(t, h, result, err)
+		})
+	}
+}
+
+// errMint is what the harness's identifier generator returns once it fails.
+var errMint = errors.New("mint failed")
+
+func TestEmailDispatcherRecordsItsOwnReason(t *testing.T) {
+	t.Parallel()
+
+	// hostText is in every error a host port returns here, standing in for an
+	// address or other host data a real port might embed.
+	const hostText = "alice@example.com"
+
+	type testCase struct {
+		name string
+		// arrange sets up one failure for alice's single notification, after it
+		// is published and before the pass runs.
+		arrange func(t *testing.T, h *dispatchHarness, n ntfy.Notification)
+		opts    []ntfy.EmailOption
+		assert  func(t *testing.T, record ntfy.EmailRecord)
+	}
+
+	recorded := func(status ntfy.EmailStatus, reason string) func(t *testing.T, record ntfy.EmailRecord) {
+		return func(t *testing.T, record ntfy.EmailRecord) {
+			assert.Equal(t, status, record.Status)
+			assert.Equal(t, reason, record.Reason)
+			assert.NotContains(t, record.Reason, hostText, "no host text reaches the delivery record")
+		}
+	}
+
+	hostErr := errors.New("failed for " + hostText)
+
+	cases := []testCase{
+		{
+			name: "a failing filter",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.filter = func(context.Context, ntfy.Notification) (bool, error) { return false, hostErr }
+			},
+			assert: recorded(ntfy.EmailStatusRetry, ntfy.EmailReasonFilterFailed),
+		},
+		{
+			name: "a failing address lookup",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.lookup = func(string) error { return hostErr }
+			},
+			assert: recorded(ntfy.EmailStatusRetry, ntfy.EmailReasonLookupFailed),
+		},
+		{
+			name: "a failing read before sending",
+			arrange: func(_ *testing.T, h *dispatchHarness, n ntfy.Notification) {
+				h.store.unreadable.Store(n.ID, true)
+			},
+			assert: recorded(ntfy.EmailStatusRetry, ntfy.EmailReasonReadFailed),
+		},
+		{
+			name: "a failing render",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.render = func(ntfy.EmailBatch) error { return hostErr }
+			},
+			assert: recorded(ntfy.EmailStatusFailed, ntfy.EmailReasonRenderFailed),
+		},
+		{
+			name: "a failing message identifier",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.mintFails.Store(true)
+			},
+			assert: recorded(ntfy.EmailStatusRetry, ntfy.EmailReasonIDFailed),
+		},
+		{
+			name: "a rejected send",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.send = func(context.Context, ntfy.EmailMessage) error {
+					return fmt.Errorf("%w: %w", hostErr, ntfy.ErrMailRejected)
+				}
+			},
+			assert: recorded(ntfy.EmailStatusFailed, ntfy.EmailReasonSendRejected),
+		},
+		{
+			name: "a failing send",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.send = func(context.Context, ntfy.EmailMessage) error { return hostErr }
+			},
+			assert: recorded(ntfy.EmailStatusRetry, ntfy.EmailReasonSendFailed),
+		},
+		{
+			name: "a failing send at the attempt limit",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.send = func(context.Context, ntfy.EmailMessage) error { return hostErr }
+			},
+			opts:   []ntfy.EmailOption{ntfy.WithEmailMaxAttempts(1)},
+			assert: recorded(ntfy.EmailStatusFailed, ntfy.EmailReasonSendFailed),
+		},
+		{
+			name: "a send in doubt",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.send = func(context.Context, ntfy.EmailMessage) error {
+					return fmt.Errorf("%w: %w", hostErr, ntfy.ErrMailInDoubt)
+				}
+			},
+			assert: recorded(ntfy.EmailStatusAbandoned, ntfy.EmailReasonSendInDoubt),
+		},
+		{
+			name: "no address",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				delete(h.addresses, "alice")
+			},
+			assert: recorded(ntfy.EmailStatusSkipped, ntfy.EmailSkipNoAddress),
+		},
+		{
+			name: "filtered out",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.filter = func(context.Context, ntfy.Notification) (bool, error) { return false, nil }
+			},
+			assert: recorded(ntfy.EmailStatusSkipped, ntfy.EmailSkipFiltered),
+		},
+		{
+			name: "read after claiming",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.filter = func(ctx context.Context, n ntfy.Notification) (bool, error) {
+					_, err := h.svc.MarkRead(ctx, n.Recipient, n.ID)
+
+					return true, err
+				}
+			},
+			assert: recorded(ntfy.EmailStatusSkipped, ntfy.EmailSkipInactive),
+		},
+		{
+			name: "deleted after claiming",
+			arrange: func(_ *testing.T, h *dispatchHarness, n ntfy.Notification) {
+				h.store.gone.Store(n.ID, true)
+			},
+			assert: recorded(ntfy.EmailStatusSkipped, ntfy.EmailSkipDeleted),
+		},
+	}
+
+	// Every reason the library records must be reached by a case above, so a
+	// reason added without a path through it fails here. Parallel subtests finish
+	// before the parent's cleanup runs; a run narrowed to some cases skips it.
+	var (
+		seen sync.Map
+		ran  atomic.Int64
+	)
+
+	t.Cleanup(func() {
+		if int(ran.Load()) < len(cases) {
+			return
+		}
+
+		for _, reason := range []string{
+			ntfy.EmailReasonFilterFailed, ntfy.EmailReasonLookupFailed, ntfy.EmailReasonReadFailed,
+			ntfy.EmailReasonRenderFailed, ntfy.EmailReasonSendRejected, ntfy.EmailReasonSendFailed,
+			ntfy.EmailReasonSendInDoubt, ntfy.EmailReasonIDFailed,
+			ntfy.EmailSkipNoAddress, ntfy.EmailSkipFiltered, ntfy.EmailSkipInactive, ntfy.EmailSkipDeleted,
+		} {
+			_, ok := seen.Load(reason)
+			assert.Truef(t, ok, "no case records %q", reason)
+		}
+	})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newDispatchHarness(t)
+			h.build(tc.opts...)
+			n := h.publish("alice", "offer")
+			h.pastGrace()
+
+			tc.arrange(t, h, n)
+
+			_, err := h.dispatch()
+			require.NoError(t, err)
+
+			record := h.email.lastRecordOf(t, n.ID)
+			seen.Store(record.Reason, true)
+			ran.Add(1)
+			tc.assert(t, record)
 		})
 	}
 }

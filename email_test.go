@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +206,9 @@ func TestNewEmailDispatcher(t *testing.T) {
 				ntfy.WithEmailKinds("offer"), ntfy.WithDeliveryGuarantee(ntfy.AtLeastOnce),
 				ntfy.WithEmailOwner("dispatcher-1"),
 				ntfy.WithEmailErrorHandler(func(context.Context, error) {}),
+				ntfy.WithEmailFailureDetail(func(_ context.Context, failure ntfy.EmailFailure) string {
+					return failure.Reason
+				}),
 			},
 			assert: func(t *testing.T, d *ntfy.EmailDispatcher, err error) {
 				require.NoError(t, err)
@@ -256,7 +260,16 @@ func TestNewEmailDispatcher(t *testing.T) {
 		},
 		{name: "an unknown guarantee", opts: []ntfy.EmailOption{ntfy.WithDeliveryGuarantee("EXACTLY_ONCE")}, assert: refused},
 		{name: "an empty owner", opts: []ntfy.EmailOption{ntfy.WithEmailOwner("")}, assert: refused},
+		{
+			name:   "an owner longer than the delivery record admits",
+			opts: []ntfy.EmailOption{ntfy.WithEmailOwner(strings.Repeat("o", ntfy.MaxIdentifierBytes+1))},
+			assert: func(t *testing.T, d *ntfy.EmailDispatcher, err error) {
+				refused(t, d, err)
+				assert.Contains(t, err.Error(), strconv.Itoa(ntfy.MaxIdentifierBytes), "the error names the limit")
+			},
+		},
 		{name: "a nil error handler", opts: []ntfy.EmailOption{ntfy.WithEmailErrorHandler(nil)}, assert: refused},
+		{name: "a nil failure detail", opts: []ntfy.EmailOption{ntfy.WithEmailFailureDetail(nil)}, assert: refused},
 	}
 
 	for _, tc := range cases {

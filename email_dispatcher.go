@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
+	"strconv"
 	"time"
+	"unicode/utf8"
 )
 
 // The email defaults an [EmailDispatcher] applies when an option does not
@@ -63,6 +66,7 @@ type EmailDispatcher struct {
 	backoff   time.Duration
 	ceiling   time.Duration
 	onError   func(ctx context.Context, err error)
+	detail    func(ctx context.Context, failure EmailFailure) string
 }
 
 // EmailOption configures an [EmailDispatcher].
@@ -85,6 +89,7 @@ type emailConfig struct {
 	guarantee    *DeliveryGuarantee
 	owner        *string
 	onError      *func(ctx context.Context, err error)
+	detail       *func(ctx context.Context, failure EmailFailure) string
 }
 
 // WithEmailGraceDelay replaces [DefaultEmailGraceDelay]. It must be positive;
@@ -169,6 +174,19 @@ func WithEmailErrorHandler(handler func(ctx context.Context, err error)) EmailOp
 	return func(c *emailConfig) { c.onError = &handler }
 }
 
+// WithEmailFailureDetail replaces the default rule for what a failed, retried or
+// abandoned delivery records as its reason. The default records the library's
+// own classification — one of the EmailReason constants — and never text from a
+// host's Mailer, EmailTemplate or AddressBook.
+//
+// The rule receives the classification and the error behind it, and returns the
+// text to record; an empty return keeps the classification. What it returns is
+// truncated to [MaxEmailReasonBytes]. The error reaches the email error handler
+// either way, unchanged. It must not be nil.
+func WithEmailFailureDetail(detail func(ctx context.Context, failure EmailFailure) string) EmailOption {
+	return func(c *emailConfig) { c.detail = &detail }
+}
+
 // NewEmailDispatcher builds a dispatcher over a service's store, which must
 // record email deliveries.
 //
@@ -220,6 +238,7 @@ func NewEmailDispatcher(
 		batch: DefaultEmailBatchLimit, claim: DefaultEmailClaimLimit, lease: DefaultEmailLease,
 		attempts: DefaultEmailMaxAttempts, backoff: DefaultEmailBackoff, ceiling: DefaultEmailBackoffCeiling,
 		onError: func(context.Context, error) {},
+		detail:  func(_ context.Context, failure EmailFailure) string { return failure.Reason },
 	}
 
 	if err := cfg.apply(d); err != nil {
@@ -276,6 +295,10 @@ func (c emailConfig) apply(d *EmailDispatcher) error {
 		d.onError = *c.onError
 	}
 
+	if c.detail != nil {
+		d.detail = *c.detail
+	}
+
 	if d.maxLag <= d.grace {
 		return &ConfigurationError{Detail: "the email max lag must be longer than the grace delay"}
 	}
@@ -304,7 +327,7 @@ func (c emailConfig) validate() error {
 		return refuse("the email attempt limit must be positive")
 	case nonPositive(c.backoff):
 		return refuse("the email backoff must be positive")
-	case c.backoff != nil && *c.ceiling < *c.backoff:
+	case c.backoff != nil && c.ceiling != nil && *c.ceiling < *c.backoff:
 		return refuse("the email backoff ceiling must be no shorter than its base")
 	case c.filter != nil && c.kinds != nil:
 		return refuse("an email filter and email kinds are both set; choose WithEmailFilter or WithEmailKinds")
@@ -316,8 +339,13 @@ func (c emailConfig) validate() error {
 		return refuse("the delivery guarantee " + string(*c.guarantee) + " is not AtMostOnce or AtLeastOnce")
 	case c.owner != nil && *c.owner == "":
 		return refuse("the email owner must not be empty")
+	case c.owner != nil && len(*c.owner) > MaxIdentifierBytes:
+		return refuse("the email owner is longer than " + strconv.Itoa(MaxIdentifierBytes) +
+			" bytes, which a delivery record cannot store")
 	case c.onError != nil && *c.onError == nil:
 		return refuse("the email error handler must not be nil")
+	case c.detail != nil && *c.detail == nil:
+		return refuse("the email failure detail must not be nil")
 	default:
 		return nil
 	}
@@ -488,6 +516,34 @@ func (p *emailPass) record(candidates []EmailCandidate, record EmailRecord) bool
 	return true
 }
 
+// detail is the text to record for a failure: the host's rule applied to the
+// library's classification, bounded either way.
+func (p *emailPass) detail(recipient, batch, reason string, status EmailStatus, cause error) string {
+	text := p.d.detail(p.ctx, EmailFailure{
+		Recipient: recipient, BatchID: batch, Status: status, Reason: reason, Err: cause,
+	})
+	if text == "" {
+		text = reason
+	}
+
+	return truncateReason(text)
+}
+
+// truncateReason bounds a reason at [MaxEmailReasonBytes] without splitting a
+// rune, so a truncated reason is still valid UTF-8.
+func truncateReason(reason string) string {
+	if len(reason) <= MaxEmailReasonBytes {
+		return reason
+	}
+
+	cut := MaxEmailReasonBytes
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+
+	return reason[:cut]
+}
+
 // candidateIDs lists candidates' notification identifiers.
 func candidateIDs(candidates []EmailCandidate) []string {
 	out := make([]string, 0, len(candidates))
@@ -517,17 +573,24 @@ func (p *emailPass) skip(candidates []EmailCandidate, reason string) {
 }
 
 // fail records candidates as failed for good, counts them and reports the error.
-func (p *emailPass) fail(candidates []EmailCandidate, batch string, cause error) {
-	p.record(candidates, EmailRecord{Status: EmailStatusFailed, Reason: cause.Error()})
+// reason is the library's classification of the failure, which is what the
+// delivery record keeps; the error itself goes to the host's handler.
+func (p *emailPass) fail(candidates []EmailCandidate, batch, reason string, cause error) {
+	recipient := candidates[0].Notification.Recipient
+
+	p.record(candidates, EmailRecord{
+		Status: EmailStatusFailed,
+		Reason: p.detail(recipient, batch, reason, EmailStatusFailed, cause),
+	})
 	p.result.Failed += len(candidates)
-	p.report(candidates[0].Notification.Recipient, batch, cause)
+	p.report(recipient, batch, cause)
 }
 
 // retry schedules candidates for another attempt, or fails the ones that used
 // up their attempts, and reports the error. countAttempt adds this attempt to
 // the record, for a failure that happened before anything was recorded as
 // SENDING.
-func (p *emailPass) retry(candidates []EmailCandidate, batch string, cause error, countAttempt bool) {
+func (p *emailPass) retry(candidates []EmailCandidate, batch, reason string, cause error, countAttempt bool) {
 	byAttempts := map[int][]EmailCandidate{}
 
 	var counts []int
@@ -545,38 +608,59 @@ func (p *emailPass) retry(candidates []EmailCandidate, batch string, cause error
 		byAttempts[made] = append(byAttempts[made], c)
 	}
 
+	recipient := candidates[0].Notification.Recipient
+	failed := p.detail(recipient, batch, reason, EmailStatusFailed, cause)
+	retried := p.detail(recipient, batch, reason, EmailStatusRetry, cause)
+
 	for _, made := range counts {
 		group := byAttempts[made]
 
 		if made >= p.d.attempts {
-			p.record(group, EmailRecord{Status: EmailStatusFailed, Reason: cause.Error(), Attempt: countAttempt})
+			p.record(group, EmailRecord{Status: EmailStatusFailed, Reason: failed, Attempt: countAttempt})
 			p.result.Failed += len(group)
 
 			continue
 		}
 
 		next := p.now.Add(p.d.delay(made))
-		p.record(group, EmailRecord{Status: EmailStatusRetry, Reason: cause.Error(), NextAttemptAt: &next, Attempt: countAttempt})
+		p.record(group, EmailRecord{Status: EmailStatusRetry, Reason: retried, NextAttemptAt: &next, Attempt: countAttempt})
 		p.result.Retried += len(group)
 	}
 
-	p.report(candidates[0].Notification.Recipient, batch, cause)
+	p.report(recipient, batch, cause)
 }
 
 // delay is how long to wait after an attempt: the backoff doubled for each
-// earlier attempt, capped, with jitter.
+// earlier attempt, capped at the ceiling, with jitter. The doubling stops
+// before it can overflow, so a delay is always positive however large the
+// ceiling and however many attempts have been made.
 func (d *EmailDispatcher) delay(attempts int) time.Duration {
 	wait := d.backoff
 
-	for i := 1; i < attempts && wait < d.ceiling; i++ {
+	for i := 1; i < attempts; i++ {
+		if wait >= d.ceiling-wait {
+			wait = d.ceiling
+
+			break
+		}
+
 		wait *= 2
 	}
 
-	wait = min(wait, d.ceiling)
+	return jittered(min(wait, d.ceiling))
+}
 
-	spread := 1 + emailJitter*(2*rand.Float64()-1)
+// jittered spreads a delay by up to emailJitter either way, without overflowing
+// and without reaching zero, so that deliveries failing together do not retry
+// in lockstep and no retry is scheduled in the past.
+func jittered(wait time.Duration) time.Duration {
+	spread := time.Duration(float64(wait) * emailJitter * (2*rand.Float64() - 1))
 
-	return time.Duration(float64(wait) * spread)
+	if spread > 0 && wait > math.MaxInt64-spread {
+		return math.MaxInt64
+	}
+
+	return max(wait+spread, time.Nanosecond)
 }
 
 // resolveDoubt settles a message a previous pass may or may not have sent.
@@ -585,7 +669,10 @@ func (p *emailPass) resolveDoubt(candidates []EmailCandidate) {
 	recipient := candidates[0].Notification.Recipient
 
 	if p.d.guarantee == AtMostOnce {
-		p.record(candidates, EmailRecord{Status: EmailStatusAbandoned, Reason: "the send is in doubt"})
+		p.record(candidates, EmailRecord{
+			Status: EmailStatusAbandoned,
+			Reason: p.detail(recipient, batch, EmailReasonSendInDoubt, EmailStatusAbandoned, nil),
+		})
 		p.result.Abandoned += len(candidates)
 
 		return
@@ -620,7 +707,7 @@ func (p *emailPass) deliver(recipient string, candidates []EmailCandidate) {
 
 		switch {
 		case err != nil:
-			p.retry([]EmailCandidate{c}, "", err, true)
+			p.retry([]EmailCandidate{c}, "", EmailReasonFilterFailed, err, true)
 		case ok:
 			selected = append(selected, c)
 		default:
@@ -638,7 +725,7 @@ func (p *emailPass) deliver(recipient string, candidates []EmailCandidate) {
 
 	switch {
 	case err != nil:
-		p.retry(selected, "", err, true)
+		p.retry(selected, "", EmailReasonLookupFailed, err, true)
 
 		return
 	case !ok:
@@ -666,7 +753,7 @@ func (p *emailPass) send(recipient, address string, candidates []EmailCandidate,
 
 	content, err := p.d.template.Render(p.ctx, EmailBatch{Recipient: recipient, Address: address, Notifications: notifications})
 	if err != nil {
-		p.fail(live, batch, fmt.Errorf("render: %w", err))
+		p.fail(live, batch, EmailReasonRenderFailed, fmt.Errorf("render: %w", err))
 
 		return
 	}
@@ -674,7 +761,7 @@ func (p *emailPass) send(recipient, address string, candidates []EmailCandidate,
 	if batch == "" {
 		batch, err = p.d.service.ids.NewID()
 		if err != nil {
-			p.retry(live, "", err, true)
+			p.retry(live, "", EmailReasonIDFailed, err, true)
 
 			return
 		}
@@ -697,9 +784,12 @@ func (p *emailPass) send(recipient, address string, candidates []EmailCandidate,
 		p.result.Sent += len(live)
 		p.result.Messages++
 	case errors.Is(err, ErrMailRejected):
-		p.fail(live, batch, err)
+		p.fail(live, batch, EmailReasonSendRejected, err)
 	case errors.Is(err, ErrMailInDoubt) && p.d.guarantee == AtMostOnce:
-		p.record(live, EmailRecord{Status: EmailStatusAbandoned, Reason: err.Error()})
+		p.record(live, EmailRecord{
+			Status: EmailStatusAbandoned,
+			Reason: p.detail(recipient, batch, EmailReasonSendInDoubt, EmailStatusAbandoned, err),
+		})
 		p.result.Abandoned += len(live)
 		p.report(recipient, batch, err)
 	case errors.Is(err, ErrMailInDoubt):
@@ -713,7 +803,7 @@ func (p *emailPass) send(recipient, address string, candidates []EmailCandidate,
 			live[i].Attempts++
 		}
 
-		p.retry(live, batch, err, false)
+		p.retry(live, batch, EmailReasonSendFailed, err, false)
 	}
 }
 
@@ -734,7 +824,7 @@ func (p *emailPass) recheck(recipient string, candidates []EmailCandidate) ([]Em
 		case errors.Is(err, ErrNotFound):
 			deleted = append(deleted, c)
 		case err != nil:
-			p.retry([]EmailCandidate{c}, c.BatchID, err, true)
+			p.retry([]EmailCandidate{c}, c.BatchID, EmailReasonReadFailed, err, true)
 		case n.State != StateActive:
 			inactive = append(inactive, c)
 		default:

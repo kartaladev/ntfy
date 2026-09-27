@@ -98,18 +98,23 @@ func TestTheEmailDocumentMatchesTheImplementation(t *testing.T) {
 				funcName(ntfy.WithEmailBatchLimit), funcName(ntfy.WithEmailClaimLimit), funcName(ntfy.WithEmailLease),
 				funcName(ntfy.WithEmailMaxAttempts), funcName(ntfy.WithEmailBackoff), funcName(ntfy.WithEmailKinds),
 				funcName(ntfy.WithEmailFilter), funcName(ntfy.WithDeliveryGuarantee), funcName(ntfy.WithEmailOwner),
-				funcName(ntfy.WithEmailErrorHandler), "AtMostOnce",
+				funcName(ntfy.WithEmailErrorHandler), funcName(ntfy.WithEmailFailureDetail), "AtMostOnce",
+				strconv.Itoa(ntfy.MaxEmailReasonBytes), strconv.Itoa(ntfy.MaxIdentifierBytes),
 			},
 		},
 		{
 			name:    "both delivery guarantees",
 			section: "Delivery guarantees",
-			needles: []string{"AtMostOnce", "AtLeastOnce", "IdempotencyKey", "ABANDONED", "never merged"},
+			needles: []string{"AtMostOnce", "AtLeastOnce", "IdempotencyKey", "ABANDONED", "never merged", "subset"},
 		},
 		{
 			name:    "the stated limits",
 			section: "Stated limits",
-			needles: []string{"loses that message's email", "twice", "between the recheck and the send", "skip is final"},
+			needles: []string{
+				"loses that message's email", "twice", "between the recheck and the send", "skip is final",
+				"rendered again, not replayed", "reason code", funcName(ntfy.WithEmailFailureDetail),
+				strconv.Itoa(ntfy.MaxEmailReasonBytes), ntfy.EmailReasonSendInDoubt,
+			},
 		},
 	}
 
