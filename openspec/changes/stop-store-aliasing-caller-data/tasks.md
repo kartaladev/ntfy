@@ -23,7 +23,7 @@
 
 ## 5. Verify the whole change
 
-- [ ] 5.1 Run `make all` (lint, split-check, test) and verify it passes on every module.
-- [ ] 5.2 Run `make store-matrix` and verify the isolation cases pass on every driver and dialect combination (spec scenario "Every store is held to this").
-- [ ] 5.3 Re-run the 1.1 and 1.2 cases against a temporarily reverted fix and verify each fails again, confirming the cases still prove the defect rather than passing vacuously.
-- [ ] 5.4 Run `openspec validate "stop-store-aliasing-caller-data" --strict` and verify the change is valid and every spec scenario has a corresponding case.
+- [x] 5.1 Run `make all` (lint, split-check, test) and verify it passes on every module.
+- [x] 5.2 Run `make store-matrix` and verify the isolation cases pass on every driver and dialect combination (spec scenario "Every store is held to this").
+- [x] 5.3 Re-run the 1.1 and 1.2 cases against a temporarily reverted fix and verify each fails again, confirming the cases still prove the defect rather than passing vacuously.
+- [x] 5.4 Run `openspec validate "stop-store-aliasing-caller-data" --strict` and verify the change is valid and every spec scenario has a corresponding case.
