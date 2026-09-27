@@ -127,26 +127,19 @@ func (s *MemoryStore) insert(subject string, insertions []Insertion) InsertResul
 	return result
 }
 
-// put stores a notification and indexes it. The caller holds the lock.
+// put stores a notification and indexes it. A notification already stored
+// under the same identifier is removed first, with its index entries, so that
+// no index keeps pointing its recipient or subject at the replacement. The
+// caller holds the lock.
 func (s *MemoryStore) put(n Notification) {
+	if old, ok := s.notifications[n.ID]; ok {
+		s.remove(old)
+	}
+
 	s.notifications[n.ID] = n
 	s.sources[sourceKey{source: n.SourceID, recipient: n.Recipient}] = n.ID
-
-	ids := s.subjects[n.Subject]
-	if ids == nil {
-		ids = make(map[string]struct{})
-		s.subjects[n.Subject] = ids
-	}
-
-	ids[n.ID] = struct{}{}
-
-	held := s.recipients[n.Recipient]
-	if held == nil {
-		held = make(map[string]struct{})
-		s.recipients[n.Recipient] = held
-	}
-
-	held[n.ID] = struct{}{}
+	indexAdd(s.subjects, n.Subject, n.ID)
+	indexAdd(s.recipients, n.Recipient, n.ID)
 }
 
 // remove deletes a notification and its index entries. The caller holds the
@@ -154,19 +147,29 @@ func (s *MemoryStore) put(n Notification) {
 func (s *MemoryStore) remove(n Notification) {
 	delete(s.notifications, n.ID)
 	delete(s.sources, sourceKey{source: n.SourceID, recipient: n.Recipient})
+	indexRemove(s.subjects, n.Subject, n.ID)
+	indexRemove(s.recipients, n.Recipient, n.ID)
+}
 
-	ids := s.subjects[n.Subject]
-	delete(ids, n.ID)
-
-	if len(ids) == 0 {
-		delete(s.subjects, n.Subject)
+// indexAdd adds id to key's set in index, creating the set if key has none.
+func indexAdd(index map[string]map[string]struct{}, key, id string) {
+	ids := index[key]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		index[key] = ids
 	}
 
-	held := s.recipients[n.Recipient]
-	delete(held, n.ID)
+	ids[id] = struct{}{}
+}
 
-	if len(held) == 0 {
-		delete(s.recipients, n.Recipient)
+// indexRemove removes id from key's set in index, dropping the set once it is
+// empty so that an index never holds a key with nothing under it.
+func indexRemove(index map[string]map[string]struct{}, key, id string) {
+	ids := index[key]
+	delete(ids, id)
+
+	if len(ids) == 0 {
+		delete(index, key)
 	}
 }
 
@@ -481,15 +484,23 @@ func (s *MemoryStore) Prune(_ context.Context, req PruneRequest) (PruneResult, e
 // pruneCount brings each recipient within the count bound, inactive
 // notifications first. The caller holds the lock.
 func (s *MemoryStore) pruneCount(req PruneRequest, result *PruneResult) {
-	// The keys are collected before the loop, so evicting inside it cannot
-	// disturb the iteration.
-	for _, recipient := range slices.Sorted(maps.Keys(s.recipients)) {
-		ids := s.recipients[recipient]
+	// Only recipients over the bound are collected, so a pass that finds
+	// everyone within it, the steady state, allocates nothing. Collecting
+	// before evicting also keeps eviction from disturbing the iteration, and
+	// sorting keeps Recipients in a stable order.
+	var over []string
 
-		excess := len(ids) - req.MaxPerRecipient
-		if excess <= 0 {
-			continue
+	for recipient, ids := range s.recipients {
+		if len(ids) > req.MaxPerRecipient {
+			over = append(over, recipient)
 		}
+	}
+
+	slices.Sort(over)
+
+	for _, recipient := range over {
+		ids := s.recipients[recipient]
+		excess := len(ids) - req.MaxPerRecipient
 
 		held := make([]Notification, 0, len(ids))
 		for id := range ids {

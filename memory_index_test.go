@@ -119,6 +119,37 @@ func TestMemoryStoreRecipientIndexMirrorsTheStore(t *testing.T) {
 				assert.Len(t, s.recipients["bob"], 1)
 			},
 		},
+		{
+			// The IDGenerator is the consumer's to replace, and the memory
+			// store has no primary key to reject a repeat. The later
+			// notification replaces the earlier, as it always has, and no index
+			// may keep pointing the earlier recipient at it.
+			name: "after an identifier is reused for another recipient",
+			operate: func(t *testing.T, s *MemoryStore) {
+				_, err := s.Insert(t.Context(), "task-2", []Insertion{{Notification: Notification{
+					ID: "id-a", Recipient: "carol", SourceID: "evt-reused", Subject: "task-2",
+					Kind: "offer", State: StateActive, CreatedAt: at.Add(time.Hour),
+				}}})
+				require.NoError(t, err)
+			},
+			assert: func(t *testing.T, s *MemoryStore) {
+				assert.NotContains(t, s.recipients["alice"], "id-a", "alice keeps no entry for carol's notification")
+				assert.NotContains(t, s.subjects["task-1"], "id-a", "task-1 keeps no entry for carol's notification")
+				assert.NotContains(t, s.sources, sourceKey{source: "evt-id-a", recipient: "alice"})
+
+				count, err := s.CountActive(t.Context(), "alice")
+				require.NoError(t, err)
+				assert.Equal(t, int64(1), count, "alice counts only her own notification")
+
+				marked, err := s.MarkAllRead(t.Context(), "alice", at.Add(2*time.Hour), at.Add(2*time.Hour))
+				require.NoError(t, err)
+				assert.Equal(t, int64(1), marked.Marked, "alice marks only her own notification")
+
+				carol, err := s.Get(t.Context(), "carol", "id-a")
+				require.NoError(t, err)
+				assert.Equal(t, StateActive, carol.State, "carol's notification is untouched by alice")
+			},
+		},
 	}
 
 	for _, tc := range cases {

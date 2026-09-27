@@ -53,6 +53,13 @@ jobs:
             echo "==> $module"
             (cd "$module" && go test -count=1 -race ./...)
           done
+      # The memory store's measurement gates: a recipient's reads and the count
+      # bound's pass must not grow with the store's total size. Excluded under
+      # -race, which distorts timing, and opt-in, so they run here on their own.
+      - name: Memory store measurement gates
+        env:
+          NTFY_MEASURE_MEMORY: "1"
+        run: go test -count=1 -run 'TestMemoryStore(ReadsDoNotScale|PruneCountWithinBound)' -v .
 
   # The modules whose tests start real services with testcontainers against the
   # runner's own Docker daemon: the Redis and NATS brokers, and the databases

@@ -1,13 +1,24 @@
 //go:build !race
 
-// Measurement for the memory store. The race detector distorts wall-clock
-// timing beyond usefulness, so this file is excluded under -race; make all's
-// ordinary `go test ./...` is what enforces the gate.
+// Measurement for the memory store: benchmarks that report, and two gate tests
+// that fail when a recipient's reads, or the count bound's pass, grow with the
+// store's total size.
+//
+// Two gates keep it out of the default test run's way:
+//
+//   - The build constraint excludes the file under -race, which distorts
+//     wall-clock timing beyond usefulness.
+//   - The gate tests seed 220,000 notifications each and time microsecond
+//     operations, so they run only when NTFY_MEASURE_MEMORY is set. CI's unit
+//     job runs them in a step of their own, without -race:
+//
+//	NTFY_MEASURE_MEMORY=1 go test -count=1 -run 'TestMemoryStore(ReadsDoNotScale|PruneCountWithinBound)' .
 
 package ntfy_test
 
 import (
 	"math"
+	"os"
 	"runtime"
 	"strconv"
 	"testing"
@@ -24,14 +35,14 @@ import (
 // store's total size differs.
 //
 // Indicative figures, one machine only (Apple M4 Pro, go1.26.8, 2026-09-27),
-// never thresholds; the gates below assert ratios. Per operation at 200k,
+// never thresholds; the gates below assert a ratio and an invariant. At 200k,
 // before the recipient index and after it:
 //
 //	CountActive               5.48 ms  ->  5.8 µs
 //	List (50 rows)            9.77 ms  ->   25 µs
 //	MarkAllRead               5.78 ms  ->  2.2 µs
 //	CountActive, 32 callers   ~180 ops/s  ->  ~185,000 ops/s
-//	Prune, within the bound   130 MB, 34-54 ms  ->  100 KB, 0.23 ms
+//	Prune, within the bound   130 MB, 34-54 ms  ->  0 B, 15 µs
 //
 // openspec/changes/speed-up-memory-store-reads/evidence.md has the runs.
 const (
@@ -47,6 +58,18 @@ var benchmarkSizes = []struct {
 }{
 	{"20k", smallNotifications, smallRecipients},
 	{"200k", largeNotifications, largeRecipients},
+}
+
+// measureEnv opts in to the gate tests. See the file comment.
+const measureEnv = "NTFY_MEASURE_MEMORY"
+
+// requireMeasurement skips a gate test unless measureEnv is set.
+func requireMeasurement(t *testing.T) {
+	t.Helper()
+
+	if os.Getenv(measureEnv) == "" {
+		t.Skipf("set %s=1 to run the memory store's measurement gates", measureEnv)
+	}
 }
 
 // seedStart is when the first seeded notification was created. Later ones are
@@ -129,6 +152,8 @@ func timePerOp(tb testing.TB, iterations int, op func(tb testing.TB)) time.Durat
 // sizes, because interference from the rest of the machine only ever adds
 // time.
 func TestMemoryStoreReadsDoNotScaleWithStoreSize(t *testing.T) {
+	requireMeasurement(t)
+
 	const (
 		rounds     = 5
 		iterations = 200
@@ -324,31 +349,35 @@ func BenchmarkMemoryStorePruneCount(b *testing.B) {
 	}
 }
 
-// TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize gates the count
-// bound's pass the way the read gate does, on allocations rather than time:
-// a pass that finds every recipient within the bound must not allocate in
-// proportion to what the store holds. Allocation counts do not depend on the
-// machine's load, so the ratio is exact.
-func TestMemoryStorePruneCountAllocationsDoNotScaleWithStoreSize(t *testing.T) {
-	const (
-		runs       = 5
-		ratioLimit = 2.0
-	)
+// TestMemoryStorePruneCountWithinBoundAllocatesNothing gates the count bound's
+// pass on allocations rather than time: a pass that finds every recipient
+// within the bound, the steady state, must not allocate at all, at either
+// store size. Zero allocations is zero bytes, so it also catches a regression
+// that adds a single allocation sized to the whole store, which a ratio of
+// allocation counts would not. Allocation counts do not depend on the
+// machine's load.
+func TestMemoryStorePruneCountWithinBoundAllocatesNothing(t *testing.T) {
+	requireMeasurement(t)
 
-	allocs := func(notifications, recipients int) float64 {
-		store, _ := seedMemoryStore(t, notifications, recipients)
-		req := withinBound()
+	const runs = 5
 
-		return testing.AllocsPerRun(runs, func() {
-			result, err := store.Prune(t.Context(), req)
+	for _, size := range benchmarkSizes {
+		t.Run(size.name, func(t *testing.T) {
+			store, _ := seedMemoryStore(t, size.notifications, size.recipients)
+			req := withinBound()
+
+			var (
+				result ntfy.PruneResult
+				err    error
+			)
+
+			allocs := testing.AllocsPerRun(runs, func() {
+				result, err = store.Prune(t.Context(), req)
+			})
+
 			require.NoError(t, err)
 			require.Zero(t, result.DeletedForCount+result.EvictedActive, "the fixture must stay within the bound")
+			assert.Zerof(t, allocs, "a within-bound count pass allocated %.0f times at %s", allocs, size.name)
 		})
 	}
-
-	small := allocs(smallNotifications, smallRecipients)
-	large := allocs(largeNotifications, largeRecipients)
-
-	assert.LessOrEqualf(t, large, small*ratioLimit,
-		"a within-bound count pass allocated with store size: %.0f allocations at 20k, %.0f at 200k", small, large)
 }
