@@ -29,6 +29,11 @@ type MemoryStore struct {
 	// coalescing and expiring watermarks touch one subject's notifications
 	// rather than every notification.
 	subjects map[string]map[string]struct{}
+	// recipients indexes notification identifiers by recipient, so that
+	// listing, counting, marking all read and the count bound touch one
+	// recipient's notifications rather than every notification. Membership
+	// changes only in put and remove.
+	recipients map[string]map[string]struct{}
 	// deliveries holds email delivery state by notification identifier.
 	deliveries map[string]emailDelivery
 }
@@ -63,6 +68,7 @@ func NewMemoryStore() *MemoryStore {
 		watermarks:    make(map[watermarkKey]watermark),
 		sources:       make(map[sourceKey]string),
 		subjects:      make(map[string]map[string]struct{}),
+		recipients:    make(map[string]map[string]struct{}),
 		deliveries:    make(map[string]emailDelivery),
 	}
 }
@@ -123,6 +129,14 @@ func (s *MemoryStore) put(n Notification) {
 	}
 
 	ids[n.ID] = struct{}{}
+
+	held := s.recipients[n.Recipient]
+	if held == nil {
+		held = make(map[string]struct{})
+		s.recipients[n.Recipient] = held
+	}
+
+	held[n.ID] = struct{}{}
 }
 
 // remove deletes a notification and its index entries. The caller holds the
@@ -136,6 +150,13 @@ func (s *MemoryStore) remove(n Notification) {
 
 	if len(ids) == 0 {
 		delete(s.subjects, n.Subject)
+	}
+
+	held := s.recipients[n.Recipient]
+	delete(held, n.ID)
+
+	if len(held) == 0 {
+		delete(s.recipients, n.Recipient)
 	}
 }
 
@@ -270,7 +291,9 @@ func (s *MemoryStore) List(_ context.Context, q ListQuery) (Page, error) {
 
 	var matched []Notification
 
-	for _, n := range s.notifications {
+	for id := range s.recipients[q.Recipient] {
+		n := s.notifications[id]
+
 		if !matches(n, q) {
 			continue
 		}
@@ -344,8 +367,8 @@ func (s *MemoryStore) CountActive(_ context.Context, recipient string) (int64, e
 
 	var count int64
 
-	for _, n := range s.notifications {
-		if n.Recipient == recipient && n.State == StateActive {
+	for id := range s.recipients[recipient] {
+		if s.notifications[id].State == StateActive {
 			count++
 		}
 	}
@@ -399,8 +422,10 @@ func (s *MemoryStore) MarkAllRead(_ context.Context, recipient string, through, 
 
 	var result MarkResult
 
-	for id, n := range s.notifications {
-		if n.Recipient != recipient || n.State != StateActive || n.CreatedAt.After(through) {
+	for id := range s.recipients[recipient] {
+		n := s.notifications[id]
+
+		if n.State != StateActive || n.CreatedAt.After(through) {
 			continue
 		}
 
