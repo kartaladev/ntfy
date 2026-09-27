@@ -167,8 +167,8 @@ func (r CloseRequest) Validate() error {
 // the request names no successor.
 //
 // Every insertion it returns shares no links or payload with the request or
-// with the other insertions, so a store may keep what it is given. A store must
-// not rely on that: see [Store].
+// with the other insertions. A store still copies what it retains, as [Store]
+// requires: its insert path has other callers, which make no such promise.
 func (r CloseRequest) SuccessorInsertions(recipients []string, at time.Time, ids IDGenerator) ([]Insertion, error) {
 	if r.Successor == nil {
 		return nil, nil

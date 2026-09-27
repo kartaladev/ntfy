@@ -28,6 +28,37 @@ func isolationClose(links map[string]string, data json.RawMessage) ntfy.CloseReq
 	}
 }
 
+// hijack mutates links and a payload in place. It first requires that there is
+// something to mutate, so that a store which drops content fails the case
+// instead of panicking the host's whole test binary.
+func hijack(t *testing.T, links map[string]string, data json.RawMessage) {
+	t.Helper()
+
+	require.NotNil(t, links, "the notification carries its links")
+	require.GreaterOrEqual(t, len(data), 3, "the notification carries its payload")
+
+	links["task"] = "/hijacked"
+	data[2] = 'X'
+}
+
+// hijacked asserts that hijack took effect on the copy it was applied to, so a
+// case cannot pass by mutating nothing.
+func hijacked(t *testing.T, links map[string]string, data json.RawMessage) {
+	t.Helper()
+
+	assert.Equal(t, "/hijacked", links["task"], "the mutated links did change")
+	assert.JSONEq(t, `{"Xy":"carol"}`, string(data), "the mutated payload did change")
+}
+
+// intact asserts that links and a payload still carry what isolationContent
+// supplied.
+func intact(t *testing.T, what string, links map[string]string, data json.RawMessage) {
+	t.Helper()
+
+	assert.Equal(t, "/v1/tasks/task-1", links["task"], "%s keeps its links", what)
+	assert.JSONEq(t, `{"by":"carol"}`, string(data), "%s keeps its payload", what)
+}
+
 // runIsolation asserts that a store shares no memory with its caller: nothing a
 // caller mutates after a call changes what the store holds or what it already
 // returned, and no two notifications one call returns share a map or a payload.
@@ -35,31 +66,26 @@ func isolationClose(links map[string]string, data json.RawMessage) ntfy.CloseReq
 // Every case mutates a value and then asserts that another is unchanged, rather
 // than comparing pointers: the contract promises non-interference, not distinct
 // object graphs. Each case also asserts that its mutation took effect on the
-// caller's own copy, so a case cannot pass by mutating nothing.
+// copy it was applied to, so a case cannot pass by mutating nothing.
 func runIsolation(t *testing.T, factory Factory) {
 	parallel(t, "mutating a close request does not change its successors", func(t *testing.T) {
 		e := newEnv(t, factory)
 		e.insert(false, e.note("alice", "event-1", "task-1", "offer", 1, at(0)))
 
 		links, data := isolationContent()
-		req := isolationClose(links, data)
 
-		result := e.close(req, at(4))
+		result := e.close(isolationClose(links, data), at(4))
 		require.Len(t, result.Successors, 1)
 
-		links["task"] = "/hijacked"
-		data[2] = 'X'
+		hijack(t, links, data)
 
-		assert.Equal(t, "/v1/tasks/task-1", result.Successors[0].Links["task"],
-			"the reported successor keeps the links the close carried")
-		assert.JSONEq(t, `{"by":"carol"}`, string(result.Successors[0].Data))
+		successor := result.Successors[0]
+		intact(t, "the reported successor", successor.Links, successor.Data)
 
-		stored := e.get("alice", result.Successors[0].ID)
-		assert.Equal(t, "/v1/tasks/task-1", stored.Links["task"])
-		assert.JSONEq(t, `{"by":"carol"}`, string(stored.Data))
+		stored := e.get("alice", successor.ID)
+		intact(t, "the stored successor", stored.Links, stored.Data)
 
-		assert.Equal(t, "/hijacked", links["task"], "the caller's own map did change")
-		assert.JSONEq(t, `{"Xy":"carol"}`, string(data), "the caller's own payload did change")
+		hijacked(t, links, data)
 	})
 
 	parallel(t, "successors to different recipients are independent", func(t *testing.T) {
@@ -81,15 +107,18 @@ func runIsolation(t *testing.T, factory Factory) {
 		require.Contains(t, reported, "alice")
 		require.Contains(t, reported, "bob")
 
-		reported["alice"].Links["task"] = "/hijacked"
-		reported["alice"].Data[2] = 'X'
+		alice, bob := reported["alice"], reported["bob"]
+		hijack(t, alice.Links, alice.Data)
 
-		assert.Equal(t, "/v1/tasks/task-1", reported["bob"].Links["task"],
-			"bob's successor keeps its own links")
-		assert.JSONEq(t, `{"by":"carol"}`, string(reported["bob"].Data))
-		assert.Equal(t, "/v1/tasks/task-1", e.get("bob", reported["bob"].ID).Links["task"])
+		intact(t, "bob's reported successor", bob.Links, bob.Data)
 
-		assert.Equal(t, "/hijacked", reported["alice"].Links["task"], "the mutated copy did change")
+		storedBob := e.get("bob", bob.ID)
+		intact(t, "bob's stored successor", storedBob.Links, storedBob.Data)
+
+		storedAlice := e.get("alice", alice.ID)
+		intact(t, "alice's stored successor", storedAlice.Links, storedAlice.Data)
+
+		hijacked(t, alice.Links, alice.Data)
 	})
 
 	parallel(t, "mutating an insertion does not change what a store keeps or reported", func(t *testing.T) {
@@ -101,21 +130,17 @@ func runIsolation(t *testing.T, factory Factory) {
 		result := e.insert(false, n)
 		require.Len(t, result.Created, 1)
 
-		n.Links["task"] = "/hijacked"
-		n.Data[2] = 'X'
+		hijack(t, n.Links, n.Data)
 
-		assert.Equal(t, "/v1/tasks/task-1", result.Created[0].Links["task"],
-			"the reported notification keeps the links it was inserted with")
-		assert.JSONEq(t, `{"by":"carol"}`, string(result.Created[0].Data))
+		intact(t, "the reported notification", result.Created[0].Links, result.Created[0].Data)
 
 		stored := e.get("alice", n.ID)
-		assert.Equal(t, "/v1/tasks/task-1", stored.Links["task"])
-		assert.JSONEq(t, `{"by":"carol"}`, string(stored.Data))
+		intact(t, "the stored notification", stored.Links, stored.Data)
 
-		assert.Equal(t, "/hijacked", n.Links["task"], "the caller's own map did change")
+		hijacked(t, n.Links, n.Data)
 	})
 
-	parallel(t, "insertions sharing one map are reported independently", func(t *testing.T) {
+	parallel(t, "a reported notification is independent of the store and of its siblings", func(t *testing.T) {
 		e := newEnv(t, factory)
 
 		links, data := isolationContent()
@@ -128,48 +153,60 @@ func runIsolation(t *testing.T, factory Factory) {
 		result := e.insert(false, alice, bob)
 		require.Len(t, result.Created, 2)
 
-		result.Created[0].Links["task"] = "/hijacked"
-		result.Created[0].Data[2] = 'X'
+		first, second := result.Created[0], result.Created[1]
+		hijack(t, first.Links, first.Data)
 
-		assert.Equal(t, "/v1/tasks/task-1", result.Created[1].Links["task"],
-			"the second notification keeps its own links")
-		assert.JSONEq(t, `{"by":"carol"}`, string(result.Created[1].Data))
-		assert.Equal(t, "/hijacked", result.Created[0].Links["task"], "the mutated copy did change")
+		intact(t, "the other reported notification", second.Links, second.Data)
+
+		stored := e.get(first.Recipient, first.ID)
+		intact(t, "the stored copy of the mutated notification", stored.Links, stored.Data)
+
+		hijacked(t, first.Links, first.Data)
 	})
 
-	parallel(t, "a notification read twice is independent between reads", func(t *testing.T) {
-		e := newEnv(t, factory)
+	type readCase struct {
+		name string
+		// read is the first read, whose result the case mutates.
+		read func(t *testing.T, e *env, n ntfy.Notification) ntfy.Notification
+	}
 
-		n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
-		n.Links, n.Data = isolationContent()
-		e.insert(false, n)
+	reads := []readCase{
+		{
+			name: "a notification read twice is independent between reads",
+			read: func(_ *testing.T, e *env, n ntfy.Notification) ntfy.Notification {
+				return e.get(n.Recipient, n.ID)
+			},
+		},
+		{
+			name: "a listed notification is independent of a read",
+			read: func(t *testing.T, e *env, n ntfy.Notification) ntfy.Notification {
+				page := e.list(ntfy.ListQuery{Recipient: n.Recipient})
+				require.Len(t, page.Notifications, 1)
 
-		first := e.get("alice", n.ID)
-		first.Links["task"] = "/hijacked"
-		first.Data[2] = 'X'
+				return page.Notifications[0]
+			},
+		},
+	}
 
-		second := e.get("alice", n.ID)
-		assert.Equal(t, "/v1/tasks/task-1", second.Links["task"], "a later read carries what was stored")
-		assert.JSONEq(t, `{"by":"carol"}`, string(second.Data))
-		assert.Equal(t, "/hijacked", first.Links["task"], "the mutated copy did change")
-	})
+	for _, rc := range reads {
+		parallel(t, rc.name, func(t *testing.T) {
+			e := newEnv(t, factory)
 
-	parallel(t, "a listed notification is independent of a read", func(t *testing.T) {
-		e := newEnv(t, factory)
+			n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
+			n.Links, n.Data = isolationContent()
+			e.insert(false, n)
+			e.markRead("alice", at(1), n.ID)
 
-		n := e.note("alice", "event-1", "task-1", "offer", 1, at(0))
-		n.Links, n.Data = isolationContent()
-		e.insert(false, n)
+			first := rc.read(t, e, n)
+			hijack(t, first.Links, first.Data)
+			require.NotNil(t, first.ReadAt, "a read notification carries when it was read")
+			*first.ReadAt = at(99)
 
-		page := e.list(ntfy.ListQuery{Recipient: "alice"})
-		require.Len(t, page.Notifications, 1)
+			second := e.get("alice", n.ID)
+			intact(t, "a later read", second.Links, second.Data)
+			sameInstant(t, at(1), second.ReadAt, "a later read's read-at")
 
-		page.Notifications[0].Links["task"] = "/hijacked"
-		page.Notifications[0].Data[2] = 'X'
-
-		read := e.get("alice", n.ID)
-		assert.Equal(t, "/v1/tasks/task-1", read.Links["task"], "a read carries what was stored")
-		assert.JSONEq(t, `{"by":"carol"}`, string(read.Data))
-		assert.Equal(t, "/hijacked", page.Notifications[0].Links["task"], "the mutated copy did change")
-	})
+			hijacked(t, first.Links, first.Data)
+		})
+	}
 }
