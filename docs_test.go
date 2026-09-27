@@ -100,6 +100,9 @@ func TestTheDocumentMatchesTheImplementation(t *testing.T) {
 				funcName(ntfy.NewHub), funcName(ntfy.WithHeartbeat), funcName(ntfy.WithWriteTimeout),
 				funcName(ntfy.WithMaxStreamsPerRecipient), "SelfOnly", "AllowAll", "unread-changed",
 				"single instance", "re-read",
+				strconv.Itoa(ntfy.DefaultMaxStreamsPerInstance), ntfy.DefaultReconnectDelay.String(),
+				funcName(ntfy.WithMaxStreamsPerInstance), funcName(ntfy.WithoutMaxStreamsPerInstance),
+				funcName(ntfy.WithReconnectDelay), "stops receiving",
 			},
 		},
 		{

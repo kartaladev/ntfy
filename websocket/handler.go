@@ -316,6 +316,12 @@ func (h *Handler) serve(requestCtx context.Context, conn *cws.Conn, subscription
 			// The client went away, or sent a message over the read limit and
 			// was closed for it.
 			return
+		case <-subscription.Done():
+			// The instance stopped receiving signals: tell the client, which
+			// reconnects — here or elsewhere — and re-reads from the store.
+			_ = conn.Close(cws.StatusGoingAway, "the instance stopped receiving signals")
+
+			return
 		case <-subscription.Ready():
 			signal, ok := subscription.Take()
 			if !ok {

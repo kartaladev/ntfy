@@ -1464,6 +1464,90 @@ git commit -m "Record harden-hub-streams tasks as done"
 
 ---
 
+### Task 8: What execution and review changed
+
+Tasks 1–7 were executed as written, apart from the deviations below, each a recorded ruling. Where this section differs from the code blocks above, **this section wins**.
+
+**Files:**
+- Modify: `hub.go`, `hub_test.go`, `websocket/shutdown_test.go`, `docs/realtime-operations.md`, `docs/notifications.md`, `websocket/docs_test.go`
+
+**Interfaces:**
+- Consumes: everything Tasks 1–6 produced.
+- Produces: no new symbols. `NewHub` refuses a reconnect delay under a millisecond, not just a non-positive one.
+
+- [x] **Step 1: Bound the WebSocket stop test's wait (Task 3)**
+
+`receiveErr` waits on `t.Context().Done()`, which is not cancelled while the test body is still blocked. So against unfixed code the red run hangs to the `go test` timeout rather than failing. `TestStopClosesConnectionsAsGoingAway` waits with a bound instead:
+
+```go
+	select {
+	case err = <-readErr:
+	case <-time.After(testWait):
+		t.Fatal("the connection stayed open after the instance stopped receiving signals")
+	}
+```
+
+- [x] **Step 2: Keep the merged following-only sentence (Task 6 Step 5)**
+
+`fix-websocket-write-authorization` rewrote the "Both authorize the subscription" paragraph after this plan was written. The replacement keeps its sentence word for word and adds the instance cap and the stop:
+
+```markdown
+Both authorize the subscription with the same policy (`ntfy.SelfOnly` by
+default), refuse while the hub is not running, and count against the same
+per-recipient cap of 8 connections per instance and the same instance-wide cap
+of 10000 streams per instance. Both are closed when the instance stops receiving
+signals. The policy grants following only: a WebSocket client can also mark the
+acting user's own notifications read over a connection opened for the acting
+user, and a connection that follows anyone else refuses mark requests altogether:
+```
+
+The `Subscribe` and `Hub` type godocs also name the instance-wide cap alongside the per-recipient one.
+
+- [x] **Step 3: State the delay's range as the spec does**
+
+"up to 2s" read as inclusive, but `ReconnectDelay` draws from `[base, 2·base)`. Both guides now say "1s, spread per stream to less than 2s".
+
+- [x] **Step 4: Say which transport carries the delay**
+
+Only the server-sent event stream writes `retry:`; a WebSocket never reads `ReconnectDelay`. In `docs/realtime-operations.md`, the hub defaults row now reads `| Reconnect delay | 1s, spread per stream to less than 2s (server-sent events only) | ntfy.WithReconnectDelay |`. The stop paragraph gives D3's advice:
+
+```markdown
+A server-sent
+event client reconnects after the delay its stream sent it. A WebSocket client
+is closed with no delay of its own and should jitter its own backoff, for
+example between 1s and 2s, before reconnecting. Both then re-read the store.
+```
+
+`websocket/docs_test.go` guards the phrase `jitter its own backoff`. Red: the needle was missing before the doc changed.
+
+- [x] **Step 5: Refuse a delay the stream cannot carry**
+
+`retry:` carries whole milliseconds, so a base under 1ms became `retry: 0`, meaning reconnect at once. Red: a `TestHubReconnectDelay` case, "a delay under a millisecond is a configuration error", with `ntfy.WithReconnectDelay(500 * time.Microsecond)`, failed with `Expected error … but got nil`. Green:
+
+```go
+	case cfg.reconnect != nil && *cfg.reconnect < time.Millisecond:
+		return nil, &ConfigurationError{
+			Detail: "a hub reconnect delay must be at least a millisecond, the smallest a stream can carry",
+		}
+```
+
+`WithReconnectDelay`'s godoc says it must be at least a millisecond, and `NewHub`'s godoc lists every construction error.
+
+- [x] **Step 6: Deliver a signal in the "not revived" case**
+
+The spec's THEN requires that alice gets the signal only on the stream she opens afterwards. The case builds its own hub on an `ntfy.NewInProcessBroadcaster()`, stops it, runs it again, subscribes `fresh` and broadcasts a signal for alice. It then asserts that `fresh.Ready()` fires, that `fresh.Take()` returns the signal, and that `stale.Take()` reports nothing. Non-vacuity check: with `closeSubscriptions()` removed from `endRun`, the case fails on `the closed stream receives nothing`.
+
+- [x] **Step 7: Harden two tests**
+
+`TestHubSubscribeDuringStop` counts the subscriptions opened across its iterations and asserts `assert.Positive(t, total, "some subscription opened before the stop, or the test proves nothing")`. The "a closed stream frees its slot in the instance cap" case asserts `closed(first.Done())` after `first.Close()`.
+
+- [x] **Step 8: Verify**
+
+Run: `make all`, then `GOTOOLCHAIN=go1.26.8 go test -race -count=1 ./...` at the root and in `websocket/`.
+Expected: `0 issues.` in every module, and every test passing.
+
+---
+
 ## Spec coverage
 
 Every scenario in `specs/notification-realtime/spec.md`, and where it is proved.

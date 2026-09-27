@@ -349,6 +349,13 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, actor string) {
 		return nil
 	}
 
+	// Written at open, not at close: the value has to survive a stalled client, a
+	// dropped connection or a dead process, and a client applies the last one it
+	// received.
+	if write("retry: "+strconv.FormatInt(h.hub.ReconnectDelay().Milliseconds(), 10)+"\n\n") != nil {
+		return
+	}
+
 	if write(": connected\n\n") != nil {
 		return
 	}
@@ -359,6 +366,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, actor string) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-subscription.Done():
+			// The instance stopped receiving signals. Ending the response is what
+			// makes the client reconnect — to this instance once it recovers, or to
+			// another — and re-read the store.
 			return
 		case <-subscription.Ready():
 			signal, ok := subscription.Take()

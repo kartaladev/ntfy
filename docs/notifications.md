@@ -157,6 +157,8 @@ streams refused as unavailable until the hub is ready, and clients retry.
 | Heartbeat on an idle stream | 25s | `WithHeartbeat` |
 | Closing a client that accepts no writes | after 10s | `WithWriteTimeout` |
 | Streams per recipient on one instance | 8, counted across SSE and WebSocket | `WithMaxStreamsPerRecipient` |
+| Streams on one instance | 10000, counted across every recipient and transport | `WithMaxStreamsPerInstance`, or `WithoutMaxStreamsPerInstance` |
+| Reconnect delay a stream carries | 1s, spread per stream to less than 2s | `WithReconnectDelay` (the spread itself is fixed) |
 | Who may follow whose signals | `SelfOnly`: a user follows only their own | `WithSubscriptionAuthorizer` on the handler; `AllowAll` to permit everything |
 
 - **A signal says that something changed, never what.** It reaches a client as an
@@ -175,6 +177,10 @@ streams refused as unavailable until the hub is ready, and clients retry.
   rather than opened and left silent. The hub counts as running only once its
   broadcaster has confirmed its subscription, so a signal broadcast after
   `Running` reports true, or after `Ready` closes, reaches the instance's streams.
+- **A stream ends when its instance stops receiving.** When `Run` returns — a
+  cancelled context, a broadcaster that gave up — every open stream on that
+  instance is closed rather than left silent, and each client reconnects and
+  re-reads. A stream closed that way is not revived by the next run.
 - **After a broker connection drops**, the broadcaster's client resubscribes on
   its own and `Running` stays true meanwhile; signals in that gap are lost, and
   clients recover by re-reading.

@@ -104,10 +104,12 @@ namespaced under `ntfy.` so they do not collide with one.
 
 Both authorize the subscription with the same policy (`ntfy.SelfOnly` by
 default), refuse while the hub is not running, and count against the same
-per-recipient cap of 8 connections per instance. The policy grants following
-only: a WebSocket client can also mark the acting user's own notifications read
-over a connection opened for the acting user, and a connection that follows
-anyone else refuses mark requests altogether:
+per-recipient cap of 8 connections per instance and the same instance-wide cap
+of 10000 streams per instance. Both are closed when the instance stops
+receiving signals. The policy grants following only: a WebSocket client can
+also mark the acting user's own notifications read over a connection opened
+for the acting user, and a connection that follows anyone else refuses mark
+requests altogether:
 
 | Direction | Message |
 | --- | --- |
@@ -135,6 +137,30 @@ WebSocket defaults:
 | Ping interval | the hub's heartbeat, 25s | `websocket.WithPingInterval` |
 | Write timeout | the hub's write timeout, 10s | `websocket.WithWriteTimeout` |
 | Subprotocol offered | `ntfy.v1` | none |
+
+Hub defaults, which both transports share:
+
+| Setting | Default | Override |
+| --- | --- | --- |
+| Streams per recipient | 8 per instance | `ntfy.WithMaxStreamsPerRecipient` |
+| Streams per instance | 10000 across every recipient | `ntfy.WithMaxStreamsPerInstance`, or `ntfy.WithoutMaxStreamsPerInstance` |
+| Reconnect delay | 1s, spread per stream to less than 2s (server-sent events only) | `ntfy.WithReconnectDelay` |
+
+**Stated limit:** the spread on the reconnect delay is not configurable. A base
+with no spread returns an instance's clients in one wave, which is what the
+delay exists to prevent. **Stated limit: only the server-sent event stream
+carries the delay to the client**, as the `retry:` field. The WebSocket
+transport never writes one.
+
+When an instance stops receiving signals — `hub.Run` returned, because its
+context was cancelled or its broadcaster gave up — every stream and connection
+on it is closed: a server-sent event stream ends, and a WebSocket closes with
+status 1001 and a reason saying the instance stopped receiving. A server-sent
+event client reconnects after the delay its stream sent it. A WebSocket client
+is closed with no delay of its own and should jitter its own backoff, for
+example between 1s and 2s, before reconnecting. Both then re-read the store.
+An instance that is up but not receiving refuses new streams as unavailable,
+so a client that returns too early is refused cheaply rather than left silent.
 
 Mounting:
 
@@ -169,9 +195,14 @@ server-sent event stream, which carries the same signals.
 
 ## Shutting down
 
-`http.Server.Shutdown` does not close hijacked connections, and every WebSocket
-is one. Cancel the server's base context as well, which closes each WebSocket
-with status 1001 (going away) and releases its slot:
+`http.Server.Shutdown` ends neither transport on its own. A WebSocket is a
+hijacked connection, which `Shutdown` does not touch. A server-sent event
+stream is an ordinary request that never returns, and `Shutdown` does not
+cancel in-flight request contexts, so the stream's loop never wakes.
+
+Cancel the server's base context as well. Every request context derives from
+it, so one cancellation ends both: each WebSocket closes with status 1001
+(going away) and releases its slot in the hub's caps, and each stream returns.
 
 ```go
 baseCtx, cancelBase := context.WithCancel(context.Background())
@@ -184,3 +215,7 @@ server.RegisterOnShutdown(cancelBase)
 
 A client that was closed reconnects, to this instance or another, and re-reads
 the store.
+
+Stopping the hub is the other half: cancel the context passed to `hub.Run` and
+every stream on the instance is closed the same way, whether or not the HTTP
+server is going down.

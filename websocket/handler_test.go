@@ -116,3 +116,27 @@ func TestDefaultReadLimit(t *testing.T) {
 	assert.EqualValues(t, 4096, websocket.DefaultReadLimit)
 	assert.Equal(t, "ntfy.v1", websocket.Subprotocol)
 }
+
+// TestInstanceCapCountsBothTransports proves the instance-wide cap counts a
+// server-sent event stream and a WebSocket connection alike: with a cap of two,
+// one of each fills the instance, and a third recipient is refused before the
+// handshake completes.
+func TestInstanceCapCountsBothTransports(t *testing.T) {
+	t.Parallel()
+
+	s := startServer(t, serverConfig{hub: []ntfy.HubOption{
+		ntfy.WithMaxStreamsPerRecipient(1),
+		ntfy.WithMaxStreamsPerInstance(2),
+	}})
+
+	s.openStream(t, "alice")
+
+	accepted, err := s.dial(t, dialRequest{actor: "bob"})
+	require.NoError(t, err)
+	require.NotNil(t, accepted.conn)
+
+	refusedDial, err := s.dial(t, dialRequest{actor: "carol"})
+	require.Error(t, err, "the instance is full")
+	assert.Equal(t, http.StatusTooManyRequests, refusedDial.status)
+	assert.Contains(t, string(refusedDial.body), "too_many_streams")
+}

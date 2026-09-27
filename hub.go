@@ -3,6 +3,7 @@ package ntfy
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,11 +20,18 @@ const (
 	// DefaultMaxStreamsPerRecipient is how many streams one recipient may hold
 	// open on one instance, across every transport.
 	DefaultMaxStreamsPerRecipient = 8
+	// DefaultReconnectDelay is the base a stream tells its client to wait before
+	// reconnecting. The value a stream carries is drawn between it and twice it.
+	DefaultReconnectDelay = time.Second
+	// DefaultMaxStreamsPerInstance is how many streams one instance may hold open
+	// across every recipient and every transport.
+	DefaultMaxStreamsPerInstance = 10_000
 )
 
 // Hub routes signals from a [Broadcaster] to the subscriptions of the recipient
 // each signal is for. Every transport, SSE and WebSocket alike, subscribes
-// through it, so one per-recipient cap counts all of a recipient's streams.
+// through it, so one per-recipient cap counts all of a recipient's streams and
+// one instance-wide cap counts every recipient's together.
 //
 // Nothing runs on its own: signals are received only while the host runs
 // [Hub.Run]. A Hub is safe for concurrent use.
@@ -31,7 +39,9 @@ type Hub struct {
 	broadcaster  Broadcaster
 	heartbeat    time.Duration
 	writeTimeout time.Duration
+	reconnect    time.Duration
 	maxStreams   int
+	maxTotal     int
 
 	// running is true only while a run's broadcaster has confirmed its
 	// subscription. It is written under runMu and read without it.
@@ -43,7 +53,12 @@ type Hub struct {
 	current *hubRun
 	readyCh chan struct{}
 
-	mu            sync.Mutex
+	mu sync.Mutex
+	// receiving is the subscription side's view of running. It is written under
+	// mu, so that Subscribe decides and inserts in one critical section and a run
+	// ending in between cannot leave an orphaned subscription behind.
+	receiving     bool
+	streams       int
 	subscriptions map[string]map[*Subscription]struct{}
 }
 
@@ -55,7 +70,10 @@ type HubOption func(*hubConfig)
 type hubConfig struct {
 	heartbeat    *time.Duration
 	writeTimeout *time.Duration
+	reconnect    *time.Duration
 	maxStreams   *int
+	maxTotal     *int
+	withoutTotal bool
 }
 
 // WithHeartbeat replaces [DefaultHeartbeat]. It must be positive.
@@ -74,9 +92,37 @@ func WithMaxStreamsPerRecipient(n int) HubOption {
 	return func(c *hubConfig) { c.maxStreams = &n }
 }
 
+// WithMaxStreamsPerInstance replaces [DefaultMaxStreamsPerInstance], the number
+// of streams one instance holds open across every recipient. It must be at least
+// one, and at least the per-recipient cap, which it would otherwise make
+// unreachable. [WithoutMaxStreamsPerInstance] removes it.
+func WithMaxStreamsPerInstance(n int) HubOption {
+	return func(c *hubConfig) { c.maxTotal = &n }
+}
+
+// WithoutMaxStreamsPerInstance removes the instance-wide cap, for a host that
+// bounds connections elsewhere, such as at its proxy. Only the per-recipient cap
+// then applies. It cannot be combined with [WithMaxStreamsPerInstance].
+func WithoutMaxStreamsPerInstance() HubOption {
+	return func(c *hubConfig) { c.withoutTotal = true }
+}
+
+// WithReconnectDelay replaces [DefaultReconnectDelay], the base a stream tells
+// its client to wait before reconnecting. It must be at least a millisecond,
+// the resolution a server-sent event stream carries.
+//
+// The jitter that spreads it is not configurable: a base with no spread returns
+// an instance's clients in one wave, which is what the delay exists to prevent.
+func WithReconnectDelay(d time.Duration) HubOption {
+	return func(c *hubConfig) { c.reconnect = &d }
+}
+
 // NewHub builds a hub over a broadcaster, normally the service's
-// [Service.Broadcaster]. A nil broadcaster, or a heartbeat, write timeout or
-// stream cap that is not positive, is a [ConfigurationError].
+// [Service.Broadcaster]. A nil broadcaster; a heartbeat, write timeout or
+// per-recipient stream cap that is not positive; or a reconnect delay that is
+// non-positive or under a millisecond, is a [ConfigurationError]. So is a
+// total stream cap below one, below the per-recipient cap, or both set and
+// removed.
 func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 	if broadcaster == nil {
 		return nil, &ConfigurationError{Detail: "a hub needs a broadcaster; pass the service's Broadcaster()"}
@@ -94,7 +140,9 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		broadcaster:   broadcaster,
 		heartbeat:     DefaultHeartbeat,
 		writeTimeout:  DefaultWriteTimeout,
+		reconnect:     DefaultReconnectDelay,
 		maxStreams:    DefaultMaxStreamsPerRecipient,
+		maxTotal:      DefaultMaxStreamsPerInstance,
 		readyCh:       make(chan struct{}),
 		subscriptions: make(map[string]map[*Subscription]struct{}),
 	}
@@ -104,8 +152,22 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		return nil, &ConfigurationError{Detail: "a hub heartbeat must be positive"}
 	case cfg.writeTimeout != nil && *cfg.writeTimeout <= 0:
 		return nil, &ConfigurationError{Detail: "a hub write timeout must be positive"}
+	case cfg.reconnect != nil && *cfg.reconnect < time.Millisecond:
+		return nil, &ConfigurationError{
+			Detail: "a hub reconnect delay must be at least a millisecond, the smallest a stream can carry",
+		}
 	case cfg.maxStreams != nil && *cfg.maxStreams < 1:
 		return nil, &ConfigurationError{Detail: "a hub must allow at least one stream per recipient"}
+	case cfg.maxTotal != nil && cfg.withoutTotal:
+		return nil, &ConfigurationError{
+			Detail: "the instance stream cap is both set and removed; " +
+				"choose WithMaxStreamsPerInstance or WithoutMaxStreamsPerInstance",
+		}
+	case cfg.maxTotal != nil && *cfg.maxTotal < 1:
+		return nil, &ConfigurationError{
+			Detail: "a hub must allow at least one stream per instance; " +
+				"use WithoutMaxStreamsPerInstance to remove the cap",
+		}
 	}
 
 	if cfg.heartbeat != nil {
@@ -116,8 +178,26 @@ func NewHub(broadcaster Broadcaster, opts ...HubOption) (*Hub, error) {
 		hub.writeTimeout = *cfg.writeTimeout
 	}
 
+	if cfg.reconnect != nil {
+		hub.reconnect = *cfg.reconnect
+	}
+
 	if cfg.maxStreams != nil {
 		hub.maxStreams = *cfg.maxStreams
+	}
+
+	switch {
+	case cfg.withoutTotal:
+		hub.maxTotal = 0
+	case cfg.maxTotal != nil:
+		hub.maxTotal = *cfg.maxTotal
+	}
+
+	if hub.maxTotal > 0 && hub.maxTotal < hub.maxStreams {
+		return nil, &ConfigurationError{
+			Detail: "the instance stream cap must be at least the per-recipient cap, " +
+				"which it would otherwise make unreachable",
+		}
 	}
 
 	return hub, nil
@@ -169,6 +249,11 @@ func (h *Hub) markReady(run *hubRun) {
 	}
 
 	h.running.Store(true)
+
+	h.mu.Lock()
+	h.receiving = true
+	h.mu.Unlock()
+
 	close(h.readyCh)
 }
 
@@ -181,12 +266,31 @@ func (h *Hub) endRun() {
 
 	h.current = nil
 	h.running.Store(false)
+	h.closeSubscriptions()
 
 	select {
 	case <-h.readyCh:
 		h.readyCh = make(chan struct{})
 	default:
 	}
+}
+
+// closeSubscriptions stops accepting streams and closes every open one, so that
+// no stream outlives the run that fed it. A later run starts with none.
+func (h *Hub) closeSubscriptions() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.receiving = false
+
+	for _, held := range h.subscriptions {
+		for subscription := range held {
+			subscription.closeLocked()
+		}
+	}
+
+	h.subscriptions = make(map[string]map[*Subscription]struct{})
+	h.streams = 0
 }
 
 // Running reports whether the hub is receiving signals: a run is in progress and
@@ -229,6 +333,14 @@ func (h *Hub) Heartbeat() time.Duration { return h.heartbeat }
 // WriteTimeout is how long a transport waits for a client to accept a write.
 func (h *Hub) WriteTimeout() time.Duration { return h.writeTimeout }
 
+// ReconnectDelay is how long a new stream tells its client to wait before
+// reconnecting. Every call draws its own value, between the configured base —
+// [DefaultReconnectDelay] unless [WithReconnectDelay] replaces it — and twice
+// it, so that an instance's clients do not all return at the same moment.
+func (h *Hub) ReconnectDelay() time.Duration {
+	return h.reconnect + time.Duration(rand.Int64N(int64(h.reconnect)))
+}
+
 // deliver offers a signal to every subscription of its recipient. It never
 // waits on a client.
 func (h *Hub) deliver(signal Signal) {
@@ -243,17 +355,22 @@ func (h *Hub) deliver(signal Signal) {
 // Subscribe opens a subscription to a recipient's signals.
 //
 // It does not authorize: a transport asks its [SubscriptionAuthorizer] first.
-// A hub that is not running refuses with an error matching [ErrUnavailable],
-// and a recipient already holding the maximum number of subscriptions on this
-// instance is refused with one matching [ErrTooManyStreams]. Every subscription
-// must be closed.
+// A hub that is not receiving signals refuses with an error matching
+// [ErrUnavailable], and a stream beyond either the per-recipient cap or the
+// instance-wide cap is refused with an error matching [ErrTooManyStreams],
+// whose message says which. Every subscription must be closed, and a
+// subscription is closed for the caller when the hub's run ends.
 func (h *Hub) Subscribe(recipient string) (*Subscription, error) {
-	if !h.Running() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if !h.receiving {
 		return nil, fmt.Errorf("%w: the hub is not receiving signals", ErrUnavailable)
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	if h.maxTotal > 0 && h.streams >= h.maxTotal {
+		return nil, fmt.Errorf("%w: %d streams are already open on this instance", ErrTooManyStreams, h.maxTotal)
+	}
 
 	held := h.subscriptions[recipient]
 	if len(held) >= h.maxStreams {
@@ -265,8 +382,14 @@ func (h *Hub) Subscribe(recipient string) (*Subscription, error) {
 		h.subscriptions[recipient] = held
 	}
 
-	subscription := &Subscription{hub: h, recipient: recipient, ready: make(chan struct{}, 1)}
+	subscription := &Subscription{
+		hub:       h,
+		recipient: recipient,
+		ready:     make(chan struct{}, 1),
+		done:      make(chan struct{}),
+	}
 	held[subscription] = struct{}{}
+	h.streams++
 
 	return subscription, nil
 }
@@ -281,6 +404,7 @@ type Subscription struct {
 	hub       *Hub
 	recipient string
 	ready     chan struct{}
+	done      chan struct{}
 	closeOnce sync.Once
 
 	mu      sync.Mutex
@@ -321,15 +445,34 @@ func (s *Subscription) Take() (Signal, bool) {
 	return signal, true
 }
 
+// Done is closed when the subscription ends, whether its stream closed it or
+// its instance stopped receiving signals. A transport selects on it alongside
+// [Subscription.Ready] and ends the stream when it closes; a transport that
+// ignores it is left holding a stream no signal will ever reach.
+func (s *Subscription) Done() <-chan struct{} { return s.done }
+
 // Close ends the subscription and frees its slot in the recipient's cap. It is
 // safe to call more than once.
 func (s *Subscription) Close() {
+	s.hub.mu.Lock()
+	defer s.hub.mu.Unlock()
+
+	s.closeLocked()
+}
+
+// closeLocked ends the subscription exactly once. The caller holds the hub's
+// lock, so that a stop can close every subscription in one critical section.
+func (s *Subscription) closeLocked() {
 	s.closeOnce.Do(func() {
-		s.hub.mu.Lock()
-		defer s.hub.mu.Unlock()
+		close(s.done)
 
 		held := s.hub.subscriptions[s.recipient]
+		if _, open := held[s]; !open {
+			return
+		}
+
 		delete(held, s)
+		s.hub.streams--
 
 		if len(held) == 0 {
 			delete(s.hub.subscriptions, s.recipient)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -783,4 +784,58 @@ func TestWriteError(t *testing.T) {
 			tc.assert(t, rec)
 		})
 	}
+}
+
+// TestHandlerStreamEndsWhenTheHubStops proves a stream does not outlive the
+// instance's ability to deliver signals to it: when the hub's run ends, the
+// response body ends rather than carrying on with heartbeats.
+func TestHandlerStreamEndsWhenTheHubStops(t *testing.T) {
+	t.Parallel()
+
+	env := newHTTPEnv(t, false, nil)
+	stop := runHub(t, env.hub)
+
+	server := httptest.NewServer(env.handler)
+	t.Cleanup(server.Close)
+
+	s := openStream(t, server, "alice", "")
+	require.Equal(t, http.StatusOK, s.resp.StatusCode)
+	s.expect(t, "the connected comment", equals(": connected"))
+
+	require.ErrorIs(t, stop(), context.Canceled)
+
+	deadline := time.After(hubWait)
+
+	for {
+		select {
+		case _, ok := <-s.lines:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("the stream stayed open after the instance stopped receiving signals")
+		}
+	}
+}
+
+// TestHandlerStreamCarriesAReconnectDelay proves a stream tells its client when
+// to come back, so that a stop does not become a hot reconnect loop.
+func TestHandlerStreamCarriesAReconnectDelay(t *testing.T) {
+	t.Parallel()
+
+	env := newHTTPEnv(t, true, nil)
+
+	server := httptest.NewServer(env.handler)
+	t.Cleanup(server.Close)
+
+	s := openStream(t, server, "alice", "")
+	require.Equal(t, http.StatusOK, s.resp.StatusCode)
+
+	line := s.expect(t, "the reconnect delay", func(line string) bool { return strings.HasPrefix(line, "retry: ") })
+
+	milliseconds, err := strconv.Atoi(strings.TrimPrefix(line, "retry: "))
+	require.NoError(t, err, "the retry field carries whole milliseconds")
+
+	assert.GreaterOrEqual(t, milliseconds, 1000)
+	assert.Less(t, milliseconds, 2000)
 }

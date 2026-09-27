@@ -3,6 +3,8 @@ package ntfy_test
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -583,6 +585,191 @@ func TestHubReadiness(t *testing.T) {
 	}
 }
 
+// TestHubStopReleasesSubscriptions proves a run's end does not leave its
+// subscriptions holding slots: after a stop and a fresh run, a recipient can
+// open a full cap again.
+func TestHubStopReleasesSubscriptions(t *testing.T) {
+	t.Parallel()
+
+	hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), ntfy.WithMaxStreamsPerRecipient(2))
+	require.NoError(t, err)
+
+	stop := runHub(t, hub)
+
+	for range 2 {
+		_, err := hub.Subscribe("alice")
+		require.NoError(t, err)
+	}
+
+	require.ErrorIs(t, stop(), context.Canceled)
+
+	runHub(t, hub)
+
+	for i := range 2 {
+		_, err := hub.Subscribe("alice")
+		assert.NoErrorf(t, err, "subscription %d after the stop", i)
+	}
+}
+
+func TestHubStopClosesOpenSubscriptions(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		assert func(t *testing.T, hub *ntfy.Hub, stop func() error)
+	}
+
+	cases := []testCase{
+		{
+			name: "a stop closes every open subscription",
+			assert: func(t *testing.T, hub *ntfy.Hub, stop func() error) {
+				alice, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				bob, err := hub.Subscribe("bob")
+				require.NoError(t, err)
+
+				assert.False(t, closed(alice.Done()), "an open subscription is not done")
+
+				require.ErrorIs(t, stop(), context.Canceled)
+
+				assert.True(t, closed(alice.Done()))
+				assert.True(t, closed(bob.Done()))
+			},
+		},
+		{
+			name: "closing a subscription the stop already closed is safe",
+			assert: func(t *testing.T, hub *ntfy.Hub, stop func() error) {
+				subscription, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				require.ErrorIs(t, stop(), context.Canceled)
+
+				subscription.Close()
+				subscription.Close()
+
+				assert.True(t, closed(subscription.Done()))
+			},
+		},
+		{
+			name: "a subscription closed by a stop is not revived by the next run",
+			assert: func(t *testing.T, _ *ntfy.Hub, _ func() error) {
+				// This case needs its own hub: it must broadcast through the
+				// same broadcaster the hub subscribes to, which the shared
+				// harness above does not expose.
+				broadcaster := ntfy.NewInProcessBroadcaster()
+
+				hub, err := ntfy.NewHub(broadcaster)
+				require.NoError(t, err)
+
+				stop := runHub(t, hub)
+
+				stale, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				require.ErrorIs(t, stop(), context.Canceled)
+
+				runHub(t, hub)
+
+				fresh, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				signal := ntfy.Signal{Recipient: "alice", Change: ntfy.ChangeCreated, At: serviceAt}
+				require.NoError(t, broadcaster.Broadcast(t.Context(), []ntfy.Signal{signal}))
+
+				select {
+				case <-fresh.Ready():
+				case <-time.After(hubWait):
+					t.Fatal("the fresh subscription never became ready")
+				}
+
+				got, ok := fresh.Take()
+				require.True(t, ok)
+				assert.Equal(t, signal, got, "alice's signal reaches the stream she opened afterwards")
+
+				_, ok = stale.Take()
+				assert.False(t, ok, "the closed stream receives nothing")
+
+				assert.True(t, closed(stale.Done()), "the stale subscription stays closed")
+				assert.False(t, closed(fresh.Done()), "the fresh one is open")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster())
+			require.NoError(t, err)
+
+			stop := runHub(t, hub)
+
+			tc.assert(t, hub, stop)
+		})
+	}
+}
+
+// TestHubSubscribeDuringStop proves the window between deciding and inserting is
+// closed: whatever the interleaving, every subscription Subscribe hands out is
+// closed by the stop that follows, and none is left orphaned in a map nobody
+// delivers to.
+func TestHubSubscribeDuringStop(t *testing.T) {
+	t.Parallel()
+
+	var total int
+
+	for range 100 {
+		hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), ntfy.WithMaxStreamsPerRecipient(16))
+		require.NoError(t, err)
+
+		stop := runHub(t, hub)
+
+		var (
+			wg     sync.WaitGroup
+			mu     sync.Mutex
+			opened []*ntfy.Subscription
+		)
+
+		start := make(chan struct{})
+
+		for range 8 {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				<-start
+
+				subscription, err := hub.Subscribe("alice")
+				if err != nil {
+					return
+				}
+
+				mu.Lock()
+				opened = append(opened, subscription)
+				mu.Unlock()
+			}()
+		}
+
+		close(start)
+		require.ErrorIs(t, stop(), context.Canceled)
+		wg.Wait()
+
+		mu.Lock()
+
+		for i, subscription := range opened {
+			assert.Truef(t, closed(subscription.Done()), "subscription %d outlived the run that fed it", i)
+		}
+
+		total += len(opened)
+
+		mu.Unlock()
+	}
+
+	assert.Positive(t, total, "some subscription opened before the stop, or the test proves nothing")
+}
+
 func TestHubRun(t *testing.T) {
 	t.Parallel()
 
@@ -621,6 +808,222 @@ func TestHubRun(t *testing.T) {
 			require.NoError(t, err)
 
 			tc.assert(t, hub)
+		})
+	}
+}
+
+func TestHubReconnectDelay(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		opts   []ntfy.HubOption
+		assert func(t *testing.T, hub *ntfy.Hub, err error)
+	}
+
+	cases := []testCase{
+		{
+			name: "the default delay is one second, jittered below two",
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, time.Second, ntfy.DefaultReconnectDelay)
+
+				for range 100 {
+					delay := hub.ReconnectDelay()
+					assert.GreaterOrEqual(t, delay, time.Second)
+					assert.Less(t, delay, 2*time.Second)
+				}
+			},
+		},
+		{
+			name: "a hundred streams are not all told the same delay",
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+
+				first := hub.ReconnectDelay()
+				spread := false
+
+				for range 100 {
+					if hub.ReconnectDelay() != first {
+						spread = true
+
+						break
+					}
+				}
+
+				assert.True(t, spread, "every stream was told the same delay")
+			},
+		},
+		{
+			name: "an option replaces the base",
+			opts: []ntfy.HubOption{ntfy.WithReconnectDelay(4 * time.Second)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+
+				for range 100 {
+					delay := hub.ReconnectDelay()
+					assert.GreaterOrEqual(t, delay, 4*time.Second)
+					assert.Less(t, delay, 8*time.Second)
+				}
+			},
+		},
+		{
+			name: "a non-positive delay is a configuration error",
+			opts: []ntfy.HubOption{ntfy.WithReconnectDelay(0)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
+				assert.Nil(t, hub)
+			},
+		},
+		{
+			name: "a delay under a millisecond is a configuration error",
+			opts: []ntfy.HubOption{ntfy.WithReconnectDelay(500 * time.Microsecond)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.ErrorIs(t, err, ntfy.ErrConfiguration)
+				assert.Nil(t, hub)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), tc.opts...)
+			tc.assert(t, hub, err)
+		})
+	}
+}
+
+// TestHubCapsStreamsPerInstance proves an instance's total streams are bounded,
+// not only each recipient's: ten thousand recipients holding one stream each
+// fill the instance, and the next stream is refused.
+func TestHubCapsStreamsPerInstance(t *testing.T) {
+	t.Parallel()
+
+	hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster())
+	require.NoError(t, err)
+
+	runHub(t, hub)
+
+	for i := range ntfy.DefaultMaxStreamsPerInstance {
+		_, err := hub.Subscribe("recipient-" + strconv.Itoa(i))
+		require.NoErrorf(t, err, "subscription %d", i)
+	}
+
+	_, err = hub.Subscribe("one-more")
+	require.ErrorIs(t, err, ntfy.ErrTooManyStreams)
+	assert.Contains(t, err.Error(), "on this instance", "the refusal names the instance cap")
+	assert.Equal(t, 10_000, ntfy.DefaultMaxStreamsPerInstance)
+}
+
+func TestHubInstanceCapConfiguration(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name   string
+		opts   []ntfy.HubOption
+		assert func(t *testing.T, hub *ntfy.Hub, err error)
+	}
+
+	refused := func(t *testing.T, hub *ntfy.Hub, err error) {
+		t.Helper()
+
+		require.ErrorIs(t, err, ntfy.ErrConfiguration)
+		assert.Nil(t, hub)
+	}
+
+	fill := func(t *testing.T, hub *ntfy.Hub, streams int) {
+		t.Helper()
+
+		for i := range streams {
+			_, err := hub.Subscribe("recipient-" + strconv.Itoa(i))
+			require.NoErrorf(t, err, "subscription %d", i)
+		}
+	}
+
+	cases := []testCase{
+		{
+			name: "a host raises the cap above the default",
+			opts: []ntfy.HubOption{ntfy.WithMaxStreamsPerInstance(ntfy.DefaultMaxStreamsPerInstance + 2)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+				runHub(t, hub)
+
+				// One more than the default: every one of these is refused unless
+				// the cap really was raised.
+				fill(t, hub, ntfy.DefaultMaxStreamsPerInstance+1)
+			},
+		},
+		{
+			// The per-recipient cap comes down with it: a total of 3 under the
+			// default per-recipient cap of 8 is itself a configuration error.
+			name: "a host lowers the cap",
+			opts: []ntfy.HubOption{ntfy.WithMaxStreamsPerRecipient(1), ntfy.WithMaxStreamsPerInstance(3)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+				runHub(t, hub)
+				fill(t, hub, 3)
+
+				_, err = hub.Subscribe("one-more")
+				assert.ErrorIs(t, err, ntfy.ErrTooManyStreams)
+			},
+		},
+		{
+			name: "a host removes the cap, leaving only the per-recipient one",
+			opts: []ntfy.HubOption{ntfy.WithoutMaxStreamsPerInstance(), ntfy.WithMaxStreamsPerRecipient(1)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+				runHub(t, hub)
+				fill(t, hub, ntfy.DefaultMaxStreamsPerInstance+1)
+
+				_, err = hub.Subscribe("recipient-0")
+				assert.ErrorIs(t, err, ntfy.ErrTooManyStreams, "the per-recipient cap still applies")
+			},
+		},
+		{
+			name:   "a cap below the per-recipient cap is refused",
+			opts:   []ntfy.HubOption{ntfy.WithMaxStreamsPerRecipient(8), ntfy.WithMaxStreamsPerInstance(4)},
+			assert: refused,
+		},
+		{
+			name:   "a cap both set and removed is refused",
+			opts:   []ntfy.HubOption{ntfy.WithMaxStreamsPerInstance(100), ntfy.WithoutMaxStreamsPerInstance()},
+			assert: refused,
+		},
+		{
+			name:   "a cap below one is refused",
+			opts:   []ntfy.HubOption{ntfy.WithMaxStreamsPerInstance(0)},
+			assert: refused,
+		},
+		{
+			name: "a closed stream frees its slot in the instance cap",
+			opts: []ntfy.HubOption{ntfy.WithMaxStreamsPerInstance(1), ntfy.WithMaxStreamsPerRecipient(1)},
+			assert: func(t *testing.T, hub *ntfy.Hub, err error) {
+				require.NoError(t, err)
+				runHub(t, hub)
+
+				first, err := hub.Subscribe("alice")
+				require.NoError(t, err)
+
+				_, err = hub.Subscribe("bob")
+				require.ErrorIs(t, err, ntfy.ErrTooManyStreams)
+
+				first.Close()
+				assert.True(t, closed(first.Done()), "closing a subscription closes its done channel")
+
+				_, err = hub.Subscribe("bob")
+				assert.NoError(t, err, "the closed stream's slot is free again")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			hub, err := ntfy.NewHub(ntfy.NewInProcessBroadcaster(), tc.opts...)
+			tc.assert(t, hub, err)
 		})
 	}
 }
