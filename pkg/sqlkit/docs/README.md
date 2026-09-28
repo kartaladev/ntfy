@@ -115,9 +115,13 @@ Every value a store writes reads back the same on every combination:
 - **JSON payloads** are text columns, never `jsonb` or MySQL `JSON`, which
   reorder keys and rewrite numbers. `EncodeRaw` and `DecodeJSON` keep them byte
   for byte.
-- **Identifiers** compare case-sensitively, because every dialect pins an
-  identifier collation (`C`, `utf8mb4_0900_as_cs`, `BINARY`). A store's schema
-  applies it to its identifier columns.
+- **Identifiers** compare byte for byte, because every dialect pins how an
+  identifier column compares. PostgreSQL and SQLite pin a collation (`C`,
+  `BINARY`, `Dialect.IdentifierCollation`). MySQL pins a type, `VARBINARY`
+  (`Dialect.IdentifierType`): every MySQL collation before 8.0.17 folds case,
+  ignores code points such as U+200B, equates NFC with NFD, or ignores trailing
+  spaces, and `BINARY` pads with NUL. A store's schema applies it to its
+  identifier columns.
 
 ## Schemas
 
@@ -130,7 +134,8 @@ A store publishes one schema document per dialect, carrying
 - `DropTables` removes tables in reverse order, cascading on PostgreSQL.
 - `VerifySchema(ctx, querier, dialect, prefix, expectation)` compares the live
   schema against a `SchemaExpectation` and reports every missing table, missing
-  column, wrong identifier collation and missing index in one `*SchemaError`,
+  column, identifier column that would not compare byte for byte, and missing
+  index in one `*SchemaError`,
   which matches `sqlkit.ErrSchemaMismatch` and `sqlkit.ErrConfiguration`.
 
 **Limit, stated:** `ApplySchema` and `DropTables` are for tests and development.
@@ -138,8 +143,9 @@ There is no migration tool: no versioning, no down direction and no locking.
 Production applies the published schema through its own pipeline, and runs
 `VerifySchema` at startup.
 
-**Limit, stated:** verification checks tables, columns, identifier collations
-and indexes by name. It does not check column types.
+**Limit, stated:** verification checks tables, columns, identifier columns and
+indexes by name. It checks an identifier column's type only on a dialect that
+pins one (MySQL), and no other column's type.
 
 ## Testing a store or an executor
 

@@ -1,0 +1,693 @@
+diff --git a/dialect.go b/dialect.go
+index b2cb75e..5eeffea 100644
+--- a/dialect.go
++++ b/dialect.go
+@@ -29,9 +29,15 @@ type Dialect interface {
+ 	// optimisation it may offer.
+ 	SupportsSkipLocked() bool
+ 	// IdentifierCollation is the collation that identifier columns must carry
+-	// for comparison to be case-sensitive and ordering to be byte-wise. It is
+-	// never empty: every dialect pins one.
++	// for comparison to be byte for byte and ordering to be byte-wise, or empty
++	// when the dialect's identifier columns are binary strings, which carry no
++	// collation. Exactly one of it and IdentifierType is empty: every dialect
++	// pins one or the other.
+ 	IdentifierCollation() string
++	// IdentifierType is the column type identifier columns must have, as the
++	// database's introspection names it, or empty when a text column carrying
++	// IdentifierCollation will do.
++	IdentifierType() string
+ 	// TimestampColumnType is the column type for a UTC instant stored at
+ 	// microsecond precision.
+ 	TimestampColumnType() string
+@@ -98,6 +104,8 @@ func (postgres) SupportsSkipLocked() bool { return true }
+ // hyphens would then make keyset pagination skip or repeat rows.
+ func (postgres) IdentifierCollation() string { return "C" }
+ 
++func (postgres) IdentifierType() string { return "" }
++
+ func (postgres) TimestampColumnType() string { return "timestamptz(6)" }
+ 
+ func (postgres) JSONColumnType() string { return "text" }
+@@ -124,10 +132,18 @@ func (mysql) SupportsReturning() bool { return false }
+ 
+ func (mysql) SupportsSkipLocked() bool { return true }
+ 
+-// IdentifierCollation pins case sensitivity. MySQL's default,
+-// utf8mb4_0900_ai_ci, is case-insensitive, so without this "alice" would match
+-// "Alice" on one dialect out of three.
+-func (mysql) IdentifierCollation() string { return "utf8mb4_0900_as_cs" }
++// IdentifierCollation is empty: MySQL identifier columns are binary strings,
++// which carry no collation. See IdentifierType.
++func (mysql) IdentifierCollation() string { return "" }
++
++// IdentifierType pins VARBINARY, which compares and sorts by bytes and pads
++// nothing, on every supported server. No MySQL collation does all of that
++// before 8.0.17: the default, utf8mb4_0900_ai_ci, folds case, so "alice" would
++// match "Alice"; utf8mb4_0900_as_cs ignores code points such as U+200B and
++// equates NFC with NFD; utf8mb4_bin ignores trailing spaces. utf8mb4_0900_bin
++// would, but only from 8.0.17. BINARY is not enough either: it pads with NUL,
++// so a stored identifier stops matching the one it was stored as.
++func (mysql) IdentifierType() string { return "varbinary" }
+ 
+ // TimestampColumnType is DATETIME rather than TIMESTAMP: TIMESTAMP converts
+ // through the session time zone and runs out of range in 2038.
+@@ -165,6 +181,8 @@ func (sqlite) SupportsSkipLocked() bool { return false }
+ 
+ func (sqlite) IdentifierCollation() string { return "BINARY" }
+ 
++func (sqlite) IdentifierType() string { return "" }
++
+ // TimestampColumnType is TEXT because SQLite has no native date type. One fixed
+ // encoding, [TimestampLayout], is written into it, so ordering and comparison
+ // work lexically.
+diff --git a/dialect_test.go b/dialect_test.go
+index cc84070..32df16f 100644
+--- a/dialect_test.go
++++ b/dialect_test.go
+@@ -19,6 +19,7 @@ func TestDialectFragments(t *testing.T) {
+ 		returning      bool
+ 		skipLocked     bool
+ 		collation      string
++		identifierType string
+ 		timestamp      string
+ 		jsonColumn     string
+ 		booleanTrue    string
+@@ -42,6 +43,7 @@ func TestDialectFragments(t *testing.T) {
+ 				returning:      true,
+ 				skipLocked:     true,
+ 				collation:      "C",
++				identifierType: "",
+ 				timestamp:      "timestamptz(6)",
+ 				jsonColumn:     "text",
+ 				booleanTrue:    "TRUE",
+@@ -57,7 +59,8 @@ func TestDialectFragments(t *testing.T) {
+ 				quotedWithMark: "`we``ird`",
+ 				returning:      false,
+ 				skipLocked:     true,
+-				collation:      "utf8mb4_0900_as_cs",
++				collation:      "",
++				identifierType: "varbinary",
+ 				timestamp:      "DATETIME(6)",
+ 				jsonColumn:     "LONGTEXT",
+ 				booleanTrue:    "1",
+@@ -74,6 +77,7 @@ func TestDialectFragments(t *testing.T) {
+ 				returning:      true,
+ 				skipLocked:     false,
+ 				collation:      "BINARY",
++				identifierType: "",
+ 				timestamp:      "TEXT",
+ 				jsonColumn:     "TEXT",
+ 				booleanTrue:    "1",
+@@ -99,6 +103,7 @@ func TestDialectFragments(t *testing.T) {
+ 			assert.Equal(t, tc.expect.returning, tc.dialect.SupportsReturning())
+ 			assert.Equal(t, tc.expect.skipLocked, tc.dialect.SupportsSkipLocked())
+ 			assert.Equal(t, tc.expect.collation, tc.dialect.IdentifierCollation())
++			assert.Equal(t, tc.expect.identifierType, tc.dialect.IdentifierType())
+ 			assert.Equal(t, tc.expect.timestamp, tc.dialect.TimestampColumnType())
+ 			assert.Equal(t, tc.expect.jsonColumn, tc.dialect.JSONColumnType())
+ 			assert.Equal(t, tc.expect.booleanTrue, tc.dialect.BooleanTrue())
+@@ -118,8 +123,9 @@ func TestDialectsAreStableAndDistinct(t *testing.T) {
+ 	assert.Equal(t, []string{"postgres", "mysql", "sqlite"}, names)
+ 
+ 	for _, dialect := range sqlkit.Dialects() {
+-		assert.NotEmptyf(t, dialect.IdentifierCollation(),
+-			"%s must pin a collation, or identifier comparison depends on the dialect", dialect.Name())
++		assert.Truef(t, (dialect.IdentifierCollation() == "") != (dialect.IdentifierType() == ""),
++			"%s must pin exactly one of a collation and a type, or identifier comparison depends on the dialect",
++			dialect.Name())
+ 	}
+ }
+ 
+diff --git a/docs/README.md b/docs/README.md
+index 960c3b6..77029f8 100644
+--- a/docs/README.md
++++ b/docs/README.md
+@@ -115,9 +115,13 @@ Every value a store writes reads back the same on every combination:
+ - **JSON payloads** are text columns, never `jsonb` or MySQL `JSON`, which
+   reorder keys and rewrite numbers. `EncodeRaw` and `DecodeJSON` keep them byte
+   for byte.
+-- **Identifiers** compare case-sensitively, because every dialect pins an
+-  identifier collation (`C`, `utf8mb4_0900_as_cs`, `BINARY`). A store's schema
+-  applies it to its identifier columns.
++- **Identifiers** compare byte for byte, because every dialect pins how an
++  identifier column compares. PostgreSQL and SQLite pin a collation (`C`,
++  `BINARY`, `Dialect.IdentifierCollation`). MySQL pins a type, `VARBINARY`
++  (`Dialect.IdentifierType`): every MySQL collation before 8.0.17 folds case,
++  ignores code points such as U+200B, equates NFC with NFD, or ignores trailing
++  spaces, and `BINARY` pads with NUL. A store's schema applies it to its
++  identifier columns.
+ 
+ ## Schemas
+ 
+@@ -130,7 +134,8 @@ A store publishes one schema document per dialect, carrying
+ - `DropTables` removes tables in reverse order, cascading on PostgreSQL.
+ - `VerifySchema(ctx, querier, dialect, prefix, expectation)` compares the live
+   schema against a `SchemaExpectation` and reports every missing table, missing
+-  column, wrong identifier collation and missing index in one `*SchemaError`,
++  column, identifier column that would not compare byte for byte, and missing
++  index in one `*SchemaError`,
+   which matches `sqlkit.ErrSchemaMismatch` and `sqlkit.ErrConfiguration`.
+ 
+ **Limit, stated:** `ApplySchema` and `DropTables` are for tests and development.
+@@ -138,8 +143,9 @@ There is no migration tool: no versioning, no down direction and no locking.
+ Production applies the published schema through its own pipeline, and runs
+ `VerifySchema` at startup.
+ 
+-**Limit, stated:** verification checks tables, columns, identifier collations
+-and indexes by name. It does not check column types.
++**Limit, stated:** verification checks tables, columns, identifier columns and
++indexes by name. It checks an identifier column's type only on a dialect that
++pins one (MySQL), and no other column's type.
+ 
+ ## Testing a store or an executor
+ 
+diff --git a/sqlkittest/fixture.go b/sqlkittest/fixture.go
+index 97059c4..616624b 100644
+--- a/sqlkittest/fixture.go
++++ b/sqlkittest/fixture.go
+@@ -3,7 +3,7 @@ package sqlkittest
+ import "github.com/kartaladev/sqlkit"
+ 
+ // The fixture is a schema with no domain: two tables, identifier columns that
+-// must compare case-sensitively, one secondary index, one JSON payload column,
++// must compare byte for byte, one secondary index, one JSON payload column,
+ // one timestamp column and a foreign key. It is the least a store needs, and
+ // enough to prove an executor, rendering, the development runner and
+ // verification behave the same on every combination.
+@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS "{{PREFIX}}parts" (
+ `,
+ 	"mysql": "-- sqlkit conformance fixture, MySQL 8.0 or later.\n" +
+ 		"CREATE TABLE IF NOT EXISTS `{{PREFIX}}widgets` (\n" +
+-		"    `id`      VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
+-		"    `owner`   VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
++		"    `id`      VARBINARY(64)  NOT NULL,\n" +
++		"    `owner`   VARBINARY(255) NOT NULL,\n" +
+ 		"    `payload` LONGTEXT NULL,\n" +
+ 		"    `at`      DATETIME(6) NULL,\n" +
+ 		"    `score`   BIGINT NOT NULL DEFAULT 0,\n" +
+@@ -62,8 +62,8 @@ CREATE TABLE IF NOT EXISTS "{{PREFIX}}parts" (
+ 		"    KEY `{{PREFIX}}widgets_owner_idx` (`owner`)\n" +
+ 		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n" +
+ 		"CREATE TABLE IF NOT EXISTS `{{PREFIX}}parts` (\n" +
+-		"    `id`        VARCHAR(64) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
+-		"    `widget_id` VARCHAR(64) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
++		"    `id`        VARBINARY(64) NOT NULL,\n" +
++		"    `widget_id` VARBINARY(64) NOT NULL,\n" +
+ 		"    PRIMARY KEY (`id`),\n" +
+ 		"    CONSTRAINT `{{PREFIX}}parts_widget_fk` FOREIGN KEY (`widget_id`) REFERENCES `{{PREFIX}}widgets` (`id`)\n" +
+ 		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n",
+@@ -94,8 +94,8 @@ var brokenSchemas = map[string]string{
+ );
+ `,
+ 	"mysql": "CREATE TABLE IF NOT EXISTS `{{PREFIX}}widgets` (\n" +
+-		"    `id`      VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL PRIMARY KEY,\n" +
+-		"    `owner`   VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,\n" +
++		"    `id`      VARBINARY(64)  NOT NULL PRIMARY KEY,\n" +
++		"    `owner`   VARBINARY(255) NOT NULL,\n" +
+ 		"    `payload` LONGTEXT NULL,\n" +
+ 		"    `at`      DATETIME(6) NULL\n" +
+ 		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n",
+diff --git a/sqlkittest/suite.go b/sqlkittest/suite.go
+index 9866a08..3db982d 100644
+--- a/sqlkittest/suite.go
++++ b/sqlkittest/suite.go
+@@ -581,19 +581,33 @@ func runValueCases(t *testing.T, factory Factory) {
+ 		}, f.widgetTimes(t), "ordering by the column must be chronological, even stored as text")
+ 	})
+ 
+-	t.Run("identifiers compare case-sensitively", func(t *testing.T) {
++	t.Run("identifiers compare byte for byte", func(t *testing.T) {
+ 		f := newFixture(t, factory, fixtureSchemas)
+ 
+-		f.insertWidget(t.Context(), t, "w-1", "alice")
+-		f.insertWidget(t.Context(), t, "w-2", "Alice")
++		// Each owner differs from the others only in bytes some collation
++		// ignores: case, a trailing space, an ignorable code point, and the
++		// decomposed spelling of a precomposed character.
++		owners := map[string]string{
++			"w-1": "alice",
++			"w-2": "Alice",
++			"w-3": "alice ",
++			"w-4": "alice\u200b",
++			"w-5": "jos\u00e9",
++			"w-6": "jose\u0301",
++		}
+ 
+-		w := sqlkit.NewWriter(f.Executor.Dialect())
+-		w.Write("SELECT ", f.column("id"), " FROM ", f.table("widgets"), " WHERE ", f.column("owner"), " = ")
+-		w.Write(w.Bind("alice"))
++		for id, owner := range owners {
++			f.insertWidget(t.Context(), t, id, owner)
++		}
+ 
+-		ids := f.queryStrings(t, w.Done())
++		for id, owner := range owners {
++			w := sqlkit.NewWriter(f.Executor.Dialect())
++			w.Write("SELECT ", f.column("id"), " FROM ", f.table("widgets"), " WHERE ", f.column("owner"), " = ")
++			w.Write(w.Bind(owner))
+ 
+-		assert.Equal(t, []string{"w-1"}, ids, "alice must not match Alice on any dialect")
++			assert.Equalf(t, []string{id}, f.queryStrings(t, w.Done()),
++				"%+q must match only itself on every dialect", owner)
++		}
+ 	})
+ }
+ 
+diff --git a/sqlkittest/testutils.go b/sqlkittest/testutils.go
+index a594d3e..2927162 100644
+--- a/sqlkittest/testutils.go
++++ b/sqlkittest/testutils.go
+@@ -20,8 +20,8 @@ import (
+ const (
+ 	// PostgresImage is the PostgreSQL image the suites run against.
+ 	PostgresImage = "postgres:17.6-alpine"
+-	// MySQLImage is the MySQL image the suites run against. It is 8.0 or later
+-	// because an identifier column needs the utf8mb4_0900_as_cs collation.
++	// MySQLImage is the MySQL image the suites run against. It is 8.0 or later,
++	// the oldest MySQL sqlkit supports.
+ 	MySQLImage = "mysql:8.4.6"
+ )
+ 
+diff --git a/verify.go b/verify.go
+index 638d617..905414d 100644
+--- a/verify.go
++++ b/verify.go
+@@ -13,9 +13,10 @@ type TableExpectation struct {
+ 	// Columns is every column the statements read or write, in the order
+ 	// issues about them are reported.
+ 	Columns []string
+-	// IdentifierColumns are the columns whose comparison must be
+-	// case-sensitive and whose ordering must be byte-wise, and which therefore
+-	// must carry the dialect's [Dialect.IdentifierCollation].
++	// IdentifierColumns are the columns whose comparison must be byte for byte
++	// and whose ordering must be byte-wise, and which therefore must have the
++	// dialect's [Dialect.IdentifierType] where it pins one, and otherwise carry
++	// its [Dialect.IdentifierCollation].
+ 	IdentifierColumns []string
+ 	// Indexes are the secondary indexes the statements rely on, by unprefixed
+ 	// name. Primary keys are not listed: every dialect names them differently.
+@@ -54,8 +55,9 @@ func (i SchemaIssue) String() string {
+ type SchemaError struct {
+ 	// Dialect is the dialect verified against.
+ 	Dialect string
+-	// Issues is every discrepancy found: missing tables and columns and wrong
+-	// collations first, in table order, then missing indexes.
++	// Issues is every discrepancy found: missing tables and columns and
++	// identifier columns that would not compare byte for byte first, in table
++	// order, then missing indexes.
+ 	Issues []SchemaIssue
+ }
+ 
+@@ -81,18 +83,18 @@ func (e *SchemaError) Unwrap() error { return ErrSchemaMismatch }
+ 
+ // SchemaQuery renders the column introspection a dialect offers for the given
+ // tables, prefixed names as stored: one row per column, as (table, column,
+-// collation).
++// collation, type).
+ func SchemaQuery(dialect Dialect, tables []string) Statement {
+ 	w := NewWriter(dialect)
+ 	names := bindable(tables)
+ 
+ 	switch dialect.Name() {
+ 	case PostgreSQL.Name():
+-		w.Write("SELECT table_name, column_name, COALESCE(collation_name, '') ")
++		w.Write("SELECT table_name, column_name, COALESCE(collation_name, ''), data_type ")
+ 		w.Write("FROM information_schema.columns ")
+ 		w.Write("WHERE table_schema = current_schema() AND table_name IN (", w.BindAll(names...), ")")
+ 	case MySQL.Name():
+-		w.Write("SELECT TABLE_NAME, COLUMN_NAME, COALESCE(COLLATION_NAME, '') ")
++		w.Write("SELECT TABLE_NAME, COLUMN_NAME, COALESCE(COLLATION_NAME, ''), DATA_TYPE ")
+ 		w.Write("FROM information_schema.COLUMNS ")
+ 		w.Write("WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (", w.BindAll(names...), ")")
+ 	default:
+@@ -100,7 +102,8 @@ func SchemaQuery(dialect Dialect, tables []string) Statement {
+ 		// to: BINARY is the default and the only way to lose it is to override
+ 		// it per column. Verification therefore checks that the tables and
+ 		// columns are there, and treats an unreported collation as the default.
+-		w.Write("SELECT m.name, p.name, '' ")
++		// The declared type is read for symmetry; SQLite pins no type.
++		w.Write("SELECT m.name, p.name, '', p.type ")
+ 		w.Write("FROM sqlite_master m JOIN pragma_table_info(m.name) p ")
+ 		w.Write("WHERE m.type = 'table' AND m.name IN (", w.BindAll(names...), ")")
+ 	}
+@@ -134,13 +137,14 @@ func IndexQuery(dialect Dialect, tables []string) Statement {
+ // prefix applied to every table and index name, and reports every discrepancy
+ // in one [*SchemaError] rather than failing on first use.
+ //
+-// It checks that every table and column exists, that identifier columns carry
+-// the collation that makes comparison case-sensitive, and that every expected
+-// index exists, by name. A missing table is reported once, without its columns
+-// or indexes. It does not check column types: a dialect has several spellings
+-// for the same storage, and a type mismatch that matters shows up as a failing
+-// statement immediately, while a wrong collation shows up months later as the
+-// wrong match.
++// It checks that every table and column exists, that identifier columns compare
++// byte for byte, and that every expected index exists, by name. An identifier
++// column is judged by the dialect: by its type where [Dialect.IdentifierType]
++// pins one, and otherwise by its collation. A missing table is reported once,
++// without its columns or indexes. It checks no other column's type: a dialect
++// has several spellings for the same storage, and a type mismatch that matters
++// shows up as a failing statement immediately, while an identifier column that
++// does not compare byte for byte shows up months later as the wrong match.
+ //
+ // A failure to read the schema at all is returned as itself, not as issues.
+ func VerifySchema(
+@@ -181,49 +185,69 @@ func VerifySchema(
+ }
+ 
+ // columnIssues reports a missing table, its missing columns and its identifier
+-// columns with the wrong collation.
++// columns that would not compare byte for byte: of the wrong type where the
++// dialect pins one, or of the wrong collation where it pins that.
+ func columnIssues(
+-	dialect Dialect, table string, expected TableExpectation, observed map[string]map[string]string,
++	dialect Dialect, table string, expected TableExpectation, observed map[string]map[string]observedColumn,
+ ) []SchemaIssue {
+ 	found, present := observed[table]
+ 	if !present {
+ 		return []SchemaIssue{{Table: table, Detail: "table is missing"}}
+ 	}
+ 
+-	want := dialect.IdentifierCollation()
+-
+ 	var issues []SchemaIssue
+ 
+ 	for _, column := range expected.Columns {
+-		collation, ok := found[column]
++		live, ok := found[column]
+ 		if !ok {
+ 			issues = append(issues, SchemaIssue{Table: table, Column: column, Detail: "column is missing"})
+ 
+ 			continue
+ 		}
+ 
+-		// An unreported collation is the dialect's default, which is correct
+-		// everywhere verification can ask.
+-		if !slices.Contains(expected.IdentifierColumns, column) || collation == "" || collation == want {
++		if !slices.Contains(expected.IdentifierColumns, column) {
+ 			continue
+ 		}
+ 
+-		issues = append(issues, SchemaIssue{
+-			Table: table, Column: column,
+-			Detail: fmt.Sprintf(
+-				"collation is %q but must be %q, or identifiers will compare case-insensitively",
+-				collation, want,
+-			),
+-		})
++		if detail := identifierDetail(dialect, live); detail != "" {
++			issues = append(issues, SchemaIssue{Table: table, Column: column, Detail: detail})
++		}
+ 	}
+ 
+ 	return issues
+ }
+ 
++// identifierDetail says what is wrong with an identifier column, or nothing
++// when it compares byte for byte.
++func identifierDetail(dialect Dialect, live observedColumn) string {
++	const consequence = ", or identifiers will not compare byte for byte"
++
++	if want := dialect.IdentifierType(); want != "" {
++		if strings.EqualFold(live.typ, want) {
++			return ""
++		}
++
++		declared := fmt.Sprintf("%q", live.typ)
++		if live.collation != "" {
++			declared += fmt.Sprintf(" collated %q", live.collation)
++		}
++
++		return fmt.Sprintf("type is %s but must be %q", declared, want) + consequence
++	}
++
++	// An unreported collation is the dialect's default, which is correct
++	// everywhere verification can ask.
++	if want := dialect.IdentifierCollation(); live.collation != "" && live.collation != want {
++		return fmt.Sprintf("collation is %q but must be %q", live.collation, want) + consequence
++	}
++
++	return ""
++}
++
+ // indexIssues reports the expected indexes a present table lacks.
+ func indexIssues(
+ 	prefix, table string, expected TableExpectation,
+-	columns map[string]map[string]string, indexes map[string]map[string]bool,
++	columns map[string]map[string]observedColumn, indexes map[string]map[string]bool,
+ ) []SchemaIssue {
+ 	if _, present := columns[table]; !present {
+ 		return nil
+@@ -240,19 +264,24 @@ func indexIssues(
+ 	return issues
+ }
+ 
+-// readColumns runs the column introspection into a table to column to
+-// collation map.
+-func readColumns(ctx context.Context, querier Querier, statement Statement) (map[string]map[string]string, error) {
+-	observed := make(map[string]map[string]string)
++// observedColumn is what the introspection reports of one live column.
++type observedColumn struct {
++	collation string
++	typ       string
++}
++
++// readColumns runs the column introspection into a table to column map.
++func readColumns(ctx context.Context, querier Querier, statement Statement) (map[string]map[string]observedColumn, error) {
++	observed := make(map[string]map[string]observedColumn)
+ 
+-	err := readText(ctx, querier, statement, "schema", 3, func(values []string) {
+-		table, column, collation := values[0], values[1], values[2]
++	err := readText(ctx, querier, statement, "schema", 4, func(values []string) {
++		table, column := values[0], values[1]
+ 
+ 		if observed[table] == nil {
+-			observed[table] = make(map[string]string)
++			observed[table] = make(map[string]observedColumn)
+ 		}
+ 
+-		observed[table][column] = collation
++		observed[table][column] = observedColumn{collation: values[2], typ: values[3]}
+ 	})
+ 
+ 	return observed, err
+diff --git a/verify_test.go b/verify_test.go
+index 9afefbb..9a9b7ff 100644
+--- a/verify_test.go
++++ b/verify_test.go
+@@ -13,11 +13,13 @@ import (
+ )
+ 
+ // introspectionRow is one row a database would return: (table, column,
+-// collation) for the column introspection, (table, index) for the index one.
++// collation, type) for the column introspection, (table, index) for the index
++// one.
+ type introspectionRow struct {
+ 	table     string
+ 	column    string
+ 	collation string
++	typ       string
+ }
+ 
+ // scriptedRows replays canned introspection rows.
+@@ -35,7 +37,7 @@ func (r *scriptedRows) Next() bool {
+ func (r *scriptedRows) Scan(dest ...any) error {
+ 	row := r.rows[r.index-1]
+ 
+-	values := []string{row.table, row.column, row.collation}
++	values := []string{row.table, row.column, row.collation, row.typ}
+ 	for i, target := range dest {
+ 		*target.(*any) = values[i] //nolint:errcheck,forcetypeassert // verification always passes *any
+ 	}
+@@ -87,13 +89,13 @@ var widgetExpectation = sqlkit.SchemaExpectation{
+ }
+ 
+ // completeColumns is the column introspection of a schema that meets the
+-// expectation, with the given collation on every column.
+-func completeColumns(prefix, collation string) []introspectionRow {
++// expectation, with the given collation and type on every column.
++func completeColumns(prefix, collation, typ string) []introspectionRow {
+ 	var rows []introspectionRow
+ 
+ 	for table, expected := range widgetExpectation {
+ 		for _, column := range expected.Columns {
+-			rows = append(rows, introspectionRow{table: prefix + table, column: column, collation: collation})
++			rows = append(rows, introspectionRow{table: prefix + table, column: column, collation: collation, typ: typ})
+ 		}
+ 	}
+ 
+@@ -118,12 +120,21 @@ func dropRows(table string, names ...string) func([]introspectionRow) []introspe
+ 
+ // setCollation changes one column's reported collation.
+ func setCollation(table, column, collation string) func([]introspectionRow) []introspectionRow {
++	return setColumn(table, column, collation, "")
++}
++
++// setColumn changes one column's reported collation and, when typ is not
++// empty, its type.
++func setColumn(table, column, collation, typ string) func([]introspectionRow) []introspectionRow {
+ 	return func(rows []introspectionRow) []introspectionRow {
+ 		rows = slices.Clone(rows)
+ 
+ 		for i := range rows {
+ 			if rows[i].table == table && rows[i].column == column {
+ 				rows[i].collation = collation
++				if typ != "" {
++					rows[i].typ = typ
++				}
+ 			}
+ 		}
+ 
+@@ -139,22 +150,23 @@ func TestVerifySchema(t *testing.T) {
+ 		dialect sqlkit.Dialect
+ 		prefix  string
+ 		// columns and indexes change what a correct schema reports; nil leaves
+-		// that half complete. collation is what every column reports.
++		// that half complete. collation and typ are what every column reports.
+ 		columns   func([]introspectionRow) []introspectionRow
+ 		indexes   func([]introspectionRow) []introspectionRow
+ 		collation string
++		typ       string
+ 		fail      bool
+ 		assert    func(t *testing.T, err error)
+ 	}
+ 
+ 	cases := []testCase{
+ 		{
+-			name: "a schema that meets the expectation passes", dialect: sqlkit.MySQL, collation: "utf8mb4_0900_as_cs",
++			name: "a schema that meets the expectation passes", dialect: sqlkit.MySQL, typ: "varbinary",
+ 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
+ 		},
+ 		{
+ 			name: "a missing table is reported once, without its columns or indexes", dialect: sqlkit.MySQL,
+-			collation: "utf8mb4_0900_as_cs", columns: dropRows("widgets"),
++			typ: "varbinary", columns: dropRows("widgets"),
+ 			assert: func(t *testing.T, err error) {
+ 				var schemaErr *sqlkit.SchemaError
+ 
+@@ -164,7 +176,7 @@ func TestVerifySchema(t *testing.T) {
+ 			},
+ 		},
+ 		{
+-			name: "a missing column is named", dialect: sqlkit.PostgreSQL, collation: "C",
++			name: "a missing column is named", dialect: sqlkit.PostgreSQL, collation: "C", typ: "text",
+ 			columns: dropRows("parts", "widget_id"),
+ 			assert: func(t *testing.T, err error) {
+ 				require.Error(t, err)
+@@ -172,22 +184,42 @@ func TestVerifySchema(t *testing.T) {
+ 			},
+ 		},
+ 		{
+-			name: "a case-insensitive collation on an identifier column is named", dialect: sqlkit.MySQL,
+-			collation: "utf8mb4_0900_as_cs", columns: setCollation("widgets", "owner", "utf8mb4_0900_ai_ci"),
++			name: "a case-insensitive collation on an identifier column is named", dialect: sqlkit.PostgreSQL,
++			collation: "C", typ: "text", columns: setCollation("widgets", "owner", "en_US"),
+ 			assert: func(t *testing.T, err error) {
+ 				require.Error(t, err)
+ 				assert.Contains(t, err.Error(), "widgets.owner")
+-				assert.Contains(t, err.Error(), `collation is "utf8mb4_0900_ai_ci" but must be "utf8mb4_0900_as_cs"`)
+-				assert.Contains(t, err.Error(), "case-insensitively", "the message has to say why it matters")
++				assert.Contains(t, err.Error(), `collation is "en_US" but must be "C"`)
++				assert.Contains(t, err.Error(), "byte for byte", "the message has to say why it matters")
++			},
++		},
++		{
++			name:    "a MySQL identifier column that is text under a collation is named, whatever the collation",
++			dialect: sqlkit.MySQL, typ: "varbinary",
++			columns: setColumn("widgets", "owner", "utf8mb4_0900_as_cs", "varchar"),
++			assert: func(t *testing.T, err error) {
++				require.Error(t, err)
++				assert.Contains(t, err.Error(),
++					`widgets.owner: type is "varchar" collated "utf8mb4_0900_as_cs" but must be "varbinary"`)
++				assert.Contains(t, err.Error(), "byte for byte", "the message has to say why it matters")
++				assert.NotContains(t, err.Error(), "case-insensitively", "utf8mb4_0900_as_cs is case-sensitive")
++			},
++		},
++		{
++			name:    "a MySQL identifier column of fixed-width BINARY, which pads with NUL, is named",
++			dialect: sqlkit.MySQL, typ: "varbinary", columns: setColumn("widgets", "owner", "", "binary"),
++			assert: func(t *testing.T, err error) {
++				require.Error(t, err)
++				assert.Contains(t, err.Error(), `widgets.owner: type is "binary" but must be "varbinary"`)
+ 			},
+ 		},
+ 		{
+ 			name: "a collation on a column that is not an identifier is not checked", dialect: sqlkit.MySQL,
+-			collation: "utf8mb4_0900_as_cs", columns: setCollation("widgets", "payload", "utf8mb4_0900_ai_ci"),
++			typ: "varbinary", columns: setColumn("widgets", "payload", "utf8mb4_0900_ai_ci", "longtext"),
+ 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
+ 		},
+ 		{
+-			name: "a missing index is named", dialect: sqlkit.PostgreSQL, collation: "C",
++			name: "a missing index is named", dialect: sqlkit.PostgreSQL, collation: "C", typ: "text",
+ 			indexes: dropRows("widgets"),
+ 			assert: func(t *testing.T, err error) {
+ 				require.Error(t, err)
+@@ -195,13 +227,13 @@ func TestVerifySchema(t *testing.T) {
+ 			},
+ 		},
+ 		{
+-			name: "sqlite reports no collation, which is its default", dialect: sqlkit.SQLite, collation: "",
++			name: "sqlite reports no collation, which is its default", dialect: sqlkit.SQLite, typ: "TEXT",
+ 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
+ 		},
+ 		{
+-			name: "every discrepancy is reported in one error", dialect: sqlkit.MySQL, collation: "utf8mb4_0900_as_cs",
++			name: "every discrepancy is reported in one error", dialect: sqlkit.MySQL, typ: "varbinary",
+ 			columns: func(rows []introspectionRow) []introspectionRow {
+-				return setCollation("parts", "id", "latin1_swedish_ci")(dropRows("widgets", "payload")(rows))
++				return setColumn("parts", "id", "latin1_swedish_ci", "varchar")(dropRows("widgets", "payload")(rows))
+ 			},
+ 			indexes: dropRows("widgets"),
+ 			assert: func(t *testing.T, err error) {
+@@ -216,6 +248,7 @@ func TestVerifySchema(t *testing.T) {
+ 		},
+ 		{
+ 			name: "the prefix reaches tables and indexes", dialect: sqlkit.PostgreSQL, prefix: "app_", collation: "C",
++			typ:    "text",
+ 			assert: func(t *testing.T, err error) { require.NoError(t, err) },
+ 		},
+ 		{
+@@ -234,7 +267,7 @@ func TestVerifySchema(t *testing.T) {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			t.Parallel()
+ 
+-			columns := completeColumns(tc.prefix, tc.collation)
++			columns := completeColumns(tc.prefix, tc.collation, tc.typ)
+ 			if tc.columns != nil {
+ 				columns = tc.columns(columns)
+ 			}
+@@ -261,7 +294,7 @@ func TestVerifySchemaRefusesAnUnprefixedDeployment(t *testing.T) {
+ 
+ 	querier := &scriptedQuerier{
+ 		indexSQL: sqlkit.IndexQuery(sqlkit.PostgreSQL, []string{"app_parts", "app_widgets"}).SQL,
+-		columns:  completeColumns("", "C"),
++		columns:  completeColumns("", "C", "text"),
+ 		indexes:  completeIndexes(""),
+ 	}
+ 
+@@ -288,6 +321,7 @@ func TestIntrospectionQueriesPerDialect(t *testing.T) {
+ 			assert: func(t *testing.T, columns, indexes sqlkit.Statement) {
+ 				assert.Contains(t, columns.SQL, "information_schema.columns")
+ 				assert.Contains(t, columns.SQL, "current_schema()")
++				assert.Contains(t, columns.SQL, "data_type")
+ 				assert.Contains(t, indexes.SQL, "pg_indexes")
+ 			},
+ 		},
+@@ -295,6 +329,7 @@ func TestIntrospectionQueriesPerDialect(t *testing.T) {
+ 			name: "mysql", dialect: sqlkit.MySQL,
+ 			assert: func(t *testing.T, columns, indexes sqlkit.Statement) {
+ 				assert.Contains(t, columns.SQL, "information_schema.COLUMNS")
++				assert.Contains(t, columns.SQL, "DATA_TYPE")
+ 				assert.Contains(t, indexes.SQL, "information_schema.STATISTICS")
+ 				assert.Contains(t, indexes.SQL, "DATABASE()")
+ 			},
+@@ -303,6 +338,7 @@ func TestIntrospectionQueriesPerDialect(t *testing.T) {
+ 			name: "sqlite", dialect: sqlkit.SQLite,
+ 			assert: func(t *testing.T, columns, indexes sqlkit.Statement) {
+ 				assert.Contains(t, columns.SQL, "pragma_table_info")
++				assert.Contains(t, columns.SQL, "p.type")
+ 				assert.Contains(t, indexes.SQL, "'index'")
+ 			},
+ 		},

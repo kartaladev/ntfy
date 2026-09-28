@@ -103,15 +103,23 @@ nor fails startup over it.
 
 | | PostgreSQL | MySQL | SQLite |
 | --- | --- | --- | --- |
-| Identifier columns | `text COLLATE "C"` | `VARCHAR COLLATE utf8mb4_0900_as_cs` | `TEXT COLLATE BINARY` |
+| Identifier columns | `text COLLATE "C"` | `VARBINARY` | `TEXT COLLATE BINARY` |
 | Timestamps | `timestamptz(6)` | `DATETIME(6)` | `TEXT`, RFC 3339, six fractional digits |
 | `links`, `data` | `text` | `LONGTEXT` | `TEXT` |
 | Indexes declared | `CREATE INDEX IF NOT EXISTS` | inside `CREATE TABLE` | `CREATE INDEX IF NOT EXISTS` |
 
-- **Identifiers compare case-sensitively and sort in byte order** on every
-  dialect. MySQL's default collation is case-insensitive, which would deliver
-  `alice`'s notifications to `Alice`, and a locale-aware collation can sort
-  identifiers so that keyset paging skips or repeats rows.
+- **Identifiers compare byte for byte and sort in byte order** on every
+  dialect: case, trailing spaces, code points such as U+200B, and the Unicode
+  normalisation form all count. On MySQL they are binary strings rather than
+  text under a collation. The server default collation folds case;
+  `utf8mb4_0900_as_cs` ignores U+200B and equates a precomposed `é` (U+00E9)
+  with `e` followed by a combining acute accent (U+0301); and `utf8mb4_bin`
+  ignores trailing spaces. Any of them would deliver one recipient's
+  notifications to another. `utf8mb4_0900_bin` would not, but it needs MySQL
+  8.0.17, and binary strings need nothing newer than the store already does.
+  Their lengths are bytes, as the library's limits are. A locale-aware
+  collation can also sort identifiers so that keyset paging skips or repeats
+  rows.
 - **Payloads are text, never a native JSON type.** PostgreSQL's `jsonb` and
   MySQL's `JSON` reorder keys and rewrite number literals, and the store returns a
   payload exactly as it was published.
@@ -131,8 +139,9 @@ prefix.
 ## Verifying the schema at startup
 
 `Store.VerifySchema(ctx)` compares the live database with what the store's
-statements require: both tables, every column, the collation of every identifier
-column, and every index above. It reports every discrepancy at once, as a
+statements require: both tables, every column, that every identifier column
+compares byte for byte (its collation on PostgreSQL and SQLite, its `VARBINARY`
+type on MySQL), and every index above. It reports every discrepancy at once, as a
 `*sqlkit.SchemaError` matching `sqlkit.ErrSchemaMismatch`, rather than failing on
 first use. Call it when the host starts.
 
@@ -148,7 +157,7 @@ if err != nil {
 }
 
 if err := store.VerifySchema(ctx); err != nil {
-    return err // lists every missing table, column, collation and index
+    return err // lists every missing table, column and index, and every wrong identifier column
 }
 ```
 
@@ -184,6 +193,117 @@ before deploying the upgrade, with the table prefix in place of `app_`:
   ```
 
 A host that does not email does nothing.
+
+## Comparing identifiers byte for byte on an existing MySQL host
+
+A MySQL schema whose identifier columns are `VARCHAR ... COLLATE
+utf8mb4_0900_as_cs` fails `Store.VerifySchema` at startup, naming each
+identifier column. It also fails `Store.VerifyEmailSchema` when the host
+emails. Until it is upgraded, it treats `alice` and `alice` followed by U+200B,
+or `josé` in its two Unicode spellings, as one recipient.
+
+The upgrade makes those columns `VARBINARY`. It needs no newer MySQL. Run it
+once, before deploying, through the migration pipeline, with the table prefix
+in place of `app_`.
+
+MySQL rebuilds each table to change a column's type, and writes to the table
+wait until it finishes. Run it in a maintenance window, or with an online
+schema-change tool.
+
+Each `ALTER TABLE` commits on its own, because MySQL cannot roll a schema change
+back. If one is refused, the tables altered before it stay converted and the
+rest do not: `Store.VerifySchema` or `Store.VerifyEmailSchema` then names what
+is left. Fix the cause and run the statements again. Re-running one that already
+succeeded is harmless: it
+redeclares the columns as they already are.
+
+
+### Checking before upgrading
+
+The binary columns hold at most as many bytes as the library accepts: 64 for
+a notification's identifier, 255 for a recipient, source or subject, 100 for a
+kind. An identifier the library wrote is never longer. These queries list any
+row written around the library that is. Run them first and fix what they find:
+MySQL's default strict mode refuses the `ALTER` for a table holding such a row,
+and with strict mode off it would truncate the identifier instead.
+
+```sql
+SELECT `id` FROM `app_ntfy_notifications`
+    WHERE LENGTH(`id`) > 64 OR LENGTH(`recipient`) > 255 OR LENGTH(`source_id`) > 255
+       OR LENGTH(`subject`) > 255 OR LENGTH(`kind`) > 100 OR LENGTH(`state`) > 16;
+
+SELECT `subject` FROM `app_ntfy_watermarks`
+    WHERE LENGTH(`subject`) > 255 OR LENGTH(`kind`) > 100;
+
+-- Only a host that emails has this table.
+SELECT `notification_id` FROM `app_ntfy_email_deliveries`
+    WHERE LENGTH(`notification_id`) > 64 OR LENGTH(`recipient`) > 255 OR LENGTH(`status`) > 16
+       OR LENGTH(`batch_id`) > 64 OR LENGTH(`owner`) > 255;
+```
+
+### Upgrading
+
+```sql
+ALTER TABLE `app_ntfy_notifications`
+    MODIFY `id`        VARBINARY(64)  NOT NULL,
+    MODIFY `recipient` VARBINARY(255) NOT NULL,
+    MODIFY `source_id` VARBINARY(255) NOT NULL,
+    MODIFY `subject`   VARBINARY(255) NOT NULL,
+    MODIFY `kind`      VARBINARY(100) NOT NULL,
+    MODIFY `state`     VARBINARY(16)  NOT NULL;
+
+ALTER TABLE `app_ntfy_watermarks`
+    MODIFY `subject` VARBINARY(255) NOT NULL,
+    MODIFY `kind`    VARBINARY(100) NOT NULL;
+
+-- Only a host that emails has this table.
+ALTER TABLE `app_ntfy_email_deliveries`
+    MODIFY `notification_id` VARBINARY(64)  NOT NULL,
+    MODIFY `recipient`       VARBINARY(255) NOT NULL,
+    MODIFY `status`          VARBINARY(16)  NOT NULL,
+    MODIFY `batch_id`        VARBINARY(64)  NULL,
+    MODIFY `owner`           VARBINARY(255) NULL;
+```
+
+No row changes: every identifier keeps its bytes, identifiers that were
+distinct stay distinct, and no unique key can collide. What the old collation
+already merged is not undone. A publish that it suppressed as a duplicate of a
+byte-different source stays unpublished.
+
+A listing page read across the upgrade can repeat or skip one notification
+when the host's `IDGenerator` produces identifiers of mixed case, because the
+old collation and byte order sort case differently. The default UUIDv7
+identifiers sort the same under both.
+
+### Rolling the upgrade back
+
+Rolling back reintroduces the defect. It can also fail. Two rows written after
+the upgrade may differ only in bytes the old collation ignores, such as
+`event-1` and `event-1` followed by U+200B for one recipient, and then collide
+on a unique key. An identifier that is not valid UTF-8 cannot be converted
+back. Either way MySQL refuses the statement and changes nothing.
+
+```sql
+ALTER TABLE `app_ntfy_notifications`
+    MODIFY `id`        VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `recipient` VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `source_id` VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `subject`   VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `kind`      VARCHAR(100) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `state`     VARCHAR(16)  COLLATE utf8mb4_0900_as_cs NOT NULL;
+
+ALTER TABLE `app_ntfy_watermarks`
+    MODIFY `subject` VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `kind`    VARCHAR(100) COLLATE utf8mb4_0900_as_cs NOT NULL;
+
+-- Only a host that emails has this table.
+ALTER TABLE `app_ntfy_email_deliveries`
+    MODIFY `notification_id` VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `recipient`       VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `status`          VARCHAR(16)  COLLATE utf8mb4_0900_as_cs NOT NULL,
+    MODIFY `batch_id`        VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NULL,
+    MODIFY `owner`           VARCHAR(255) COLLATE utf8mb4_0900_as_cs NULL;
+```
 
 ## Rolling back
 

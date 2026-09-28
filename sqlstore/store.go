@@ -182,10 +182,11 @@ var schemaExpectation = sqlkit.SchemaExpectation{
 }
 
 // VerifySchema compares the live database with what the store's statements
-// require: both tables, every column, the collation of every identifier column,
-// and every index. It reports every discrepancy at once as a
-// [*sqlkit.SchemaError], which matches [sqlkit.ErrSchemaMismatch], rather than
-// failing on first use. Call it at startup.
+// require: both tables, every column, that every identifier column compares
+// byte for byte (its collation, or on MySQL its VARBINARY type), and every
+// index. It reports every discrepancy at once as a [*sqlkit.SchemaError], which
+// matches [sqlkit.ErrSchemaMismatch], rather than failing on first use. Call it
+// at startup.
 func (s *Store) VerifySchema(ctx context.Context) error {
 	return sqlkit.VerifySchema(s.own(ctx), s.querier, s.dialect, s.prefix, schemaExpectation)
 }

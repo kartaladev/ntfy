@@ -2,6 +2,7 @@ package ntfytest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -31,6 +32,7 @@ func Run(t *testing.T, factory Factory) {
 	t.Run("watermark", func(t *testing.T) { runWatermark(t, factory) })
 	t.Run("successors", func(t *testing.T) { runSuccessors(t, factory) })
 	t.Run("isolation", func(t *testing.T) { runIsolation(t, factory) })
+	t.Run("identity", func(t *testing.T) { runIdentity(t, factory) })
 	t.Run("coalescing", func(t *testing.T) { runCoalescing(t, factory) })
 	t.Run("concurrency", func(t *testing.T) { runConcurrency(t, factory) })
 	t.Run("retention", func(t *testing.T) { runRetention(t, factory) })
@@ -668,6 +670,27 @@ func runSuccessors(t *testing.T, factory Factory) {
 			SuccessorSkip: skip,
 		}
 	}
+
+	parallel(t, "a close whose successor cannot be stamped changes nothing", func(t *testing.T) {
+		e := newEnv(t, factory)
+		offers(e)
+
+		errMint := errors.New("ntfytest: the generator is out of identifiers")
+		failing := ntfy.IDGeneratorFunc(func() (string, error) { return "", errMint })
+
+		_, err := e.store.Close(t.Context(), taken(), at(4), failing)
+		require.ErrorIs(t, err, errMint, "the close reports why it could not stamp a successor")
+
+		for _, recipient := range []string{"alice", "bob", "carol"} {
+			page := e.list(ntfy.ListQuery{Recipient: recipient})
+			require.Lenf(t, page.Notifications, 1, "%s has only the offer: no successor was written", recipient)
+			assert.Equalf(t, ntfy.StateActive, page.Notifications[0].State, "%s's offer is still open", recipient)
+		}
+
+		late := e.insert(false, e.note("dave", "event-4", "task-1", "offer", 4, at(5)))
+		assert.Len(t, late.Created, 1, "the close record was not raised, so a publish below it is not suppressed")
+		assert.Zero(t, late.Suppressed)
+	})
 
 	parallel(t, "closing offers tells every other recipient", func(t *testing.T) {
 		e := newEnv(t, factory)

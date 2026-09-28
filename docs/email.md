@@ -101,6 +101,7 @@ the pass.
 | `ErrMailRejected` | `FAILED` (`send_rejected`) | never |
 | a template error | `FAILED` (`render_failed`): a rendering bug does not fix itself | never |
 | any other send, lookup, filter, read or identifier error | `RETRY` (`send_failed`, `lookup_failed`, `filter_failed`, `read_failed` or `id_failed`), after the backoff | until the attempt limit, then `FAILED` |
+| an identifier the ID generator mints outside 1–`MaxIDBytes` bytes | `RETRY` (`id_failed`), after the backoff, with no attempt counted: the generator is the host's wiring, not the message's fault | until the generator is fixed; the error handler hears of every pass |
 | `ErrMailInDoubt`, or a pass that stopped mid-send | depends on the guarantee | see below |
 
 **A skip is final.** A host that fixes an address or widens its filter later does

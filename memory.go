@@ -207,12 +207,41 @@ func (s *MemoryStore) ensureWatermark(key watermarkKey, at time.Time) {
 	}
 }
 
-// Close implements [Store].
+// Close implements [Store]. It is all or nothing: which notifications close,
+// and the successors' identifiers, are settled before anything changes, so a
+// generator that fails leaves the store as it was.
 func (s *MemoryStore) Close(_ context.Context, req CloseRequest, at time.Time, ids IDGenerator) (CloseResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	at = normalizeTime(at)
+
+	var closing []string
+
+	recipients := make(map[string]struct{})
+
+	for id := range s.subjects[req.Subject] {
+		n := s.notifications[id]
+
+		switch {
+		case n.State == StateClosed || n.SubjectVersion > req.Version:
+			continue
+		case len(req.Kinds) > 0 && !slices.Contains(req.Kinds, n.Kind):
+			continue
+		case req.Except != "" && n.Recipient == req.Except:
+			continue
+		}
+
+		closing = append(closing, id)
+		recipients[n.Recipient] = struct{}{}
+	}
+
+	result := CloseResult{Recipients: slices.Sorted(maps.Keys(recipients))}
+
+	successors, err := req.SuccessorInsertions(result.Recipients, at, ids)
+	if err != nil {
+		return CloseResult{}, err
+	}
 
 	s.ensureWatermark(watermarkKey{subject: req.Subject, kind: allKinds}, at)
 
@@ -234,22 +263,8 @@ func (s *MemoryStore) Close(_ context.Context, req CloseRequest, at time.Time, i
 		s.watermarks[key] = mark
 	}
 
-	var result CloseResult
-
-	recipients := make(map[string]struct{})
-
-	for id := range s.subjects[req.Subject] {
+	for _, id := range closing {
 		n := s.notifications[id]
-
-		switch {
-		case n.State == StateClosed || n.SubjectVersion > req.Version:
-			continue
-		case len(req.Kinds) > 0 && !slices.Contains(req.Kinds, n.Kind):
-			continue
-		case req.Except != "" && n.Recipient == req.Except:
-			continue
-		}
-
 		n.State = StateClosed
 		n.ClosedReason = req.Reason
 		n.ClosedAt = timePtr(at)
@@ -260,14 +275,6 @@ func (s *MemoryStore) Close(_ context.Context, req CloseRequest, at time.Time, i
 
 		s.notifications[id] = n
 		result.Closed++
-		recipients[n.Recipient] = struct{}{}
-	}
-
-	result.Recipients = slices.Sorted(maps.Keys(recipients))
-
-	successors, err := req.SuccessorInsertions(result.Recipients, at, ids)
-	if err != nil {
-		return CloseResult{}, err
 	}
 
 	if len(successors) > 0 {

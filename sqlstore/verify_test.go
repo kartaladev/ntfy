@@ -191,3 +191,56 @@ func TestVerifySchemaOnSQLite(t *testing.T) {
 
 	runVerifySchema(t, stdsqlExecutor(t, db, sqlkit.SQLite))
 }
+
+// TestVerifySchemaRequiresByteExactIdentifiersOnMySQL is separate from
+// runVerifySchema because only MySQL can declare an identifier column that does
+// not compare byte for byte; the other dialects have no such column to break.
+// The cases do not vary context, so the table has no ctx field.
+func TestVerifySchemaRequiresByteExactIdentifiersOnMySQL(t *testing.T) {
+	t.Parallel()
+
+	executor := stdsqlExecutor(t, openSQL(t, "mysql", sqlkittest.RunTestMySQL(t)), sqlkit.MySQL)
+
+	type testCase struct {
+		name   string
+		column string // the recipient column's new definition
+		assert func(t *testing.T, store *sqlstore.Store, err error)
+	}
+
+	reportsTheRecipient := func(declared string) func(t *testing.T, store *sqlstore.Store, err error) {
+		return func(t *testing.T, store *sqlstore.Store, err error) {
+			listed := issues(t, err)
+			assert.Contains(t, listed, store.Tables()[0]+`.recipient: type is `+declared+` but must be "varbinary"`)
+			assert.NotContains(t, listed, "case-insensitively", "the issue says what is actually wrong")
+		}
+	}
+
+	cases := []testCase{
+		{
+			name:   "a collation that ignores code points and normalisation is reported",
+			column: "VARCHAR(255) COLLATE utf8mb4_0900_as_cs",
+			assert: reportsTheRecipient(`"varchar" collated "utf8mb4_0900_as_cs"`),
+		},
+		{
+			name:   "even a byte-exact collation is reported, since identifiers are binary strings",
+			column: "VARCHAR(255) COLLATE utf8mb4_0900_bin",
+			assert: reportsTheRecipient(`"varchar" collated "utf8mb4_0900_bin"`),
+		},
+		{
+			name:   "a fixed-width binary string, which pads with NUL, is reported",
+			column: "BINARY(255)",
+			assert: reportsTheRecipient(`"binary"`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := harness.NewStore(t, executor)
+			exec(t, executor, "ALTER TABLE `"+store.Tables()[0]+"` MODIFY `recipient` "+tc.column+" NOT NULL")
+
+			tc.assert(t, store, store.VerifySchema(t.Context()))
+		})
+	}
+}

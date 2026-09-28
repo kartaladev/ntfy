@@ -25,6 +25,12 @@ import (
 // reach a store already validated, and notifications reach Insert already
 // stamped.
 //
+// A store compares identifiers byte for byte. Two recipients, sources,
+// subjects or kinds are the same only when their bytes are: a store does not
+// fold case, ignore trailing spaces or ignorable code points, or normalise, and
+// it returns every identifier exactly as it was given. ntfytest asserts this on
+// every store.
+//
 // A store shares no memory with its caller. It copies what it retains, so that
 // a caller mutating a link map or payload afterwards cannot change what is
 // stored, and what it returns shares nothing with its own state, with the
@@ -142,12 +148,24 @@ func (r CloseRequest) ValidateWithin(limits Limits) error {
 	}
 
 	for i, kind := range r.Kinds {
+		pointer := "/kinds/" + strconv.Itoa(i)
+
 		if kind == "" || len(kind) > MaxKindBytes {
 			issues = append(issues, ValidationIssue{
-				Pointer: "/kinds/" + strconv.Itoa(i),
+				Pointer: pointer,
 				Detail:  "must be between 1 and " + strconv.Itoa(MaxKindBytes) + " bytes",
 			})
+
+			continue
 		}
+
+		issues = append(issues, wellFormed(pointer, kind)...)
+	}
+
+	issues = append(issues, wellFormed("/except", r.Except)...)
+
+	for i, recipient := range r.SuccessorSkip {
+		issues = append(issues, wellFormed("/successorSkip/"+strconv.Itoa(i), recipient)...)
 	}
 
 	if len(r.Reason) > MaxIdentifierBytes {
@@ -265,6 +283,7 @@ func (q ListQuery) Validate() error { return q.ValidateWithin(Limits{}) }
 // refuse to construct with.
 func (q ListQuery) ValidateWithin(limits Limits) error {
 	issues := validateIdentifier("/recipient", q.Recipient)
+	issues = append(issues, wellFormed("/subject", q.Subject)...)
 
 	if q.Limit < 0 || q.Limit > MaxListLimit {
 		issues = append(issues, ValidationIssue{
@@ -297,6 +316,12 @@ func (q ListQuery) ValidateWithin(limits Limits) error {
 					Pointer: "/states/" + strconv.Itoa(i), Detail: "is not ACTIVE, READ or CLOSED",
 				})
 			}
+		}
+	}
+
+	if len(q.Kinds) <= limit {
+		for i, kind := range q.Kinds {
+			issues = append(issues, wellFormed("/kinds/"+strconv.Itoa(i), kind)...)
 		}
 	}
 

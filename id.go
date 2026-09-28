@@ -12,7 +12,9 @@ import (
 // IDGenerator mints notification identifiers. The default is a
 // [UUIDv7Generator]; [WithIDGenerator] replaces it.
 type IDGenerator interface {
-	// NewID returns a new identifier, unique among every notification.
+	// NewID returns a new identifier, unique among every notification, of 1 to
+	// [MaxIDBytes] bytes. The service refuses any other with a
+	// [ConfigurationError].
 	NewID() (string, error)
 }
 
@@ -97,4 +99,25 @@ func formatUUID(b [16]byte) string {
 	hex.Encode(out[24:36], b[10:16])
 
 	return string(out[:])
+}
+
+// boundedIDs holds a generator to what every store can hold. An identifier
+// that is empty or longer than [MaxIDBytes] would be truncated by one database
+// and refused by another; it fails the write that asked for it instead, the
+// same way on every store.
+type boundedIDs struct{ IDGenerator }
+
+// NewID implements [IDGenerator].
+func (g boundedIDs) NewID() (string, error) {
+	id, err := g.IDGenerator.NewID()
+	if err != nil {
+		return "", err
+	}
+
+	if id == "" || len(id) > MaxIDBytes {
+		return "", &ConfigurationError{Detail: fmt.Sprintf(
+			"the ID generator minted an identifier of %d bytes; it must be 1 to %d", len(id), MaxIDBytes)}
+	}
+
+	return id, nil
 }

@@ -72,10 +72,11 @@ split-check:
 	fi
 
 ## sqlkit-copy-check: fail when pkg/sqlkit differs from the source commit named
-## in pkg/sqlkit/SOURCE, after the one path rewrite the copy is allowed.
+## in pkg/sqlkit/SOURCE, after the one path rewrite the copy is allowed and the
+## patches recorded in pkg/sqlkit/patches, applied in name order.
 ##
-## go.sum is excluded because the workspace may re-tidy it; README.md and
-## SOURCE are this repository's own notes about the copy.
+## go.sum is excluded because the workspace may re-tidy it; README.md, SOURCE,
+## PATCHES.md and patches/ are this repository's own notes about the copy.
 sqlkit-copy-check:
 	@set -e; \
 	commit=$$(awk '$$1 == "commit:" { print $$2 }' pkg/sqlkit/SOURCE); \
@@ -88,9 +89,18 @@ sqlkit-copy-check:
 	git -C "$$tmp/repo" archive "$$commit" sqlkit | tar -x -C "$$tmp/want"; \
 	grep -rl 'github.com/kartaladev/hmntsk/sqlkit' "$$tmp/want/sqlkit" | \
 		xargs perl -pi -e 's#github\.com/kartaladev/hmntsk/sqlkit#github.com/kartaladev/sqlkit#g'; \
+	for patch in $$(ls pkg/sqlkit/patches/*.patch 2>/dev/null | sort); do \
+		echo "    applying $$patch"; \
+		(cd "$$tmp/want/sqlkit" && git apply "$(CURDIR)/$$patch") || { \
+			echo "sqlkit-copy-check: $$patch no longer applies to the source commit"; exit 1; }; \
+	done; \
 	cp pkg/sqlkit/README.md pkg/sqlkit/SOURCE "$$tmp/want/sqlkit/"; \
+	for note in PATCHES.md patches; do \
+		if [ -e "pkg/sqlkit/$$note" ]; then cp -R "pkg/sqlkit/$$note" "$$tmp/want/sqlkit/"; fi; \
+	done; \
 	if ! diff -r -x go.sum "$$tmp/want/sqlkit" pkg/sqlkit; then \
-		echo "sqlkit-copy-check: pkg/sqlkit was edited; fix sqlkit in its own repository instead"; \
+		echo "sqlkit-copy-check: pkg/sqlkit differs from its source and recorded patches;"; \
+		echo "    record the change as a patch in pkg/sqlkit/patches and in PATCHES.md, or fix sqlkit upstream"; \
 		exit 1; \
 	fi
 

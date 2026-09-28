@@ -8,4 +8,8 @@
 // Beyond behaviour, the suite asserts memory isolation: a store copies what it
 // retains and returns nothing it shares with its caller, with its own state, or
 // with another notification from the same call.
+//
+// It also asserts identity: a store compares recipients, sources, subjects and
+// kinds byte for byte, so identifiers differing only in case, a trailing space,
+// an ignorable code point or their Unicode normalisation are different.
 package ntfytest

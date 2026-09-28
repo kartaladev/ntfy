@@ -1,12 +1,18 @@
 -- MySQL schema for the ntfy notification store, 8.0 or later.
 --
--- Identifier columns are pinned to utf8mb4_0900_as_cs. The server default,
--- utf8mb4_0900_ai_ci, is case-insensitive, which would deliver a notification
--- for 'alice' to 'Alice' on this one dialect out of three.
+-- Identifier columns are VARBINARY: binary strings, which compare and sort by
+-- their bytes and pad nothing, on every supported server. Every character-set
+-- collation merges identifiers the other stores keep apart: the server default,
+-- utf8mb4_0900_ai_ci, folds case; utf8mb4_0900_as_cs ignores code points such
+-- as U+200B and equates NFC with NFD; utf8mb4_bin ignores trailing spaces; and
+-- utf8mb4_0900_bin, the one that would not, needs 8.0.17. Any of the others
+-- would deliver one recipient's notifications to another on this one dialect
+-- out of three. Their lengths are bytes, as the library's own limits are:
+-- MaxIdentifierBytes is 255 and MaxKindBytes 100.
 --
--- Identifier columns are VARCHAR rather than TEXT because MySQL cannot index a
--- TEXT column without a prefix length. Every index here stays within InnoDB's
--- 3072-byte key limit at four bytes a character.
+-- Identifier columns are VARBINARY rather than BLOB because MySQL cannot index
+-- a BLOB column without a prefix length. Every index here stays well within
+-- InnoDB's 3072-byte key limit.
 --
 -- Timestamps are DATETIME(6), not TIMESTAMP: TIMESTAMP converts through the
 -- session time zone and runs out of range in 2038.
@@ -22,13 +28,13 @@
 -- document is rendered; with no prefix configured they are exactly as written.
 
 CREATE TABLE IF NOT EXISTS `app_ntfy_notifications` (
-    `id`               VARCHAR(64)  COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `recipient`        VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `source_id`        VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `subject`          VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    `id`               VARBINARY(64)  NOT NULL,
+    `recipient`        VARBINARY(255) NOT NULL,
+    `source_id`        VARBINARY(255) NOT NULL,
+    `subject`          VARBINARY(255) NOT NULL,
     `subject_version`  BIGINT NOT NULL,
-    `kind`             VARCHAR(100) COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `state`            VARCHAR(16)  COLLATE utf8mb4_0900_as_cs NOT NULL,
+    `kind`             VARBINARY(100) NOT NULL,
+    `state`            VARBINARY(16)  NOT NULL,
     `closed_reason`    VARCHAR(255) NULL,
     `title`            LONGTEXT NULL,
     `links`            LONGTEXT NULL,
@@ -49,8 +55,8 @@ CREATE TABLE IF NOT EXISTS `app_ntfy_notifications` (
 -- every kind under kind '*'. Publishing and closing a subject both lock its '*'
 -- row first, which is what serialises them.
 CREATE TABLE IF NOT EXISTS `app_ntfy_watermarks` (
-    `subject`     VARCHAR(255) COLLATE utf8mb4_0900_as_cs NOT NULL,
-    `kind`        VARCHAR(100) COLLATE utf8mb4_0900_as_cs NOT NULL,
+    `subject`     VARBINARY(255) NOT NULL,
+    `kind`        VARBINARY(100) NOT NULL,
     `version`     BIGINT NOT NULL,
     `updated_at`  DATETIME(6) NOT NULL,
     PRIMARY KEY (`subject`, `kind`),

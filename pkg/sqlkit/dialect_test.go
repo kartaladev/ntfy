@@ -19,6 +19,7 @@ func TestDialectFragments(t *testing.T) {
 		returning      bool
 		skipLocked     bool
 		collation      string
+		identifierType string
 		timestamp      string
 		jsonColumn     string
 		booleanTrue    string
@@ -42,6 +43,7 @@ func TestDialectFragments(t *testing.T) {
 				returning:      true,
 				skipLocked:     true,
 				collation:      "C",
+				identifierType: "",
 				timestamp:      "timestamptz(6)",
 				jsonColumn:     "text",
 				booleanTrue:    "TRUE",
@@ -57,7 +59,8 @@ func TestDialectFragments(t *testing.T) {
 				quotedWithMark: "`we``ird`",
 				returning:      false,
 				skipLocked:     true,
-				collation:      "utf8mb4_0900_as_cs",
+				collation:      "",
+				identifierType: "varbinary",
 				timestamp:      "DATETIME(6)",
 				jsonColumn:     "LONGTEXT",
 				booleanTrue:    "1",
@@ -74,6 +77,7 @@ func TestDialectFragments(t *testing.T) {
 				returning:      true,
 				skipLocked:     false,
 				collation:      "BINARY",
+				identifierType: "",
 				timestamp:      "TEXT",
 				jsonColumn:     "TEXT",
 				booleanTrue:    "1",
@@ -99,6 +103,7 @@ func TestDialectFragments(t *testing.T) {
 			assert.Equal(t, tc.expect.returning, tc.dialect.SupportsReturning())
 			assert.Equal(t, tc.expect.skipLocked, tc.dialect.SupportsSkipLocked())
 			assert.Equal(t, tc.expect.collation, tc.dialect.IdentifierCollation())
+			assert.Equal(t, tc.expect.identifierType, tc.dialect.IdentifierType())
 			assert.Equal(t, tc.expect.timestamp, tc.dialect.TimestampColumnType())
 			assert.Equal(t, tc.expect.jsonColumn, tc.dialect.JSONColumnType())
 			assert.Equal(t, tc.expect.booleanTrue, tc.dialect.BooleanTrue())
@@ -118,8 +123,9 @@ func TestDialectsAreStableAndDistinct(t *testing.T) {
 	assert.Equal(t, []string{"postgres", "mysql", "sqlite"}, names)
 
 	for _, dialect := range sqlkit.Dialects() {
-		assert.NotEmptyf(t, dialect.IdentifierCollation(),
-			"%s must pin a collation, or identifier comparison depends on the dialect", dialect.Name())
+		assert.Truef(t, (dialect.IdentifierCollation() == "") != (dialect.IdentifierType() == ""),
+			"%s must pin exactly one of a collation and a type, or identifier comparison depends on the dialect",
+			dialect.Name())
 	}
 }
 

@@ -372,3 +372,108 @@ func TestNotificationJSONKeepsOpaqueContentExact(t *testing.T) {
 	assert.Contains(t, string(encoded), `"state":"ACTIVE"`)
 	assert.NotContains(t, string(encoded), `"readAt"`)
 }
+
+// TestIdentifiersMustBeWellFormed refuses an identifier holding a NUL byte or
+// invalid UTF-8 wherever one is validated. PostgreSQL cannot store either, so
+// accepting them would let the same draft succeed on one store and fail with a
+// raw driver error on another. The cases do not vary context, so the table has
+// no ctx field.
+func TestIdentifiersMustBeWellFormed(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name     string
+		validate func(bad string) error
+		pointer  string
+	}
+
+	draft := func(set func(d *ntfy.Draft, bad string)) func(string) error {
+		return func(bad string) error {
+			d := validDraft()
+			set(&d, bad)
+
+			return d.Validate()
+		}
+	}
+
+	closing := func(set func(r *ntfy.CloseRequest, bad string)) func(string) error {
+		return func(bad string) error {
+			r := ntfy.CloseRequest{
+				Subject: "task-1", Version: 1, Reason: "done",
+				Successor: &ntfy.Successor{SourceID: "event-2", Kind: "done"},
+			}
+			set(&r, bad)
+
+			return r.Validate()
+		}
+	}
+
+	listing := func(set func(q *ntfy.ListQuery, bad string)) func(string) error {
+		return func(bad string) error {
+			q := ntfy.ListQuery{Recipient: "alice"}
+			set(&q, bad)
+
+			return q.Validate()
+		}
+	}
+
+	cases := []testCase{
+		{name: "a draft's recipient", validate: draft(func(d *ntfy.Draft, bad string) { d.Recipient = bad }), pointer: "/recipient"},
+		{name: "a draft's source", validate: draft(func(d *ntfy.Draft, bad string) { d.SourceID = bad }), pointer: "/sourceId"},
+		{name: "a draft's subject", validate: draft(func(d *ntfy.Draft, bad string) { d.Subject = bad }), pointer: "/subject"},
+		{name: "a draft's kind", validate: draft(func(d *ntfy.Draft, bad string) { d.Kind = bad }), pointer: "/kind"},
+		{name: "a close's subject", validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Subject = bad }), pointer: "/subject"},
+		{
+			name:     "a close's kind",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Kinds = []string{"offer", bad} }),
+			pointer:  "/kinds/1",
+		},
+		{name: "a close's exception", validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Except = bad }), pointer: "/except"},
+		{
+			name:     "a close's successor skip",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.SuccessorSkip = []string{bad} }),
+			pointer:  "/successorSkip/0",
+		},
+		{
+			name:     "a close's successor source",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Successor.SourceID = bad }),
+			pointer:  "/successor/sourceId",
+		},
+		{
+			name:     "a close's successor kind",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Successor.Kind = bad }),
+			pointer:  "/successor/kind",
+		},
+		{name: "a listing's recipient", validate: listing(func(q *ntfy.ListQuery, bad string) { q.Recipient = bad }), pointer: "/recipient"},
+		{name: "a listing's subject", validate: listing(func(q *ntfy.ListQuery, bad string) { q.Subject = bad }), pointer: "/subject"},
+		{
+			name:     "a listing's kind",
+			validate: listing(func(q *ntfy.ListQuery, bad string) { q.Kinds = []string{bad} }),
+			pointer:  "/kinds/0",
+		},
+	}
+
+	for _, tc := range cases {
+		for _, bad := range []struct{ name, value string }{
+			{name: "with a NUL byte", value: "alice\x00"},
+			{name: "with invalid UTF-8", value: "alice\xff"},
+		} {
+			t.Run(tc.name+" "+bad.name, func(t *testing.T) {
+				t.Parallel()
+
+				err := tc.validate(bad.value)
+				require.ErrorIs(t, err, ntfy.ErrValidation, "%s holding %q is refused", tc.name, bad.value)
+
+				var validation *ntfy.ValidationError
+				require.ErrorAs(t, err, &validation)
+
+				pointers := make([]string, 0, len(validation.Issues))
+				for _, issue := range validation.Issues {
+					pointers = append(pointers, issue.Pointer)
+				}
+
+				assert.Contains(t, pointers, tc.pointer)
+			})
+		}
+	}
+}
