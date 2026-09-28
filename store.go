@@ -148,12 +148,24 @@ func (r CloseRequest) ValidateWithin(limits Limits) error {
 	}
 
 	for i, kind := range r.Kinds {
+		pointer := "/kinds/" + strconv.Itoa(i)
+
 		if kind == "" || len(kind) > MaxKindBytes {
 			issues = append(issues, ValidationIssue{
-				Pointer: "/kinds/" + strconv.Itoa(i),
+				Pointer: pointer,
 				Detail:  "must be between 1 and " + strconv.Itoa(MaxKindBytes) + " bytes",
 			})
+
+			continue
 		}
+
+		issues = append(issues, wellFormed(pointer, kind)...)
+	}
+
+	issues = append(issues, wellFormed("/except", r.Except)...)
+
+	for i, recipient := range r.SuccessorSkip {
+		issues = append(issues, wellFormed("/successorSkip/"+strconv.Itoa(i), recipient)...)
 	}
 
 	if len(r.Reason) > MaxIdentifierBytes {
@@ -271,6 +283,7 @@ func (q ListQuery) Validate() error { return q.ValidateWithin(Limits{}) }
 // refuse to construct with.
 func (q ListQuery) ValidateWithin(limits Limits) error {
 	issues := validateIdentifier("/recipient", q.Recipient)
+	issues = append(issues, wellFormed("/subject", q.Subject)...)
 
 	if q.Limit < 0 || q.Limit > MaxListLimit {
 		issues = append(issues, ValidationIssue{
@@ -303,6 +316,12 @@ func (q ListQuery) ValidateWithin(limits Limits) error {
 					Pointer: "/states/" + strconv.Itoa(i), Detail: "is not ACTIVE, READ or CLOSED",
 				})
 			}
+		}
+	}
+
+	if len(q.Kinds) <= limit {
+		for i, kind := range q.Kinds {
+			issues = append(issues, wellFormed("/kinds/"+strconv.Itoa(i), kind)...)
 		}
 	}
 

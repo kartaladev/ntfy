@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // State is where a notification is in its life. A notification never returns
@@ -188,6 +189,8 @@ func validateContent(c content, withSubject bool, limits Limits) []ValidationIss
 		issues = append(issues, ValidationIssue{
 			Pointer: "/kind", Detail: "is longer than " + strconv.Itoa(MaxKindBytes) + " bytes",
 		})
+	default:
+		issues = append(issues, wellFormed("/kind", c.kind)...)
 	}
 
 	if c.subjectVersion < 0 {
@@ -300,6 +303,21 @@ func validateIdentifier(pointer, value string) []ValidationIssue {
 		return []ValidationIssue{{
 			Pointer: pointer, Detail: "is longer than " + strconv.Itoa(MaxIdentifierBytes) + " bytes",
 		}}
+	default:
+		return wellFormed(pointer, value)
+	}
+}
+
+// wellFormed reports an identifier holding a NUL byte or invalid UTF-8.
+// PostgreSQL can store neither, so every store refuses both, the same way,
+// before anything is written: identifiers are otherwise compared and returned
+// byte for byte, whatever they hold.
+func wellFormed(pointer, value string) []ValidationIssue {
+	switch {
+	case strings.IndexByte(value, 0) >= 0:
+		return []ValidationIssue{{Pointer: pointer, Detail: "contains a NUL byte"}}
+	case !utf8.ValidString(value):
+		return []ValidationIssue{{Pointer: pointer, Detail: "is not valid UTF-8"}}
 	default:
 		return nil
 	}
