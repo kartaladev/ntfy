@@ -151,6 +151,9 @@ type dispatchHarness struct {
 	render func(batch ntfy.EmailBatch) error
 	// mintFails, once set, fails every identifier the service mints.
 	mintFails atomic.Bool
+	// mintTooLong, once set, mints identifiers no store can hold, which the
+	// service refuses as a configuration error.
+	mintTooLong atomic.Bool
 	// statuses are the outcomes a host's failure-detail rule heard of.
 	statuses []ntfy.EmailStatus
 
@@ -173,6 +176,10 @@ func newDispatchHarness(t *testing.T) *dispatchHarness {
 	mint := ntfy.IDGeneratorFunc(func() (string, error) {
 		if h.mintFails.Load() {
 			return "", errMint
+		}
+
+		if h.mintTooLong.Load() {
+			return strings.Repeat("x", ntfy.MaxIDBytes+1), nil
 		}
 
 		return ids.NewID()
@@ -1308,6 +1315,17 @@ func TestEmailDispatcherRecordsItsOwnReason(t *testing.T) {
 			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
 				h.mintFails.Store(true)
 			},
+			assert: recorded(ntfy.EmailStatusRetry, ntfy.EmailReasonIDFailed),
+		},
+		{
+			// A misconfigured generator is not the message's fault: it spends no
+			// attempt, so fixing the generator lets the email go, even at a limit
+			// of one attempt.
+			name: "a message identifier refused as a configuration error, at the attempt limit",
+			arrange: func(_ *testing.T, h *dispatchHarness, _ ntfy.Notification) {
+				h.mintTooLong.Store(true)
+			},
+			opts:   []ntfy.EmailOption{ntfy.WithEmailMaxAttempts(1)},
 			assert: recorded(ntfy.EmailStatusRetry, ntfy.EmailReasonIDFailed),
 		},
 		{

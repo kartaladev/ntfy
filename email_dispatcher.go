@@ -801,7 +801,10 @@ func (p *emailPass) send(recipient, address string, candidates []EmailCandidate,
 	if batch == "" {
 		batch, err = p.d.service.ids.NewID()
 		if err != nil {
-			p.retry(live, "", EmailReasonIDFailed, err, true)
+			// A generator that mints identifiers no store can hold is the host's
+			// wiring, not this message's failure: it spends no attempt, so the
+			// email goes once the generator is fixed.
+			p.retry(live, "", EmailReasonIDFailed, err, !errors.Is(err, ErrConfiguration))
 
 			return
 		}
