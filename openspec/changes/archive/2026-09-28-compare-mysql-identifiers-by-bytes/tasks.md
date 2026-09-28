@@ -108,3 +108,14 @@
 
   Verify that `make sqlkit-copy-check` passes, that it fails on an unrecorded edit, and that the documented upstream recipe applies cleanly to the source commit.
 - [x] 8.5 Run `make all` and `make store-matrix`, record the results, and commit.
+
+## 9. Answer the second code review (PR #11)
+
+> Added 2026-09-28, after `/code-review high` on PR #11 returned nine findings. #6 (probe the generator at construction) and #8 (one method for sqlkit's identifier rule) were declined: see `design.md` D2a and D2. #7 (the cursor fingerprint joins kinds with commas) is audit finding 6, left to its own change. The maintainer chose to fix the rest here, including #2 and #3. The change was un-archived for this, and will be archived again.
+
+- [x] 9.1 (#3) Refuse an identifier containing a NUL byte or invalid UTF-8 in validation, with a `ValidationError` naming the field. This covers recipient, source, subject and kind on a draft; recipient, subject and kinds on a list query; and subject, kinds, exception and successor skips on a close request. PostgreSQL cannot store either, so the same draft now fails the same way on every store. Verify with a failing table test first.
+- [x] 9.2 (#2) Key `sqlstore`'s insert bookkeeping by a struct of the two identifiers instead of joining them with NUL, so pairs that differ only in where a NUL falls cannot collide. Verify with a MySQL store test that inserts `("e\x00alice", "bob")` and `("e", "alice\x00bob")` together and requires both to be created: red first, then green.
+- [x] 9.3 (#1) Make `MemoryStore.Close` atomic when minting a successor identifier fails. Work out which notifications close without changing anything, mint, then apply. `TestServiceRefusesIdentifiersNoStoreCanHold` also requires the seeded notification to stay ACTIVE and a later publish below the close version to be created. Verify red first on the memory store, then green, on memory and every SQL store.
+- [x] 9.4 (#5) In the email dispatcher, a `ConfigurationError` from the ID generator neither counts an attempt nor marks a delivery failed. The claim is released and the error goes to the error handler, so fixing the generator lets the emails go. Verify with a failing test first.
+- [x] 9.5 (#4, #9) `sqlkit-copy-check` copies `PATCHES.md` and `patches/` only when they exist. The upgrade test checks `rows.Err()` after its pre-check. Verify with `make sqlkit-copy-check` against a tree with no patches, and by reading the test.
+- [x] 9.6 Extend the spec delta with the validation requirement's new scenario. Update `plans.md`, run the gates, archive again (re-syncing the spec) and push to PR #11.

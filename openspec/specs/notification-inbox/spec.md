@@ -320,6 +320,10 @@ A store supplied by a host SHALL be held to this by the shared conformance suite
 
 A schema whose identifier columns would compare other than byte for byte SHALL be reported by schema verification at startup, not discovered as a wrong match in traffic.
 
+An identifier holding a NUL byte or a byte sequence that is not valid UTF-8 SHALL be refused by validation with an error naming the field, before anything is written, wherever an identifier is validated. At least one supported store cannot hold either, and the same request SHALL fail the same way on every store.
+
+The identifiers a host's ID generator mints SHALL be between 1 and a documented number of bytes. The system SHALL refuse any other with a configuration error, writing nothing under it. A close whose successor cannot be given an identifier SHALL change nothing. An email that cannot be given a message identifier for this reason SHALL NOT spend a delivery attempt.
+
 #### Scenario: A recipient differing by one ignorable code point is another recipient
 
 - **WHEN** a notification is published for `alice`, and `alice` followed by a zero-width space reads, lists and counts their notifications
@@ -354,6 +358,16 @@ A schema whose identifier columns would compare other than byte for byte SHALL b
 
 - **WHEN** schema verification runs against a MySQL schema whose identifier columns are character strings under any collation, rather than binary strings
 - **THEN** verification fails at startup and names each such column, and the documented upgrade makes the same schema pass
+
+#### Scenario: An identifier holding a NUL byte or invalid UTF-8 is refused
+
+- **WHEN** a draft's recipient, source, subject or kind, a listing's recipient, subject or kind, or a close's subject, kinds, exception or successor skips holds a NUL byte or invalid UTF-8
+- **THEN** validation refuses the request with an error naming the field, and nothing is written on any store
+
+#### Scenario: A close whose successor cannot be given an identifier changes nothing
+
+- **WHEN** a subject is closed with a successor, and the host's ID generator fails or mints an identifier longer than the documented limit
+- **THEN** the close reports the error, every notification it would have closed is still open, no successor is written, and a later publish below the close version is not suppressed
 
 #### Scenario: Every store is held to this
 

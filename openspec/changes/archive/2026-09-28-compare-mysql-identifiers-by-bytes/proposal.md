@@ -65,7 +65,11 @@ None.
   - PostgreSQL and SQLite hosts do nothing.
   - A host with its own `Store` runs `ntfytest.Run`; a store that folds case, pads or normalises identifiers fails.
 - **Data:** existing rows are kept, byte for byte, because converting UTF-8 text to a binary string keeps its bytes. Strings that were distinct stay distinct, and no unique key can collide, because byte comparison only splits what the old collation merged. Anything the old collation already merged, such as a publish suppressed as a duplicate, is not recovered.
-- **Out of scope:** validating identifiers for NUL and invalid UTF-8 (audit finding 10) is its own change. A binary column now stores what PostgreSQL would refuse, so that change matters more after this one.
+- **Validation (added after the PR's code review):**
+  - An identifier holding a NUL byte or invalid UTF-8 is refused wherever identifiers are validated (audit finding 10). PostgreSQL could not store either, and MySQL's binary columns now would.
+  - `sqlstore`'s insert bookkeeping keys identifier pairs by struct, not joined by NUL.
+  - `MemoryStore.Close` is atomic when a successor identifier cannot be minted (audit finding 3).
+  - The email dispatcher spends no attempt on a misconfigured ID generator.
 - **Dependencies:**
   - Nothing new.
   - Follow-up outside this repository: send `pkg/sqlkit/PATCHES.md` and its patch to sqlkit. Once a sqlkit release carries them, refresh the copy and delete the patch.

@@ -152,6 +152,24 @@ A test proves both blocks, in the pattern of `TestTheDocumentedMySQLUpgradeAddsT
 
 **Default / Override:** as D1.
 
+### D6. What the second code review changed
+
+> Added after `/code-review high` on PR #11. The maintainer chose to fix these here, which widened the change beyond MySQL; each carries its own failing test first.
+
+- **Identifiers are refused if they hold NUL or invalid UTF-8** (`wellFormed`, beside the length checks). This covers:
+  - a draft's recipient, source, subject and kind;
+  - a listing's recipient, subject and kinds;
+  - a close's subject, kinds, exception and successor skips, and its successor's source and kind.
+
+  PostgreSQL could not store either, so a draft used to succeed on memory, SQLite and now MySQL but fail on PostgreSQL with a raw driver error. The library refuses it the same way everywhere, which keeps rule 4's "stated, not silently relaxed". **Default:** refused. **Override:** none. Identifiers are opaque to the library, but they must be storable on every store it supports; a host that needs arbitrary bytes encodes them.
+- **`sqlstore` keys identifier pairs by struct.** Joining with NUL let `("e\x00alice", "bob")` collide with `("e", "alice\x00bob")`. Validation now keeps NUL out of the service path, but a store is held to byte identity for whatever it is given.
+- **`MemoryStore.Close` settles what closes and mints the successors' identifiers before changing anything.** This is audit finding 3. A generator that fails, including one refused for length (D2a), left the memory store closed while sqlstore rolled back. The conformance suite now asserts it for every store.
+- **A `ConfigurationError` from the ID generator spends no email attempt.** The delivery is released as `RETRY` (`id_failed`) and the error handler hears of it on every pass. A wiring mistake no longer marks every email `FAILED` after the attempt limit.
+- **Declined:**
+  - #6, probing the generator at construction: D2a explains why the check runs per identifier.
+  - #8, one method for sqlkit's type-or-collation rule: that is an API question for sqlkit upstream, raised through `PATCHES.md`.
+  - #7, the cursor fingerprint's comma join: audit finding 6, its own change.
+
 ## Risks / Trade-offs
 
 - **[A driver or executor returns something other than `[]byte` or `string` for `VARBINARY`]** → sqlkit decodes both. The MySQL conformance suite runs on database/sql and GORM (`internal/gormtest`), and fails on any decoding error. pgx does not reach MySQL.

@@ -75,6 +75,7 @@
 | Task 5: verify and hand off | 6.1, 6.2 |
 | Task 6: answer the code review | 7.1–7.8 |
 | Task 7: fix sqlkit in the copy, record the patch | 8.1–8.5 |
+| Task 8: answer the second code review | 9.1–9.6 |
 
 Task 1 gathers eight `tasks.md` items into one commit, because none of them can land green alone:
 - The new DDL fails the existing `TestVerifySchemaOnMySQL` until `verifyDialect` exists.
@@ -2500,6 +2501,334 @@ Run `make all`, `make store-matrix` and `make sqlkit-copy-check`. Record the res
 
 ---
 
+### Task 8: Answer the second code review (tasks 9.1–9.6)
+
+> Added 2026-09-28, after `/code-review high` on PR #11. The change was un-archived for this: `git mv` from `archive/` back to `changes/`, and `openspec/specs/notification-inbox/spec.md` restored from `main`. It is archived again at the end. The findings are weighed in `design.md` D6.
+
+**Files:**
+- Modify:
+  - `notification.go`, `store.go` (validation);
+  - `memory.go` (`Close`);
+  - `email_dispatcher.go`, `docs/email.md`;
+  - `sqlstore/insert.go` (`pairKey`);
+  - `Makefile`.
+- Tests:
+  - `notification_test.go` (`TestIdentifiersMustBeWellFormed`);
+  - `ntfytest/suite.go` (new successors case);
+  - `service_test.go`, `email_dispatch_test.go`;
+  - `sqlstore/identity_test.go`, `sqlstore/email_verify_test.go`.
+
+**Interfaces:**
+- Produces:
+  - unexported `wellFormed(pointer, value string) []ValidationIssue`;
+  - unexported `pairKey struct{ first, second string }` in sqlstore;
+  - the conformance case "a close whose successor cannot be stamped changes nothing", which every store must pass.
+
+- [x] **Step 1: Identifiers must be well formed (9.1)**
+
+Red: append to `notification_test.go`:
+
+```go
+// TestIdentifiersMustBeWellFormed refuses an identifier holding a NUL byte or
+// invalid UTF-8 wherever one is validated. PostgreSQL cannot store either, so
+// accepting them would let the same draft succeed on one store and fail with a
+// raw driver error on another. The cases do not vary context, so the table has
+// no ctx field.
+func TestIdentifiersMustBeWellFormed(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name     string
+		validate func(bad string) error
+		pointer  string
+	}
+
+	draft := func(set func(d *ntfy.Draft, bad string)) func(string) error {
+		return func(bad string) error {
+			d := validDraft()
+			set(&d, bad)
+
+			return d.Validate()
+		}
+	}
+
+	closing := func(set func(r *ntfy.CloseRequest, bad string)) func(string) error {
+		return func(bad string) error {
+			r := ntfy.CloseRequest{
+				Subject: "task-1", Version: 1, Reason: "done",
+				Successor: &ntfy.Successor{SourceID: "event-2", Kind: "done"},
+			}
+			set(&r, bad)
+
+			return r.Validate()
+		}
+	}
+
+	listing := func(set func(q *ntfy.ListQuery, bad string)) func(string) error {
+		return func(bad string) error {
+			q := ntfy.ListQuery{Recipient: "alice"}
+			set(&q, bad)
+
+			return q.Validate()
+		}
+	}
+
+	cases := []testCase{
+		{name: "a draft's recipient", validate: draft(func(d *ntfy.Draft, bad string) { d.Recipient = bad }), pointer: "/recipient"},
+		{name: "a draft's source", validate: draft(func(d *ntfy.Draft, bad string) { d.SourceID = bad }), pointer: "/sourceId"},
+		{name: "a draft's subject", validate: draft(func(d *ntfy.Draft, bad string) { d.Subject = bad }), pointer: "/subject"},
+		{name: "a draft's kind", validate: draft(func(d *ntfy.Draft, bad string) { d.Kind = bad }), pointer: "/kind"},
+		{name: "a close's subject", validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Subject = bad }), pointer: "/subject"},
+		{
+			name:     "a close's kind",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Kinds = []string{"offer", bad} }),
+			pointer:  "/kinds/1",
+		},
+		{name: "a close's exception", validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Except = bad }), pointer: "/except"},
+		{
+			name:     "a close's successor skip",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.SuccessorSkip = []string{bad} }),
+			pointer:  "/successorSkip/0",
+		},
+		{
+			name:     "a close's successor source",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Successor.SourceID = bad }),
+			pointer:  "/successor/sourceId",
+		},
+		{
+			name:     "a close's successor kind",
+			validate: closing(func(r *ntfy.CloseRequest, bad string) { r.Successor.Kind = bad }),
+			pointer:  "/successor/kind",
+		},
+		{name: "a listing's recipient", validate: listing(func(q *ntfy.ListQuery, bad string) { q.Recipient = bad }), pointer: "/recipient"},
+		{name: "a listing's subject", validate: listing(func(q *ntfy.ListQuery, bad string) { q.Subject = bad }), pointer: "/subject"},
+		{
+			name:     "a listing's kind",
+			validate: listing(func(q *ntfy.ListQuery, bad string) { q.Kinds = []string{bad} }),
+			pointer:  "/kinds/0",
+		},
+	}
+
+	for _, tc := range cases {
+		for _, bad := range []struct{ name, value string }{
+			{name: "with a NUL byte", value: "alice\x00"},
+			{name: "with invalid UTF-8", value: "alice\xff"},
+		} {
+			t.Run(tc.name+" "+bad.name, func(t *testing.T) {
+				t.Parallel()
+
+				err := tc.validate(bad.value)
+				require.ErrorIs(t, err, ntfy.ErrValidation, "%s holding %q is refused", tc.name, bad.value)
+
+				var validation *ntfy.ValidationError
+				require.ErrorAs(t, err, &validation)
+
+				pointers := make([]string, 0, len(validation.Issues))
+				for _, issue := range validation.Issues {
+					pointers = append(pointers, issue.Pointer)
+				}
+
+				assert.Contains(t, pointers, tc.pointer)
+			})
+		}
+	}
+}
+```
+
+Observed: all 26 subtests fail, because each identifier is accepted.
+
+Green: in `notification.go`, `validateIdentifier`'s default case returns `wellFormed(pointer, value)`, and `validateContent`'s kind switch gains `default: issues = append(issues, wellFormed("/kind", c.kind)...)`. Also:
+
+```go
+// wellFormed reports an identifier holding a NUL byte or invalid UTF-8.
+// PostgreSQL can store neither, so every store refuses both, the same way,
+// before anything is written: identifiers are otherwise compared and returned
+// byte for byte, whatever they hold.
+func wellFormed(pointer, value string) []ValidationIssue {
+	switch {
+	case strings.IndexByte(value, 0) >= 0:
+		return []ValidationIssue{{Pointer: pointer, Detail: "contains a NUL byte"}}
+	case !utf8.ValidString(value):
+		return []ValidationIssue{{Pointer: pointer, Detail: "is not valid UTF-8"}}
+	default:
+		return nil
+	}
+}
+```
+
+In `store.go`:
+- `CloseRequest.ValidateWithin` runs `wellFormed` on each kind within the length bound, on `Except`, and on each `SuccessorSkip`, at `/kinds/i`, `/except` and `/successorSkip/i`.
+- `ListQuery.ValidateWithin` runs it on `Subject`, and on each kind while the kinds are within the filter bound.
+
+Observed: all 26 pass, and `go test -race ./...` in the root passes.
+
+- [x] **Step 2: Collision-free pair keys in sqlstore (9.2)**
+
+Red: `TestMySQLComparesIdentifiersByBytes` gains a `bothCreated(first, second)` helper and two rows:
+- `("e\x00alice", "bob")` with `("e", "alice\x00bob")`;
+- recipient `"a\x00b"` kind `"c"` with recipient `"a"` kind `"b\x00c"`.
+
+Both are inserted in one call with `Coalesce: true`.
+
+Observed: the first row is counted as a duplicate (`should have 2 item(s), but has 1`, `Duplicates` 1), and the second as coalesced.
+
+Green, in `sqlstore/insert.go`:
+
+```go
+// pairKey is two identifiers as one map key. It is a struct, not the two
+// joined by a separator, because identifiers are compared byte for byte and
+// any separator could appear inside one: ("e\x00alice", "bob") and
+// ("e", "alice\x00bob") must stay different pairs.
+type pairKey struct{ first, second string }
+
+// pair makes the key for two identifiers.
+func pair(first, second string) pairKey { return pairKey{first: first, second: second} }
+```
+
+`openKinds` and `existingSources` return `map[pairKey]bool`. Observed: `cd sqlstore && go test ./...` passes.
+
+- [x] **Step 3: An atomic memory close (9.3)**
+
+Red:
+- In `ntfytest/suite.go`, `runSuccessors` gains "a close whose successor cannot be stamped changes nothing". It closes with an `IDGeneratorFunc` that returns an error, then requires every offer to be ACTIVE, no successor to be written, and a later publish below the close version to be created.
+- `TestServiceRefusesIdentifiersNoStoreCanHold`'s successor row also requires the seeded notification to be ACTIVE.
+
+Observed: memory fails (`expected: "ACTIVE" actual: "CLOSED"`), and every SQL store passes.
+
+Green: `MemoryStore.Close` now settles what closes, and mints, before it changes anything:
+
+```go
+// Close implements [Store]. It is all or nothing: which notifications close,
+// and the successors' identifiers, are settled before anything changes, so a
+// generator that fails leaves the store as it was.
+func (s *MemoryStore) Close(_ context.Context, req CloseRequest, at time.Time, ids IDGenerator) (CloseResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	at = normalizeTime(at)
+
+	var closing []string
+
+	recipients := make(map[string]struct{})
+
+	for id := range s.subjects[req.Subject] {
+		n := s.notifications[id]
+
+		switch {
+		case n.State == StateClosed || n.SubjectVersion > req.Version:
+			continue
+		case len(req.Kinds) > 0 && !slices.Contains(req.Kinds, n.Kind):
+			continue
+		case req.Except != "" && n.Recipient == req.Except:
+			continue
+		}
+
+		closing = append(closing, id)
+		recipients[n.Recipient] = struct{}{}
+	}
+
+	result := CloseResult{Recipients: slices.Sorted(maps.Keys(recipients))}
+
+	successors, err := req.SuccessorInsertions(result.Recipients, at, ids)
+	if err != nil {
+		return CloseResult{}, err
+	}
+
+	s.ensureWatermark(watermarkKey{subject: req.Subject, kind: allKinds}, at)
+
+	keys := []watermarkKey{{subject: req.Subject, kind: allKinds}}
+	if len(req.Kinds) > 0 {
+		keys = keys[:0]
+		for _, kind := range req.Kinds {
+			keys = append(keys, watermarkKey{subject: req.Subject, kind: kind})
+		}
+	}
+
+	for _, key := range keys {
+		mark, ok := s.watermarks[key]
+		if !ok || mark.version < req.Version {
+			mark.version = req.Version
+		}
+
+		mark.updatedAt = at
+		s.watermarks[key] = mark
+	}
+
+	for _, id := range closing {
+		n := s.notifications[id]
+		n.State = StateClosed
+		n.ClosedReason = req.Reason
+		n.ClosedAt = timePtr(at)
+
+		if n.InactiveAt == nil {
+			n.InactiveAt = timePtr(at)
+		}
+
+		s.notifications[id] = n
+		result.Closed++
+	}
+
+	if len(successors) > 0 {
+		inserted := s.insert(req.Subject, successors)
+		result.Successors = inserted.Created
+		result.SuccessorsSuppressed = inserted.Suppressed
+	}
+
+	return result, nil
+}
+```
+
+Observed: pass on memory and on every SQL store. Inversion: with the previous `memory.go` restored, the service test fails with "the refused close closed nothing".
+
+- [x] **Step 4: A wiring mistake spends no email attempt (9.4)**
+
+Red: the harness gains `mintTooLong`, which mints `MaxIDBytes+1` bytes. `TestEmailDispatcherRecordsItsOwnReason` gains the row "a message identifier refused as a configuration error, at the attempt limit", with `WithEmailMaxAttempts(1)`, expecting `RETRY` / `id_failed`. Observed: `expected: "RETRY" actual: "FAILED"`.
+
+Green, in `email_dispatcher.go`:
+
+```go
+		batch, err = p.d.service.ids.NewID()
+		if err != nil {
+			// A generator that mints identifiers no store can hold is the host's
+			// wiring, not this message's failure: it spends no attempt, so the
+			// email goes once the generator is fixed.
+			p.retry(live, "", EmailReasonIDFailed, err, !errors.Is(err, ErrConfiguration))
+
+			return
+		}
+```
+
+`docs/email.md`'s outcome table gains that row. Observed: pass, and `go test -race ./...` passes.
+
+- [x] **Step 5: The copy check and the pre-check loop (9.5)**
+
+In the `Makefile`, `sqlkit-copy-check` copies `README.md` and `SOURCE`, then `PATCHES.md` and `patches/` only if they exist:
+
+```make
+	cp pkg/sqlkit/README.md pkg/sqlkit/SOURCE "$$tmp/want/sqlkit/"; \
+	for note in PATCHES.md patches; do \
+		if [ -e "pkg/sqlkit/$$note" ]; then cp -R "pkg/sqlkit/$$note" "$$tmp/want/sqlkit/"; fi; \
+	done; \
+```
+
+Observed:
+- With both moved away, the check no longer stops at `cp`. It reaches the comparison and reports the unrecorded sqlkit edits, as it must.
+- Restored, it passes.
+
+`TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes` checks `rows.Err()` after each pre-check query.
+
+- [x] **Step 6: Records, gates, re-archive (9.6)**
+
+The spec delta gains:
+- the NUL/UTF-8 rule and the generated-identifier rule in the requirement's text;
+- two scenarios: "An identifier holding a NUL byte or invalid UTF-8 is refused" and "A close whose successor cannot be given an identifier changes nothing".
+
+`proposal.md` moves NUL/UTF-8 from out of scope into the change, and `design.md` gains D6.
+
+Then run the gates, re-sync the spec, archive again, and push to PR #11. The results are in the execution record.
+
+---
+
 ## Execution record
 
 Executed 2026-09-28 in the worktree `.claude/worktrees/compare-mysql-identifiers-by-bytes`, branch `compare-mysql-identifiers-by-bytes`, against MySQL 8.4.6 (`sqlkittest.MySQLImage`), Go 1.26.8.
@@ -2568,3 +2897,16 @@ This settled the proposal's claim that the collation also merges sources, which 
 - An unrecorded edit to `pkg/sqlkit/doc.go` failed the copy check, as it must.
 - The upstream recipe applied cleanly to `github.com/kartaladev/hmntsk` at `32e7763…`.
 - `pkg/sqlkit/PATCHES.md` and the patch are the documents to hand to sqlkit's repository. They have not been sent.
+
+**Task 8, the second code review (2026-09-28):**
+- Red observations are recorded in Task 8's steps. In summary:
+  - 26 identifier cases were accepted with NUL or invalid UTF-8;
+  - two NUL-shifted pairs collided in sqlstore, one as a duplicate and one as coalesced;
+  - the memory store stayed closed after a failed successor mint, while every SQL store rolled back;
+  - a misconfigured generator failed an email at a one-attempt limit.
+- The gates after Task 8:
+  - `make lint split-check` exited 0, with `0 issues.` in all six modules.
+  - Every module's tests passed: the seven ntfy packages and the five `pkg/sqlkit` modules.
+  - `make store-matrix` exited 0.
+  - `make sqlkit-copy-check` exited 0.
+- The commits were rebuilt once before pushing, because a staged un-archive had slipped into the validation commit. Each fix commit now holds only its own files, and the reopened change travels with the records.
