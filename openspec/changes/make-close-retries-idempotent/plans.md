@@ -46,7 +46,7 @@
 - **Done means `make all` and `make store-matrix` pass**, since two stores change.
   - `make all` runs lint, split-check and test.
   - `make store-matrix` runs seven driver-by-dialect entry points and needs Docker.
-- **Pre-existing lint finding, not this change's:** on `main` at `20967b3`, `cd ntfytest && golangci-lint run ./...` reports `ntfytest/isolation.go:15:1: unnamedResult` (gocritic), observed 2026-09-28 with a local golangci-lint v2.13.2 built with go1.27.1. If `make all` stops there, check whether CI's lint passes on `main`. Report the finding to the maintainer; do not fix it inside this change.
+- **Run golangci-lint with `GOTOOLCHAIN=go1.26.8`,** as `make lint` does. Under a newer local toolchain, golangci-lint reports a spurious `ntfytest/isolation.go:15:1: unnamedResult` (gocritic). Checked 2026-09-28: with the pinned toolchain, `ntfytest` lints with `0 issues.` on `main` at `20967b3`.
 - **Commit messages** are imperative sentence case with no `feat:`/`fix:` prefix, matching `git log`. They end with the session's attribution lines.
 
 ## File Structure
@@ -354,7 +354,7 @@ Run: `golangci-lint run ./...`, then `cd sqlstore && golangci-lint run ./...`.
 Expected: `0 issues.` for each.
 
 Run: `cd ntfytest && golangci-lint run ./...`.
-Expected: only the pre-existing `ntfytest/isolation.go:15:1: unnamedResult` (see Global Constraints), nothing in `suite.go`.
+Expected: `0 issues.` (with `GOTOOLCHAIN=go1.26.8`; see Global Constraints).
 
 - [ ] **Step 12: Commit**
 
@@ -653,7 +653,7 @@ Then tick 3.1, 3.2 and 3.3 in `tasks.md`.
 - [ ] **Step 1: Run the full gate (tasks 4.1)**
 
 Run: `make all`
-Expected: each module prints `==> lint …`, `==> split-check …` and `==> test …`, and the target exits 0. The one exception is the pre-existing `ntfytest/isolation.go` lint finding described in Global Constraints. If lint stops there, run `make split-check test` to finish the gate, and report the lint finding.
+Expected: each module prints `==> lint …`, `==> split-check …` and `==> test …`, and the target exits 0.
 
 - [ ] **Step 2: Run the store matrix (tasks 4.2)**
 
