@@ -163,9 +163,14 @@ func TestServiceRefusesIdentifiersNoStoreCanHold(t *testing.T) {
 			id:     strings.Repeat("x", ntfy.MaxIDBytes+1),
 			seeded: true,
 			act:    closeWithSuccessor,
-			assert: func(t *testing.T, _ ntfy.Store, err error) {
+			assert: func(t *testing.T, store ntfy.Store, err error) {
 				require.ErrorIs(t, err, ntfy.ErrConfiguration)
 				assert.ErrorContains(t, err, "ID generator")
+
+				page, err := store.List(t.Context(), ntfy.ListQuery{Recipient: "alice"})
+				require.NoError(t, err)
+				require.Len(t, page.Notifications, 1, "no successor was written")
+				assert.Equal(t, ntfy.StateActive, page.Notifications[0].State, "the refused close closed nothing")
 			},
 		},
 	}
