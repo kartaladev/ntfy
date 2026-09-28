@@ -127,8 +127,14 @@ func (s *Store) insert(ctx context.Context, subject string, insertions []ntfy.In
 	return result, nil
 }
 
-// pair joins two values into one map key.
-func pair(a, b string) string { return a + "\x00" + b }
+// pairKey is two identifiers as one map key. It is a struct, not the two
+// joined by a separator, because identifiers are compared byte for byte and
+// any separator could appear inside one: ("e\x00alice", "bob") and
+// ("e", "alice\x00bob") must stay different pairs.
+type pairKey struct{ first, second string }
+
+// pair makes the key for two identifiers.
+func pair(first, second string) pairKey { return pairKey{first: first, second: second} }
 
 // floorFor is the version below which a notification of a kind is suppressed.
 func floorFor(floors map[string]int64, kind string) int64 {
@@ -191,8 +197,8 @@ func (s *Store) floors(ctx context.Context, subject string, insertions []ntfy.In
 
 // openKinds reads which coalescing insertions' recipients already have an
 // ACTIVE or READ notification of their kind on the subject.
-func (s *Store) openKinds(ctx context.Context, subject string, insertions []ntfy.Insertion) (map[string]bool, error) {
-	open := make(map[string]bool)
+func (s *Store) openKinds(ctx context.Context, subject string, insertions []ntfy.Insertion) (map[pairKey]bool, error) {
+	open := make(map[pairKey]bool)
 
 	var coalescing []ntfy.Insertion
 
@@ -230,8 +236,8 @@ func (s *Store) openKinds(ctx context.Context, subject string, insertions []ntfy
 // existingSources reads which insertions' source and recipient already have a
 // notification. Each chunk binds the sources and recipients of its own
 // insertions, which covers every insertion's own pair.
-func (s *Store) existingSources(ctx context.Context, insertions []ntfy.Insertion) (map[string]bool, error) {
-	existing := make(map[string]bool)
+func (s *Store) existingSources(ctx context.Context, insertions []ntfy.Insertion) (map[pairKey]bool, error) {
+	existing := make(map[pairKey]bool)
 
 	for _, chunk := range chunks(insertions, chunkSize) {
 		var sources, recipients []any

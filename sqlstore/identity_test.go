@@ -72,12 +72,45 @@ func TestMySQLComparesIdentifiersByBytes(t *testing.T) {
 		}
 	}
 
+	// bothCreated inserts two notifications in one call, and requires each to be
+	// created: pairs of identifiers that differ only in where a NUL falls are
+	// different pairs.
+	bothCreated := func(first, second ntfy.Notification) func(t *testing.T, store *sqlstore.Store) {
+		return func(t *testing.T, store *sqlstore.Store) {
+			result, err := store.Insert(t.Context(), "task-1", []ntfy.Insertion{
+				{Notification: first, Coalesce: true}, {Notification: second, Coalesce: true},
+			})
+			require.NoError(t, err)
+
+			assert.Lenf(t, result.Created, 2, "(%+q, %+q) and (%+q, %+q) are different pairs",
+				first.SourceID, first.Recipient, second.SourceID, second.Recipient)
+			assert.Zero(t, result.Duplicates)
+			assert.Zero(t, result.Coalesced)
+		}
+	}
+
+	withKind := func(n ntfy.Notification, kind string) ntfy.Notification {
+		n.Kind = kind
+
+		return n
+	}
+
 	cases := []testCase{
 		{name: "a zero-width space makes another recipient", assert: recipientSeesNothing("alice", "alice\u200b")},
 		{name: "a NUL byte makes another recipient", assert: recipientSeesNothing("alice", "alice\x00")},
 		{name: "NFD makes another recipient than NFC", assert: recipientSeesNothing("jos\u00e9", "jose\u0301")},
 		{name: "a zero-width space makes another source", assert: sourceIsNew("event-1", "event-1\u200b")},
 		{name: "a NUL byte makes another source", assert: sourceIsNew("event-1", "event-1\x00")},
+		{
+			name:   "a NUL moved between source and recipient makes another source and recipient",
+			assert: bothCreated(note("n-1", "bob", "e\x00alice"), note("n-2", "alice\x00bob", "e")),
+		},
+		{
+			name: "a NUL moved between recipient and kind makes another recipient and kind",
+			assert: bothCreated(
+				withKind(note("n-1", "a\x00b", "event-1"), "c"),
+				withKind(note("n-2", "a", "event-2"), "b\x00c")),
+		},
 	}
 
 	for _, tc := range cases {
