@@ -271,6 +271,7 @@ func TestTheDocumentedMySQLUpgradeComparesIdentifiersByBytes(t *testing.T) {
 		require.NoErrorf(t, err, "run the documented pre-check %q", check)
 
 		assert.False(t, rows.Next(), "the pre-check finds no identifier the upgrade would refuse")
+		require.NoError(t, rows.Err(), "the pre-check ran to the end, so finding nothing means nothing")
 		require.NoError(t, rows.Close())
 	}
 

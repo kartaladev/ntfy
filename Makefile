@@ -94,7 +94,10 @@ sqlkit-copy-check:
 		(cd "$$tmp/want/sqlkit" && git apply "$(CURDIR)/$$patch") || { \
 			echo "sqlkit-copy-check: $$patch no longer applies to the source commit"; exit 1; }; \
 	done; \
-	cp -R pkg/sqlkit/README.md pkg/sqlkit/SOURCE pkg/sqlkit/PATCHES.md pkg/sqlkit/patches "$$tmp/want/sqlkit/"; \
+	cp pkg/sqlkit/README.md pkg/sqlkit/SOURCE "$$tmp/want/sqlkit/"; \
+	for note in PATCHES.md patches; do \
+		if [ -e "pkg/sqlkit/$$note" ]; then cp -R "pkg/sqlkit/$$note" "$$tmp/want/sqlkit/"; fi; \
+	done; \
 	if ! diff -r -x go.sum "$$tmp/want/sqlkit" pkg/sqlkit; then \
 		echo "sqlkit-copy-check: pkg/sqlkit differs from its source and recorded patches;"; \
 		echo "    record the change as a patch in pkg/sqlkit/patches and in PATCHES.md, or fix sqlkit upstream"; \
